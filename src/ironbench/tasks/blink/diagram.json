@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "author": "ironharness",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-led", "id": "led1", "top": -70, "left": 130, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": -70, "left": 40, "attrs": { "value": "220" } }
+  ],
+  "connections": [
+    [ "esp:TX0", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX0", "$serialMonitor:TX", "", [] ],
+    [ "esp:D2", "r1:1", "green", [] ],
+    [ "r1:2", "led1:A", "green", [] ],
+    [ "led1:C", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}
