@@ -37,7 +37,7 @@ FAKE_CLI = textwrap.dedent(
 )
 
 
-def make_task(tmp_path, expect=("blink 0: on",), fail=()):
+def make_task(tmp_path, expect=("blink 0: on",), fail=(), write_entry=True):
     d = tmp_path / "t"
     d.mkdir()
     text = "name: fake\n"
@@ -47,7 +47,8 @@ def make_task(tmp_path, expect=("blink 0: on",), fail=()):
         text += "fail:\n" + "".join(f"  - {p!r}\n" for p in fail)
     (d / "task.yaml").write_text(text, encoding="utf-8")
     # entry-файл нужен генератору paste-сценария
-    (d / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    if write_entry:
+        (d / "main.py").write_text("print('hi')\n", encoding="utf-8")
     return load_task(d)
 
 
@@ -126,6 +127,14 @@ def test_missing_cli_reports_error(tmp_path):
     res = run_task(task, out_dir=tmp_path / "out", cli_path="no-such-cli-xyz")
     assert not res.passed
     assert "не найден" in (res.error or "")
+
+
+def test_missing_entry_file_is_clean_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_module, "WALL_GRACE_SEC", 1)
+    task = make_task(tmp_path, write_entry=False)
+    res = run_fake(tmp_path, task, {})
+    assert not res.passed
+    assert "подготовить задачу" in (res.error or "")
 
 
 def test_check_patterns_regex():

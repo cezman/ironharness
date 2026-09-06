@@ -45,13 +45,20 @@ def load_task(task_dir: Path) -> Task:
         raise ValueError(f"{task_file}: expect должен быть списком строк")
     if not isinstance(fail, list) or not all(isinstance(p, str) for p in fail):
         raise ValueError(f"{task_file}: fail должен быть списком строк")
+    scenario = raw.get("scenario")
+    if scenario is not None and not isinstance(scenario, str):
+        raise ValueError(f"{task_file}: scenario должен быть строкой (путь к YAML)")
+    try:
+        timeout_sec = int(raw.get("timeout_sec", 30))
+    except (TypeError, ValueError):
+        raise ValueError(f"{task_file}: timeout_sec должен быть целым числом") from None
     return Task(
         name=name,
         description=str(raw.get("description", "")),
         directory=task_dir,
-        scenario=raw.get("scenario"),
+        scenario=scenario,
         entry=str(raw.get("entry", "main.py")),
-        timeout_sec=int(raw.get("timeout_sec", 30)),
+        timeout_sec=timeout_sec,
         expect=tuple(expect),
         fail=tuple(fail),
     )

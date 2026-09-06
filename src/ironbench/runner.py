@@ -144,8 +144,9 @@ def _check_patterns(
 
 
 def _stage_task(task: Task, out_dir: Path) -> tuple[Path, str]:
-    """Копирует каталог задачи во временный стейдж; возвращает (путь, имя сценария)."""
+    """Копирует каталог задачи в чистый стейдж; возвращает (путь, имя сценария)."""
     stage = out_dir / task.name
+    shutil.rmtree(stage, ignore_errors=True)  # без этого старые файлы переживают прогон
     stage.mkdir(parents=True, exist_ok=True)
     for item in task.directory.iterdir():
         if item.is_file():
@@ -174,7 +175,6 @@ def run_task(
     cli_cmd = [cli] if isinstance(cli, str) else list(cli)  # тесты передают список-команду
     out_dir.mkdir(parents=True, exist_ok=True)
     serial_log = out_dir / f"{task.name}.serial.log"
-    stage, scenario_name = _stage_task(task, out_dir)
     wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
 
     token = resolve_token(token)
@@ -182,36 +182,49 @@ def run_task(
     if token:
         env["WOKWI_CLI_TOKEN"] = token
 
-    cmd = [
-        *cli_cmd,
-        str(stage),
-        "--scenario",
-        scenario_name,
-        "--timeout",
-        str(task.timeout_sec * 1000),
-        "--serial-log-file",
-        str(serial_log),
-        "--timeout-exit-code",
-        str(WOKWI_TIMEOUT_EXIT),
-        "-q",
-    ]
-    if journal:
-        journal("task_start", {"task": task.name})
-
     start = time.monotonic()
     exit_code: int | None = None
     error: str | None = None
+    stage = scenario_name = None
     try:
-        proc = subprocess.run(
-            cmd, env=env, capture_output=True, text=True, timeout=wall_timeout, check=False
-        )
-        exit_code = proc.returncode
-        if proc.returncode not in OK_EXIT_CODES:
-            error = (proc.stderr or proc.stdout or "").strip()[-500:] or None
-    except subprocess.TimeoutExpired:
-        error = f"wall-clock таймаут раннера ({wall_timeout} c)"
-    except FileNotFoundError:
-        error = f"wokwi-cli не найден: {cli}"
+        stage, scenario_name = _stage_task(task, out_dir)
+    except OSError as e:
+        # отсутствующий entry-файл и т.п. — аккуратный FAIL вместо краха раннера
+        error = f"не удалось подготовить задачу: {e}"
+    if stage is not None:
+        cmd = [
+            *cli_cmd,
+            str(stage),
+            "--scenario",
+            scenario_name,
+            "--timeout",
+            str(task.timeout_sec * 1000),
+            "--serial-log-file",
+            str(serial_log),
+            "--timeout-exit-code",
+            str(WOKWI_TIMEOUT_EXIT),
+            "-q",
+        ]
+        if journal:
+            journal("task_start", {"task": task.name})
+        try:
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=wall_timeout,
+                check=False,
+            )
+            exit_code = proc.returncode
+            if proc.returncode not in OK_EXIT_CODES:
+                error = (proc.stderr or proc.stdout or "").strip()[-500:] or None
+        except subprocess.TimeoutExpired:
+            error = f"wall-clock таймаут раннера ({wall_timeout} c)"
+        except FileNotFoundError:
+            error = f"wokwi-cli не найден: {cli}"
 
     duration = round(time.monotonic() - start, 2)
     serial_text = (
