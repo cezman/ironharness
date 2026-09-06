@@ -42,6 +42,19 @@ def test_load_task_defaults(tmp_path):
     assert task.scenario is None  # нет scenario → раннер генерирует REPL-paste
     assert task.entry == "main.py"
     assert task.expect == ()
+    assert task.stimulus == ()
+
+
+def test_load_task_stimulus(tmp_path):
+    content = "name: t1\nstimulus:\n  - delay: 500ms\n  - write-serial: \"hi\\n\"\n"
+    task = load_task(write_task(tmp_path, content))
+    assert task.stimulus == ({"delay": "500ms"}, {"write-serial": "hi\n"})
+
+
+def test_load_task_stimulus_must_be_steps(tmp_path):
+    d = write_task(tmp_path, "name: t1\nstimulus:\n  - just a string\n")
+    with pytest.raises(ValueError, match="stimulus"):
+        load_task(d)
 
 
 def test_load_task_requires_name(tmp_path):

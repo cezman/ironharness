@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -39,6 +40,10 @@ WALL_GRACE_SEC = 15
 
 # Приглашение REPL MicroPython, по которому понимаем, что устройство готово к вставке
 REPL_PROMPT = ">>>"
+
+# Общий каталог закреплённых прошивок: в каталоге задачи бин не дублируем,
+# раннер докладывает его в стейдж по ссылкам elf/firmware из wokwi.toml
+FIRMWARE_DIR = Path(__file__).resolve().parent / "tasks" / "_firmware"
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -97,7 +102,7 @@ def _plain_text(pattern: str) -> str | None:
 
 
 def generate_paste_scenario(task: Task) -> str:
-    """YAML сценария: вставить код entry-файла в REPL и дождаться ожидаемых строк."""
+    """YAML сценария: вставить код entry-файла в REPL, выполнить stimulus, ждать expect."""
     code = (task.directory / task.entry).read_text(encoding="utf-8")
     steps: list[dict[str, object]] = [
         {"wait-serial": REPL_PROMPT},
@@ -105,6 +110,7 @@ def generate_paste_scenario(task: Task) -> str:
         {"delay": "200ms"},
         {"write-serial": code},
         {"write-serial": "\x04"},  # Ctrl+D: выполнить
+        *task.stimulus,  # взаимодействие с прошивкой (ввод serial, кнопки, датчики)
     ]
     # wait-serial по литеральным expect-паттернам: сценарий завершит симуляцию
     # досрочно, когда всё ожидаемое уже напечатано (экономия квоты Wokwi)
@@ -151,11 +157,26 @@ def _stage_task(task: Task, out_dir: Path) -> tuple[Path, str]:
     for item in task.directory.iterdir():
         if item.is_file():
             shutil.copy2(item, stage / item.name)
+    _stage_firmware(task, stage)
     if task.scenario:
         return stage, task.scenario
     scenario_file = stage / "generated.scenario.yaml"
     scenario_file.write_text(generate_paste_scenario(task), encoding="utf-8")
     return stage, scenario_file.name
+
+
+def _stage_firmware(task: Task, stage: Path) -> None:
+    """Докладывает elf/firmware из общего FIRMWARE_DIR, если в задаче их нет."""
+    wokwi_toml = stage / "wokwi.toml"
+    if not wokwi_toml.is_file():
+        return
+    config = tomllib.loads(wokwi_toml.read_text(encoding="utf-8")).get("wokwi", {})
+    for key in ("elf", "firmware"):
+        name = config.get(key)
+        if isinstance(name, str) and not (stage / name).is_file():
+            shared = FIRMWARE_DIR / name
+            if shared.is_file():
+                shutil.copy2(shared, stage / name)
 
 
 def run_task(

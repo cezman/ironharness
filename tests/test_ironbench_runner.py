@@ -19,7 +19,7 @@ from ironbench.runner import (
     load_env_file,
     run_task,
 )
-from ironbench.tasks import load_task
+from ironbench.tasks import load_task, load_tasks
 
 # Фейковый CLI: пишет FAKE_SERIAL в --serial-log-file и выходит с кодом FAKE_EXIT
 # (опционально спит FAKE_SLEEP секунд) — эмулирует контракт wokwi-cli.
@@ -37,7 +37,7 @@ FAKE_CLI = textwrap.dedent(
 )
 
 
-def make_task(tmp_path, expect=("blink 0: on",), fail=(), write_entry=True):
+def make_task(tmp_path, expect=("blink 0: on",), fail=(), write_entry=True, stimulus=()):
     d = tmp_path / "t"
     d.mkdir()
     text = "name: fake\n"
@@ -45,6 +45,8 @@ def make_task(tmp_path, expect=("blink 0: on",), fail=(), write_entry=True):
         text += "expect:\n" + "".join(f"  - {p!r}\n" for p in expect)
     if fail:
         text += "fail:\n" + "".join(f"  - {p!r}\n" for p in fail)
+    if stimulus:
+        text += "stimulus:\n" + "\n".join(f"  - {s}" for s in stimulus) + "\n"
     (d / "task.yaml").write_text(text, encoding="utf-8")
     # entry-файл нужен генератору paste-сценария
     if write_entry:
@@ -143,6 +145,20 @@ def test_check_patterns_regex():
     assert hit == ()
 
 
+def test_stage_task_pulls_shared_firmware(tmp_path):
+    from ironbench.runner import FIRMWARE_DIR, _stage_task
+
+    task = make_task(tmp_path)
+    bin_name = "ESP32_GENERIC-20251209-v1.27.0.bin"
+    assert (FIRMWARE_DIR / bin_name).is_file(), "общая прошивка должна быть в tasks/_firmware"
+    (task.directory / "wokwi.toml").write_text(
+        f'[wokwi]\nversion = 1\nelf = "{bin_name}"\nfirmware = "{bin_name}"\n',
+        encoding="utf-8",
+    )
+    stage, _scenario = _stage_task(task, tmp_path / "out")
+    assert (stage / bin_name).is_file(), "стейдж должен подтянуть бин из FIRMWARE_DIR"
+
+
 def test_journal_records_start_and_result(tmp_path):
     task = make_task(tmp_path)
     jpath = tmp_path / "journal.jsonl"
@@ -190,7 +206,18 @@ def test_task_yaml_loads_from_packaged_blink():
     assert task.timeout_sec == 20
     assert any("blink 0: on" == p for p in task.expect)
     assert task.scenario is None  # используется генерация REPL-paste сценария
-    assert task.entry == "main.py"
+    assert task.entry == "solution.py"
+
+
+def test_all_golden_tasks_have_required_files():
+    tasks_dir = runner_module.Path(__file__).parents[1] / "src" / "ironbench" / "tasks"
+    tasks = load_tasks(tasks_dir)
+    assert len(tasks) >= 6  # blink + 5 золотых задач этапа 2.3
+    for task in tasks:
+        assert (task.directory / "wokwi.toml").is_file(), task.name
+        assert (task.directory / "diagram.json").is_file(), task.name
+        assert (task.directory / "task.yaml").is_file(), task.name
+        assert (task.directory / task.entry).is_file(), task.name
 
 
 def test_generate_paste_scenario(tmp_path):
@@ -207,3 +234,13 @@ def test_generate_paste_scenario(tmp_path):
     wait_serials = [s["wait-serial"] for s in steps if "wait-serial" in s]
     assert "blink 0: on" in wait_serials
     assert r"blink \d+: off" not in wait_serials
+
+
+def test_generate_paste_scenario_with_stimulus(tmp_path):
+    task = make_task(tmp_path, expect=("echo: hi",), stimulus=['write-serial: "hi\\n"'])
+    steps = yaml.safe_load(generate_paste_scenario(task))["steps"]
+    # stimulus идёт после Ctrl+D (\x04) и до последнего wait-serial (литеральный expect)
+    stim_idx = steps.index({"write-serial": "hi\n"})
+    ctrl_d_idx = steps.index({"write-serial": "\x04"})
+    last_wait_idx = max(i for i, s in enumerate(steps) if "wait-serial" in s)
+    assert ctrl_d_idx < stim_idx < last_wait_idx

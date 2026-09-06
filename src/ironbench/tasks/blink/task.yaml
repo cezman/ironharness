@@ -1,9 +1,10 @@
 # Описание задачи для ironbench. expect — regex-паттерны: все обязаны встретиться
 # в serial-выводе; fail — паттерны, появление которых сразу проваливает задачу.
-# Поле scenario не задано → раннер вставляет main.py в REPL MicroPython сам
-# (см. ironbench/runner.py).
+# entry — эталонное решение, которое раннер вставляет в REPL (main.py остаётся
+# файлом агента в бенчмарке и в задаче не хранится).
 name: blink
 description: ESP32 мигает светодиодом на GPIO2 и печатает каждый ход в serial
+entry: solution.py
 timeout_sec: 20
 expect:
   - 'blink 0: on'

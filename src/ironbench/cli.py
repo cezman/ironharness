@@ -40,6 +40,9 @@ def main(argv=None) -> int:
     run = sub.add_parser("run", parents=[common], help="запустить задачи")
     run.add_argument("--task", help="имя задачи (например, blink)")
     run.add_argument("--all", action="store_true", help="запустить все задачи")
+    run.add_argument(
+        "--serial", action="store_true", help="печатать хвост serial-лога после задачи"
+    )
 
     sub.add_parser("list", parents=[common], help="показать доступные задачи")
 
@@ -67,6 +70,9 @@ def main(argv=None) -> int:
         for t in selected:
             res = run_task(t, out_dir=args.out, journal=journal)
             print(_fmt_result(res))
+            if args.serial and res.serial_log:
+                lines = res.serial_log.read_text(encoding="utf-8", errors="replace").splitlines()
+                print("    " + "\n    ".join(lines[-12:]))
             all_passed = all_passed and res.passed
     return 0 if all_passed else 1
 

@@ -26,6 +26,7 @@ class Task:
     timeout_sec: int
     expect: tuple[str, ...]
     fail: tuple[str, ...]
+    stimulus: tuple[dict, ...] = ()
 
 
 def load_task(task_dir: Path) -> Task:
@@ -52,6 +53,9 @@ def load_task(task_dir: Path) -> Task:
         timeout_sec = int(raw.get("timeout_sec", 30))
     except (TypeError, ValueError):
         raise ValueError(f"{task_file}: timeout_sec должен быть целым числом") from None
+    stimulus = raw.get("stimulus", [])
+    if not isinstance(stimulus, list) or not all(isinstance(s, dict) for s in stimulus):
+        raise ValueError(f"{task_file}: stimulus должен быть списком шагов (словарей)")
     return Task(
         name=name,
         description=str(raw.get("description", "")),
@@ -61,6 +65,7 @@ def load_task(task_dir: Path) -> Task:
         timeout_sec=timeout_sec,
         expect=tuple(expect),
         fail=tuple(fail),
+        stimulus=tuple(stimulus),
     )
 
 
