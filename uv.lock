@@ -257,7 +257,7 @@ wheels = [
 ]
 
 [[package]]
-name = "io-harness"
+name = "ironharness"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

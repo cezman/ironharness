@@ -1,5 +1,5 @@
 [project]
-name = "io-harness"
+name = "ironharness"
 version = "0.1.0"
 description = "io-core — безопасный I/O-слой для агентов (MCP); firmbench — бенчмарк для firmware-агентов"
 readme = "README.md"
