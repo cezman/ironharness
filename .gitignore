@@ -17,3 +17,6 @@ PLAN.md
 
 # Секреты
 .env
+
+# Прогоны ironbench (serial-логи, журналы)
+.ironbench/
