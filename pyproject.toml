@@ -1,0 +1,31 @@
+[project]
+name = "io-harness"
+version = "0.1.0"
+description = "io-core — безопасный I/O-слой для агентов (MCP); firmbench — бенчмарк для firmware-агентов"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=1.2.0",
+    "pyserial>=3.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/io_core", "src/firmbench"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]

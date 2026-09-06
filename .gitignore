@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Локальная документация — не пушится (правило владельца)
+AGENTS.md
+PLAN.md
+
+# Секреты
+.env
