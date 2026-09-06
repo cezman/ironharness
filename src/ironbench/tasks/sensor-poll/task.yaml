@@ -1,0 +1,18 @@
+# Описание задачи для ironbench: см. AGENTS.md / skills ironbench-task.
+name: sensor-poll
+description: >-
+  Датчик DHT22 подключён к GPIO4 (питание 3V3, земля GND). Прошивка при старте печатает
+  "dht ready", затем каждые 2 секунды опрашивает датчик и печатает температуру строкой
+  "temp: <число>". Ошибку одиночного чтения (OSError) не считать фатальной — продолжать опрос.
+entry: solution.py
+timeout_sec: 30
+expect:
+  - 'dht ready'
+  - 'temp: \d+'
+  - 'temp: 31'
+fail:
+  - 'Traceback'
+stimulus:
+  - delay: 300ms
+  - set-control: {part-id: dht1, control: temperature, value: 31}
+  - delay: 2500ms

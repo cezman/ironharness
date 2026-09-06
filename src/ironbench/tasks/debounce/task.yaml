@@ -1,0 +1,25 @@
+# Описание задачи для ironbench: см. AGENTS.md / skills ironbench-task.
+name: debounce
+description: >-
+  Кнопка подключена к GPIO4 и замыкает его на землю (использовать internal pullup).
+  Прошивка считает чистые нажатия кнопки с антидребезгом (ложные переключения короче
+  ~30 мс не учитывать) и на каждое нажатие печатает "presses: N", где N начинается с 1.
+entry: solution.py
+timeout_sec: 20
+expect:
+  - 'presses: 1'
+fail:
+  - 'presses: [2-9]'
+  - 'presses: 0'
+  - 'Traceback'
+stimulus:
+  # первый delay — прогрев: цикл опроса кнопки должен успеть стартовать
+  - delay: 1500ms
+  - set-control: {part-id: btn1, control: pressed, value: 1}
+  - delay: 20ms
+  - set-control: {part-id: btn1, control: pressed, value: 0}
+  - delay: 20ms
+  - set-control: {part-id: btn1, control: pressed, value: 1}
+  - delay: 100ms
+  - set-control: {part-id: btn1, control: pressed, value: 0}
+  - delay: 200ms

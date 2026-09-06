@@ -1,0 +1,26 @@
+# Описание задачи для ironbench: см. AGENTS.md / skills ironbench-task.
+name: protocol
+description: >-
+  Текстовый протокол команд по serial, светодиод на GPIO2. При старте печатает "proto v1".
+  Команды: "led on" и "led off" → ответ "OK" (и зажечь/погасить светодиод); "state?" →
+  "state: on" или "state: off" по текущему состоянию; любая другая непустая строка →
+  "ERR unknown". Работает в бесконечном цикле.
+entry: solution.py
+timeout_sec: 20
+expect:
+  - 'proto v1'
+  - 'state: off'
+  - 'state: on'
+  - 'ERR unknown'
+fail:
+  - 'Traceback'
+stimulus:
+  # первый delay — прогрев; Enter в write-serial — только \r (wokwi-cli съедает \n)
+  - delay: 1500ms
+  - write-serial: "state?\r"
+  - delay: 400ms
+  - write-serial: "led on\r"
+  - delay: 400ms
+  - write-serial: "state?\r"
+  - delay: 400ms
+  - write-serial: "bogus\r"
