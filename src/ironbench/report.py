@@ -33,7 +33,7 @@ HTML_TEMPLATE = """<!doctype html>
 <body>
 <h1>ironbench — отчёт {campaign}</h1>
 <table>
-<tr><th>Модель</th><th>Задача</th><th>Попыток</th><th>Решено</th><th>Success rate</th><th>Средних итераций</th></tr>
+<tr><th>Модель</th><th>Задача</th><th>Попыток</th><th>Решено</th><th>Success rate</th><th>Средних итераций</th><th>Среднее время, с</th></tr>
 {rows}
 </table>
 <footer>Сгенерировано ironbench · pass@k = доля пар, решённых хотя бы одной из k попыток: {pass_at_k}</footer>
@@ -49,6 +49,7 @@ class GroupStats:
     attempts: int
     solved: int
     total_iterations: int
+    total_duration: float = 0.0
 
     @property
     def success_rate(self) -> float:
@@ -57,6 +58,11 @@ class GroupStats:
     @property
     def avg_iterations(self) -> float:
         return round(self.total_iterations / self.attempts, 1) if self.attempts else 0.0
+
+    @property
+    def avg_duration(self) -> float:
+        """Среднее время попытки, сек — ось latency рядом с pass/fail."""
+        return round(self.total_duration / self.attempts, 1) if self.attempts else 0.0
 
     @property
     def passed(self) -> bool:
@@ -75,15 +81,16 @@ def load_results(solve_dir: Path) -> list[dict]:
 
 def aggregate(records: list[dict]) -> list[GroupStats]:
     """Группировка (model, task) → статистика; сортировка по модели, затем задаче."""
-    groups: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0, 0])
+    groups: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0, 0, 0, 0.0])
     for rec in records:
         stats = groups[(rec.get("model", "?"), rec.get("task", "?"))]
         stats[0] += 1
         stats[1] += 1 if rec.get("solved") else 0
         stats[2] += int(rec.get("iterations", 0))
+        stats[3] += float(rec.get("duration_sec", 0))
     return [
-        GroupStats(model=model, task=task, attempts=a, solved=s, total_iterations=i)
-        for (model, task), (a, s, i) in sorted(groups.items())
+        GroupStats(model=model, task=task, attempts=a, solved=s, total_iterations=i, total_duration=d)
+        for (model, task), (a, s, i, d) in sorted(groups.items())
     ]
 
 
@@ -102,6 +109,7 @@ def build_report(solve_dir: Path) -> dict:
         "groups": [dataclasses.asdict(s) | {
             "success_rate": s.success_rate,
             "avg_iterations": s.avg_iterations,
+            "avg_duration": s.avg_duration,
             "passed": s.passed,
         } for s in stats],
     }
@@ -115,7 +123,7 @@ def render_html(report: dict) -> str:
             f'<tr><td>{html_escape(g["model"])}</td><td>{html_escape(g["task"])}</td>'
             f'<td>{g["attempts"]}</td><td>{g["solved"]}</td>'
             f'<td class="{cls}">{g["success_rate"]:.0%}</td>'
-            f"<td>{g['avg_iterations']}</td></tr>"
+            f"<td>{g['avg_iterations']}</td><td>{g['avg_duration']}</td></tr>"
         )
     return HTML_TEMPLATE.format(
         campaign=html_escape(report["campaign"]),

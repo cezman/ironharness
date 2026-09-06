@@ -1,0 +1,27 @@
+# Описание задачи для ironbench: см. AGENTS.md / skills ironbench-task.
+name: protocol-retry
+description: >-
+  Прошивка реализует протокол кадров с контрольной суммой по serial. Формат кадра:
+  "<payload>*<checksum>", где checksum — один символ, равный XOR-байту всех символов
+  payload (например, для "hello" это символ с кодом 0x62, то есть кадр "hello*b").
+  При старте печатает "proto checksum". На каждый корректный кадр отвечает
+  "ACK <payload>", на битый (checksum не совпал, разделителя '*' нет или строка
+  пустая) — "NAK". Битые кадры не должны ломать прошивку: она продолжает обрабатывать
+  следующие кадры. Работает в бесконечном цикле.
+entry: solution.py
+timeout_sec: 20
+expect:
+  - 'proto checksum'
+  - 'ACK hello'
+  - 'NAK'
+  - 'ACK world'
+fail:
+  - 'Traceback'
+stimulus:
+  # прогрев: прошивка должна дойти до input(); Enter — только \r (wokwi-cli ест \n)
+  - delay: 1500ms
+  - write-serial: "hello*x\r"   # битый checksum -> NAK
+  - delay: 400ms
+  - write-serial: "hello*b\r"   # корректный -> ACK hello
+  - delay: 400ms
+  - write-serial: "world*b\r"   # -> ACK world

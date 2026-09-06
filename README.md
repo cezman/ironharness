@@ -27,5 +27,39 @@ uv run python -m io_core.mcp_server  # MCP-сервер (stdio)
 по умолчанию `~/.ironharness/`); файловые операции изолированы песочницей
 (`$IRONHARNESS_SANDBOX`, по умолчанию `~/.ironharness/sandbox`).
 
-Статус: этапы 0–1 завершены (CI-пайплайн активируется при пуше), далее ironbench (этап 2).
-План — `PLAN.md` (локально, не пушится).
+## Подключение внешнего агента
+
+Любой MCP-совместимый агент (Claude Code, Codex, Cursor, OpenCode…) получает все
+инструменты io-core одной записью в конфиг — свой цикл агент приносит с собой,
+ironharness даёт «руки»: транспорты, песочницу, журнал, верификацию.
+
+```json
+{
+  "mcpServers": {
+    "ironharness": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/ironharness", "python", "-m", "io_core.mcp_server"]
+    }
+  }
+}
+```
+
+Для испытаний на ненадёжных линиях есть `io_core.faults.FaultyTransport` — сценарные
+сбои (обрыв, задержка, порча и потеря байтов) поверх любого транспорта.
+
+## ironbench — бенчмарк firmware-агентов
+
+```bash
+uv run ironbench list                              # каталог золотых задач
+uv run ironbench run --all                         # эталонные прогоны (нужен WOKWI_CLI_TOKEN)
+uv run ironbench solve --task blink --attempts 3   # LLM-агент решает задачу
+uv run ironbench report                            # pass@k: report.json + report.html
+```
+
+Задачи — ESP32/MicroPython в Wokwi (headless `wokwi-cli`): blink → UART-эхо → антидребезг →
+опрос датчика → командный протокол → конечный автомат → протокол с повторами.
+LLM-конфиг — переменные окружения: `LLM_BASE_URL` (по умолчанию локальный LM Studio),
+`LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT`.
+
+Статус: этапы 0–2 завершены (бенчмарк: задачи, агентский цикл, отчёт pass@k), далее —
+опциональный Renode-бэкенд и этап 3 (реальное железо). План — `PLAN.md` (локально).

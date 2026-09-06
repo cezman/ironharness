@@ -18,9 +18,9 @@ def test_load_and_aggregate(tmp_path):
     write_results(
         tmp_path,
         [
-            {"model": "m1", "task": "blink", "attempt": 1, "solved": True, "iterations": 2},
-            {"model": "m1", "task": "blink", "attempt": 2, "solved": False, "iterations": 5},
-            {"model": "m1", "task": "uart-echo", "attempt": 1, "solved": True, "iterations": 1},
+            {"model": "m1", "task": "blink", "attempt": 1, "solved": True, "iterations": 2, "duration_sec": 100},
+            {"model": "m1", "task": "blink", "attempt": 2, "solved": False, "iterations": 5, "duration_sec": 200},
+            {"model": "m1", "task": "uart-echo", "attempt": 1, "solved": True, "iterations": 1, "duration_sec": 50},
         ],
     )
     stats = aggregate(load_results(tmp_path))
@@ -31,6 +31,7 @@ def test_load_and_aggregate(tmp_path):
     blink = stats[0]
     assert blink.success_rate == 0.5
     assert blink.avg_iterations == 3.5
+    assert blink.avg_duration == 150.0
     assert blink.passed is True
 
 
