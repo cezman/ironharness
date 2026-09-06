@@ -10,6 +10,7 @@ expect:
   - 'presses: 1'
 fail:
   - 'presses: [2-9]'
+  - 'presses: \d{2,}'
   - 'presses: 0'
   - 'Traceback'
 stimulus:

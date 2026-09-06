@@ -9,6 +9,9 @@ import yaml
 
 TASK_FILE = "task.yaml"
 
+# Типы шагов сценария wokwi, разрешённые в stimulus; расширять вместе с wokwi-cli
+STIMULUS_STEP_KEYS = frozenset({"write-serial", "wait-serial", "delay", "set-control"})
+
 
 @dataclasses.dataclass(frozen=True)
 class Task:
@@ -56,6 +59,13 @@ def load_task(task_dir: Path) -> Task:
     stimulus = raw.get("stimulus", [])
     if not isinstance(stimulus, list) or not all(isinstance(s, dict) for s in stimulus):
         raise ValueError(f"{task_file}: stimulus должен быть списком шагов (словарей)")
+    for step in stimulus:
+        unknown = set(step) - STIMULUS_STEP_KEYS
+        if unknown:
+            raise ValueError(
+                f"{task_file}: неизвестный шаг stimulus {sorted(unknown)} "
+                f"(разрешены: {sorted(STIMULUS_STEP_KEYS)})"
+            )
     return Task(
         name=name,
         description=str(raw.get("description", "")),

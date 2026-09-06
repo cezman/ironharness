@@ -4,8 +4,9 @@ import dht
 from machine import Pin
 
 # Опрос датчика DHT22 на GPIO4: раз в 2 секунды печать температуры "temp: <число>".
+# Баннер склеен из двух строк, чтобы эхо вставленного исходника не совпало с expect.
 sensor = dht.DHT22(Pin(4))
-print("dht ready")
+print("dht " + "ready")
 while True:
     try:
         sensor.measure()

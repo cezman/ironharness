@@ -6,8 +6,8 @@
 MicroPython в wokwi-cli не автозапускает main.py (голая прошивка + REPL), поэтому
 если у задачи нет статического scenario, раннер генерирует REPL-paste сценарий:
 ждёт приглашения '>>>', вставляет код entry-файла в raw-paste режиме (Ctrl+E/Ctrl+D)
-и ждёт ожидаемые строки. Код прошивки, который запускается, — это текущий main.py
-из каталога задачи (агент правит main.py → раннер выполняет именно его).
+и ждёт ожидаемые строки. У золотых задач entry — solution.py (эталон); main.py —
+файл, который в бенчмарке пишет агент.
 
 Выход wokwi-cli: 0 — сценарий завершился, 42 — сработал --timeout. Для прошивки с
 бесконечным циклом 42 — норма, поэтому успешными считаются оба кода при полном
@@ -177,6 +177,10 @@ def _stage_firmware(task: Task, stage: Path) -> None:
             shared = FIRMWARE_DIR / name
             if shared.is_file():
                 shutil.copy2(shared, stage / name)
+            else:
+                raise ValueError(
+                    f"прошивка {name!r} не найдена ни в задаче, ни в tasks/_firmware/"
+                )
 
 
 def run_task(
@@ -209,8 +213,8 @@ def run_task(
     stage = scenario_name = None
     try:
         stage, scenario_name = _stage_task(task, out_dir)
-    except OSError as e:
-        # отсутствующий entry-файл и т.п. — аккуратный FAIL вместо краха раннера
+    except (OSError, ValueError) as e:
+        # отсутствующий entry/прошивка, битый wokwi.toml — аккуратный FAIL вместо краха
         error = f"не удалось подготовить задачу: {e}"
     if stage is not None:
         cmd = [

@@ -57,6 +57,12 @@ def test_load_task_stimulus_must_be_steps(tmp_path):
         load_task(d)
 
 
+def test_load_task_stimulus_unknown_step_key(tmp_path):
+    d = write_task(tmp_path, "name: t1\nstimulus:\n  - write-seral: 'x'\n")
+    with pytest.raises(ValueError, match="write-seral"):
+        load_task(d)
+
+
 def test_load_task_requires_name(tmp_path):
     d = write_task(tmp_path, "timeout_sec: 5\n")
     with pytest.raises(ValueError, match="name"):

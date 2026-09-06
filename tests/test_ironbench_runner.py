@@ -237,10 +237,38 @@ def test_generate_paste_scenario(tmp_path):
 
 
 def test_generate_paste_scenario_with_stimulus(tmp_path):
-    task = make_task(tmp_path, expect=("echo: hi",), stimulus=['write-serial: "hi\\n"'])
+    task = make_task(tmp_path, expect=("echo: hi",), stimulus=['write-serial: "hi\\r"'])
     steps = yaml.safe_load(generate_paste_scenario(task))["steps"]
     # stimulus идёт после Ctrl+D (\x04) и до последнего wait-serial (литеральный expect)
-    stim_idx = steps.index({"write-serial": "hi\n"})
+    stim_idx = steps.index({"write-serial": "hi\r"})
     ctrl_d_idx = steps.index({"write-serial": "\x04"})
     last_wait_idx = max(i for i, s in enumerate(steps) if "wait-serial" in s)
     assert ctrl_d_idx < stim_idx < last_wait_idx
+
+
+def test_paste_scenario_reads_entry_not_main(tmp_path):
+    # entry-файл (solution.py у золотых задач), а не main.py — маршрутизация по task.entry
+    tasks_dir = runner_module.Path(__file__).parents[1] / "src" / "ironbench" / "tasks"
+    task = load_task(tasks_dir / "blink")
+    steps = yaml.safe_load(generate_paste_scenario(task))["steps"]
+    code = next(s["write-serial"] for s in steps if "while True" in s.get("write-serial", ""))
+    assert "machine import Pin" in code  # это содержимое solution.py
+
+
+def test_malformed_wokwi_toml_is_clean_fail(tmp_path):
+    task = make_task(tmp_path)
+    (task.directory / "wokwi.toml").write_text("[wokwi\nbroken ===", encoding="utf-8")
+    res = run_fake(tmp_path, task, {})
+    assert not res.passed
+    assert "подготовить задачу" in (res.error or "")
+
+
+def test_missing_firmware_is_clean_fail(tmp_path):
+    task = make_task(tmp_path)
+    (task.directory / "wokwi.toml").write_text(
+        '[wokwi]\nversion = 1\nelf = "no-such.bin"\nfirmware = "no-such.bin"\n',
+        encoding="utf-8",
+    )
+    res = run_fake(tmp_path, task, {})
+    assert not res.passed
+    assert "no-such.bin" in (res.error or "")

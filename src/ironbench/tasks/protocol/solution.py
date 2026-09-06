@@ -2,9 +2,10 @@ from machine import Pin
 
 # Командный протокол по serial: "led on"/"led off" -> "OK", "state?" -> "state: on|off",
 # любая другая строка -> "ERR unknown". Светодиод на GPIO2 отражает состояние.
+# Баннеры склеены из частей: эхо вставленного исходника не должно совпадать с expect.
 led = Pin(2, Pin.OUT)
 state = False
-print("proto v1")
+print("proto " + "v1")
 while True:
     cmd = input().strip()
     if cmd == "led on":
@@ -18,4 +19,4 @@ while True:
     elif cmd == "state?":
         print("state: " + ("on" if state else "off"))
     else:
-        print("ERR unknown")
+        print("ERR " + "unknown")
