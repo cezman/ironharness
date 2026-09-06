@@ -20,6 +20,7 @@ class JsonlJournal:
         self._path = Path(path)
         self._actor = actor
         self._seq = 0
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         # Режим "a": несколько сессий могут дописывать один файл
         self._fh = self._path.open("a", encoding="utf-8")
 
