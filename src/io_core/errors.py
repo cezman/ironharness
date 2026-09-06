@@ -21,3 +21,7 @@ class OperationTimeout(Exception):
 
 class VerificationError(Exception):
     """Проверка эффекта не прошла: ожидание не подтвердилось за отведённое время."""
+
+
+class ConnectionLost(Exception):
+    """Соединение с устройством потеряно (в том числе по сценарию сбоев)."""
