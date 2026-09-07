@@ -25,12 +25,18 @@ stimulus) и пишет serial-лог. Задачи объявляют мише�
 Ограничение закреплённого litex-ELF (v1.11, 2019): куча ~2 КБ, нет machine/time/
 input/sys.stdin — под ним идут только задачи «печать без ввода». Задачи с GPIO
 остаются на wokwi; свежая сборка MicroPython для litex — в бэклоге (PLAN.md).
+
+Мишень plant (см. ironbench/plant.py): закрытая петля «объект первого порядка +
+регулятор» целиком в Python, без симуляторов и WSL. Контроллер (entry) воркер
+исполняет в отдельном процессе; оценка — метрики переходной характеристики из
+task.yaml (missed = невыполненные требования человекочитаемыми строками).
 """
 
 from __future__ import annotations
 
 import dataclasses
 import io
+import json
 import os
 import random
 import re
@@ -241,11 +247,12 @@ def run_task(
     token: str | None = None,
     renode_cmd: str | list | None = None,
     unix_cmd: str | list | None = None,
+    plant_cmd: str | list | None = None,
     journal=None,
 ) -> TaskResult:
-    """Диспетчер мишеней: wokwi/renode/unix реализованы, real — честный FAIL.
+    """Диспетчер мишеней: wokwi/renode/unix/plant реализованы, real — честный FAIL.
 
-    cli_path/token/renode_cmd/unix_cmd — точки инъекции для тестов (фейковые
+    cli_path/token/renode_cmd/unix_cmd/plant_cmd — точки инъекции для тестов (фейковые
     CLI вместо реальных). journal — io_core.JsonlJournal: пишем task_start/task_result.
     """
     if task.target == "wokwi":
@@ -254,6 +261,8 @@ def run_task(
         return _run_renode(task, out_dir=out_dir, renode_cmd=renode_cmd, journal=journal)
     if task.target == "unix":
         return _run_unix(task, out_dir=out_dir, unix_cmd=unix_cmd, journal=journal)
+    if task.target == "plant":
+        return _run_plant(task, out_dir=out_dir, plant_cmd=plant_cmd, journal=journal)
     result = TaskResult(
         task=task.name,
         passed=False,
@@ -994,6 +1003,107 @@ def _run_unix(
         passed=passed,
         exit_code=exit_code,
         duration_sec=duration,
+        serial_log=serial_log if serial_text else None,
+        missed=missed,
+        hit_fail=hit_fail,
+        error=error,
+    )
+    _journal_result(journal, result)
+    return result
+
+
+# --- мишень plant: закрытая петля «объект + регулятор» (см. ironbench/plant.py) ---
+
+
+def _run_plant(
+    task: Task,
+    *,
+    out_dir: Path,
+    plant_cmd: str | list | None = None,
+    journal=None,
+) -> TaskResult:
+    """Прогон через воркер `python -m ironbench.plant`: он исполняет контроллер
+    (entry) в отдельном процессе и пишет лог + result.json. Зависание/падение
+    контроллера — результат прогона (фидбек агенту), а не крах раннера.
+    plant_cmd — точка инъекции для тестов. Мишень локальная: WSL/симуляторы
+    и их квоты не нужны."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    serial_log = out_dir / f"{task.name}.serial.log"
+    result_file = out_dir / f"{task.name}.plant-result.json"
+    wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
+    start = time.monotonic()
+    exit_code: int | None = None
+    error: str | None = None
+    report: dict | None = None
+    try:
+        entry = task.directory / task.entry
+        if not entry.is_file():
+            raise FileNotFoundError(f"entry-файл не найден: {entry}")
+        spec_file = out_dir / f"{task.name}.plant.json"
+        spec_file.write_text(json.dumps(task.plant, ensure_ascii=False), encoding="utf-8")
+        if plant_cmd is None:
+            cmd = [
+                sys.executable,
+                "-m",
+                "ironbench.plant",
+                "--entry",
+                str(entry),
+                "--spec",
+                str(spec_file),
+                "--log",
+                str(serial_log),
+                "--result",
+                str(result_file),
+            ]
+        else:
+            cmd = [plant_cmd] if isinstance(plant_cmd, str) else list(plant_cmd)
+        if journal:
+            journal("task_start", {"task": task.name})
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=wall_timeout,
+            check=False,
+        )
+        exit_code = proc.returncode
+        if proc.returncode != 0:
+            # воркер возвращает 0 даже при упавшем контроллере — ненулевой код
+            # означает проблему самого воркера/спецификации (не вина агента)
+            error = (
+                f"воркер plant завершился с кодом {proc.returncode}: "
+                + (proc.stderr or proc.stdout or "").strip()[-300:]
+            )
+    except subprocess.TimeoutExpired:
+        error = f"прогон plant превысил wall-лимит ({wall_timeout} c) — контроллер зациклился?"
+    except FileNotFoundError as e:
+        error = f"не найден: {e.filename or e}"
+
+    if error is None:
+        if result_file.is_file():
+            try:
+                report = json.loads(result_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                error = f"не удалось разобрать result.json воркера plant: {e}"
+        else:
+            error = "воркер plant не оставил result.json"
+    if report and report.get("error"):
+        error = report["error"]
+
+    serial_text = (
+        serial_log.read_text(encoding="utf-8", errors="replace") if serial_log.is_file() else ""
+    )
+    missed_metrics = tuple(report.get("missed", ())) if report else ()
+    missed_patterns, hit_fail = _check_patterns(serial_text, task.expect, task.fail)
+    missed = missed_metrics + missed_patterns
+    passed = not missed and not hit_fail and error is None
+    result = TaskResult(
+        task=task.name,
+        passed=passed,
+        exit_code=exit_code,
+        duration_sec=round(time.monotonic() - start, 2),
         serial_log=serial_log if serial_text else None,
         missed=missed,
         hit_fail=hit_fail,

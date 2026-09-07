@@ -167,6 +167,13 @@ def extract_code(response: str) -> str | None:
 
 
 def _first_prompt(task: Task) -> str:
+    if task.target == "plant":
+        return (
+            f"Задача: {task.description}\n\n"
+            f"Напиши полный код файла {AGENT_FILE} — контроллер замкнутой системы "
+            "в виде функции control(t, y, setpoint). "
+            "Ответ — только один блок ```python с полным кодом."
+        )
     return (
         f"Задача: {task.description}\n\n"
         f"Напиши полный код файла {AGENT_FILE} для MicroPython ESP32. "
@@ -270,7 +277,7 @@ def solve_attempt(
         messages.append(
             {
                 "role": "user",
-                "content": "Проверка не пройдена. Serial-вывод прогона:\n\n"
+                "content": "Проверка не пройдена. Вывод прогона:\n\n"
                 f"{_serial_feedback(result.serial_log)}\n\n"
                 "Исправь код и пришли снова только один блок ```python с полным main.py.",
             }

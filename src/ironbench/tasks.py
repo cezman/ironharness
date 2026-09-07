@@ -8,12 +8,14 @@ from pathlib import Path
 import yaml
 
 from io_core.faults import Fault
+from ironbench.plant import PLANT_MODELS
 
 TASK_FILE = "task.yaml"
 
 # Мишени запуска задачи; real (этап 3) — в плане. unix = MicroPython unix-port
-# в WSL2: бесплатные локальные прогоны чисто-serial задач (см. runner._run_unix)
-TASK_TARGETS = ("wokwi", "renode", "unix", "real")
+# в WSL2: бесплатные локальные прогоны чисто-serial задач (см. runner._run_unix);
+# plant = закрытая петля «объект + регулятор» в Python (см. runner._run_plant)
+TASK_TARGETS = ("wokwi", "renode", "unix", "plant", "real")
 
 # Типы шагов сценария wokwi, разрешённые в stimulus; расширять вместе с wokwi-cli
 STIMULUS_STEP_KEYS = frozenset({"write-serial", "wait-serial", "delay", "set-control"})
@@ -25,6 +27,29 @@ RENODE_KEYS = frozenset({"platform", "firmware", "uart"})
 # Секция noise: шумная линия поверх стимула мишени unix. seed — детерминизм,
 # faults — те же сценарии, что у io_core.FaultyTransport (словари Fault)
 NOISE_KEYS = frozenset({"seed", "faults"})
+
+# Секция plant (мишень plant): физика объекта 1-го порядка + требования к
+# переходной характеристике. Смысл ключей — в ironbench/plant.py
+PLANT_KEYS = frozenset(
+    {
+        "model",
+        "K",
+        "T",
+        "ambient",
+        "y0",
+        "dt",
+        "duration",
+        "u_min",
+        "u_max",
+        "noise_std",
+        "seed",
+        "setpoint",
+        "requirements",
+        "disturbances",
+    }
+)
+PLANT_REQUIREMENT_KEYS = frozenset({"steady_error", "overshoot", "settle_time"})
+PLANT_DISTURBANCE_KEYS = frozenset({"at", "ambient"})
 
 
 @dataclasses.dataclass(frozen=True)
@@ -47,6 +72,7 @@ class Task:
     target: str = "wokwi"
     renode: dict = dataclasses.field(default_factory=dict)
     noise: dict = dataclasses.field(default_factory=dict)
+    plant: dict = dataclasses.field(default_factory=dict)
 
 
 def load_task(task_dir: Path) -> Task:
@@ -135,6 +161,82 @@ def load_task(task_dir: Path) -> Task:
         raise ValueError(f"{task_file}: noise.faults: {e}") from None
     if noise and target != "unix":
         raise ValueError(f"{task_file}: noise поддерживается только мишенью unix")
+    plant_section = raw.get("plant", {})
+    if plant_section and target != "plant":
+        raise ValueError(f"{task_file}: секция plant поддерживается только мишенью plant")
+    if target == "plant":
+        if not isinstance(plant_section, dict):
+            raise TypeError(f"{task_file}: секция plant должна быть словарём")
+        if not plant_section:
+            raise ValueError(f"{task_file}: для мишени plant нужна непустая секция plant")
+        unknown_plant = set(plant_section) - PLANT_KEYS
+        if unknown_plant:
+            raise ValueError(
+                f"{task_file}: неизвестные ключи plant {sorted(unknown_plant)} "
+                f"(разрешены: {sorted(PLANT_KEYS)})"
+            )
+        model = str(plant_section.get("model", "heater"))
+        if model not in PLANT_MODELS:
+            raise ValueError(
+                f"{task_file}: plant.model {model!r} не поддержан (разрешены: {PLANT_MODELS})"
+            )
+        for key in ("K", "T", "duration", "setpoint"):
+            if key not in plant_section:
+                raise ValueError(f"{task_file}: в секции plant обязателен ключ {key}")
+        for key, value in plant_section.items():
+            if key in ("model", "requirements", "disturbances"):
+                continue
+            if key == "seed":
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise ValueError(f"{task_file}: plant.seed должен быть целым числом")
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                # контракт загрузчика — любые ошибки формата как ValueError
+                raise ValueError(f"{task_file}: plant.{key} должен быть числом")  # noqa: TRY004
+        if plant_section["K"] <= 0:
+            raise ValueError(f"{task_file}: plant.K должен быть > 0")
+        if plant_section["T"] <= 0:
+            raise ValueError(f"{task_file}: plant.T должен быть > 0")
+        dt = float(plant_section.get("dt", 0.5))
+        if dt <= 0 or dt > float(plant_section["duration"]):
+            raise ValueError(f"{task_file}: plant.dt должен быть > 0 и не больше duration")
+        if float(plant_section.get("u_min", 0.0)) >= float(plant_section.get("u_max", 1.0)):
+            raise ValueError(f"{task_file}: plant.u_min должен быть меньше u_max")
+        if float(plant_section.get("noise_std", 0.0)) < 0:
+            raise ValueError(f"{task_file}: plant.noise_std должен быть >= 0")
+        requirements = plant_section.get("requirements")
+        if not isinstance(requirements, dict) or not requirements:
+            raise ValueError(
+                f"{task_file}: plant.requirements — непустой словарь допусков "
+                f"{sorted(PLANT_REQUIREMENT_KEYS)}"
+            )
+        unknown_req = set(requirements) - PLANT_REQUIREMENT_KEYS
+        if unknown_req:
+            raise ValueError(
+                f"{task_file}: неизвестные ключи plant.requirements {sorted(unknown_req)} "
+                f"(разрешены: {sorted(PLANT_REQUIREMENT_KEYS)})"
+            )
+        for key, value in requirements.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+                raise ValueError(f"{task_file}: plant.requirements.{key} должен быть числом > 0")
+        disturbances = plant_section.get("disturbances", [])
+        if not isinstance(disturbances, list):
+            raise TypeError(f"{task_file}: plant.disturbances должен быть списком словарей")
+        if not all(isinstance(d, dict) for d in disturbances):
+            raise TypeError(f"{task_file}: plant.disturbances должен быть списком словарей")
+        for d in disturbances:
+            unknown_dist = set(d) - PLANT_DISTURBANCE_KEYS
+            if unknown_dist:
+                raise ValueError(
+                    f"{task_file}: неизвестные ключи события disturbances {sorted(unknown_dist)} "
+                    f"(разрешены: {sorted(PLANT_DISTURBANCE_KEYS)})"
+                )
+            if "at" not in d or "ambient" not in d:
+                raise ValueError(f"{task_file}: в событии disturbances нужны at и ambient")
+            if isinstance(d["at"], bool) or not isinstance(d["at"], (int, float)) or d["at"] < 0:
+                raise ValueError(f"{task_file}: disturbances.at должен быть числом >= 0")
+            if isinstance(d["ambient"], bool) or not isinstance(d["ambient"], (int, float)):
+                raise ValueError(f"{task_file}: disturbances.ambient должен быть числом")  # noqa: TRY004
     return Task(
         name=name,
         description=str(raw.get("description", "")),
@@ -148,6 +250,7 @@ def load_task(task_dir: Path) -> Task:
         target=target,
         renode=dict(renode),
         noise=dict(noise),
+        plant=dict(plant_section),
     )
 
 
