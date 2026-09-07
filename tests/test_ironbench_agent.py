@@ -126,6 +126,30 @@ def test_solve_attempt_hits_iteration_limit(tmp_path):
     assert "лимит итераций" in (res.error or "")
 
 
+def test_solve_attempt_stops_on_infra_error(tmp_path):
+    # сломанная среда (нет Renode/CLI/прошивки) не чинится LLM-итерациями —
+    # цикл должен выйти сразу, а не жечь попытки до лимита
+    task = make_task()
+    cfg = SolveConfig(base_url="http://x", api_key="k", model="m", max_iterations=3)
+
+    def runner(work_task, *, out_dir, journal=None):
+        return TaskResult(
+            task=work_task.name,
+            passed=False,
+            exit_code=None,
+            duration_sec=0.1,
+            serial_log=None,
+            error="не найден: Renode-сокет :3456",
+        )
+
+    res = solve_attempt(
+        task, cfg, out_dir=tmp_path, llm=lambda cfg, msgs: GOOD_RESPONSE, runner=runner
+    )
+    assert not res.solved
+    assert res.iterations == 1
+    assert "среда не готова" in (res.error or "")
+
+
 def test_solve_attempt_asks_again_without_code_block(tmp_path):
     task = make_task()
     cfg = SolveConfig(base_url="http://x", api_key="k", model="m")

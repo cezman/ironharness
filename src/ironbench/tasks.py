@@ -9,11 +9,15 @@ import yaml
 
 TASK_FILE = "task.yaml"
 
-# Мишени запуска задачи; wokwi реализована, renode (этап 2.6) и real (этап 3) — в плане
+# Мишени запуска задачи; real (этап 3) — в плане
 TASK_TARGETS = ("wokwi", "renode", "real")
 
 # Типы шагов сценария wokwi, разрешённые в stimulus; расширять вместе с wokwi-cli
 STIMULUS_STEP_KEYS = frozenset({"write-serial", "wait-serial", "delay", "set-control"})
+
+# Ключи секции renode в task.yaml: платформа (.repl из поставки Renode), прошивка
+# (.elf из каталога задачи или tasks/_firmware), имя UART-периферии для терминала
+RENODE_KEYS = frozenset({"platform", "firmware", "uart"})
 
 
 @dataclasses.dataclass(frozen=True)
@@ -34,6 +38,7 @@ class Task:
     fail: tuple[str, ...]
     stimulus: tuple[dict, ...] = ()
     target: str = "wokwi"
+    renode: dict = dataclasses.field(default_factory=dict)
 
 
 def load_task(task_dir: Path) -> Task:
@@ -73,6 +78,25 @@ def load_task(task_dir: Path) -> Task:
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
         raise ValueError(f"{task_file}: неизвестная мишень {target!r} (разрешены: {TASK_TARGETS})")
+    renode = raw.get("renode", {})
+    if not isinstance(renode, dict):
+        raise TypeError(f"{task_file}: renode должен быть словарём (platform/firmware/uart)")
+    unknown_renode = set(renode) - RENODE_KEYS
+    if unknown_renode:
+        raise ValueError(
+            f"{task_file}: неизвестные ключи renode {sorted(unknown_renode)} "
+            f"(разрешены: {sorted(RENODE_KEYS)})"
+        )
+    if target == "renode":
+        missing = {"platform", "firmware"} - set(renode)
+        if missing:
+            raise ValueError(
+                f"{task_file}: для мишени renode в секции renode нужны platform и firmware "
+                f"(нет: {sorted(missing)})"
+            )
+        for key in ("platform", "firmware", "uart"):
+            if key in renode and (not isinstance(renode[key], str) or not renode[key]):
+                raise ValueError(f"{task_file}: renode.{key} должен быть непустой строкой")
     return Task(
         name=name,
         description=str(raw.get("description", "")),
@@ -84,6 +108,7 @@ def load_task(task_dir: Path) -> Task:
         fail=tuple(fail),
         stimulus=tuple(stimulus),
         target=target,
+        renode=dict(renode),
     )
 
 

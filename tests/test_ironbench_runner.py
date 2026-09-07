@@ -213,12 +213,16 @@ def test_task_yaml_loads_from_packaged_blink():
 def test_all_golden_tasks_have_required_files():
     tasks_dir = runner_module.Path(__file__).parents[1] / "src" / "ironbench" / "tasks"
     tasks = load_tasks(tasks_dir)
-    assert len(tasks) >= 6  # blink + 5 золотых задач этапа 2.3
+    assert len(tasks) >= 6  # blink + золотые задачи этапов 2.3 и 2.6
     for task in tasks:
-        assert (task.directory / "wokwi.toml").is_file(), task.name
-        assert (task.directory / "diagram.json").is_file(), task.name
         assert (task.directory / "task.yaml").is_file(), task.name
         assert (task.directory / task.entry).is_file(), task.name
+        if task.target == "wokwi":
+            assert (task.directory / "wokwi.toml").is_file(), task.name
+            assert (task.directory / "diagram.json").is_file(), task.name
+        elif task.target == "renode":
+            assert task.renode.get("platform"), task.name
+            assert task.renode.get("firmware"), task.name
 
 
 def test_generate_paste_scenario(tmp_path):
@@ -293,21 +297,51 @@ def test_explicit_wokwi_target_loads(tmp_path):
     assert load_task(d).target == "wokwi"
 
 
-@pytest.mark.parametrize("target,stage_note", [("renode", "2.6"), ("real", "этап 3")])
-def test_unready_target_is_clean_fail_without_cli(tmp_path, monkeypatch, target, stage_note):
-    task = dataclasses.replace(make_task(tmp_path), target=target)
+def test_real_target_is_clean_fail_without_cli(tmp_path, monkeypatch):
+    task = dataclasses.replace(make_task(tmp_path), target="real")
 
-    # wokwi-бэкенд не должен зваться для нереализованных мишеней
+    # бэкенды реализованных мишеней не должны зваться для real
+    def forbidden_backend(*a, **k):
+        raise AssertionError("чужой бэкенд вызван для мишени real")
+
+    monkeypatch.setattr(runner_module, "_run_wokwi", forbidden_backend)
+    monkeypatch.setattr(runner_module, "_run_renode", forbidden_backend)
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert not res.passed
+    assert res.exit_code is None
+    assert "этап 3" in (res.error or "")
+    assert "не реализована" in (res.error or "")
+    assert res.missed == task.expect  # проверки не выполнялись
+
+
+def test_renode_target_without_section_is_clean_fail(tmp_path, monkeypatch):
+    # renode-задача без секции renode — чистый инфраструктурный FAIL без запуска
+    task = dataclasses.replace(make_task(tmp_path), target="renode")
+
     def forbidden_wokwi(*a, **k):
-        raise AssertionError("wokwi-бэкенд вызван для нереализованной мишени")
+        raise AssertionError("wokwi-бэкенд вызван для мишени renode")
 
     monkeypatch.setattr(runner_module, "_run_wokwi", forbidden_wokwi)
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert res.exit_code is None
-    assert stage_note in (res.error or "")
-    assert "не реализована" in (res.error or "")
-    assert res.missed == task.expect  # проверки не выполнялись
+    assert "не удалось подготовить задачу" in (res.error or "")
+    assert "platform и firmware" in (res.error or "")
+
+
+def test_renode_target_dispatches_to_renode_backend(tmp_path, monkeypatch):
+    task = dataclasses.replace(make_task(tmp_path), target="renode")
+    seen = {}
+
+    def fake_renode(task_, *, out_dir, renode_cmd=None, journal=None):
+        seen["task"] = task_.name
+        return TaskResult(
+            task=task_.name, passed=True, exit_code=0, duration_sec=0.1, serial_log=None
+        )
+
+    monkeypatch.setattr(runner_module, "_run_renode", fake_renode)
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert res.passed
+    assert seen["task"] == "fake"
 
 
 def test_unready_target_journaled(tmp_path):

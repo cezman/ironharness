@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from ironbench.runner import find_env_file, load_env_file, run_task
+from ironbench.runner import find_env_file, is_infra_error, load_env_file, run_task
 from ironbench.tasks import Task
 
 SYSTEM_PROMPT = (
@@ -260,6 +260,11 @@ def solve_attempt(
             )
         if result.passed:
             solved = True
+            break
+        if is_infra_error(result.error):
+            # среда сломана (нет Renode/прошивки/CLI) — LLM это не починит,
+            # дальнейшие итерации только жгут токены
+            error = f"среда не готова, попытка остановлена: {result.error}"
             break
         messages.append({"role": "assistant", "content": response})
         messages.append(

@@ -19,4 +19,7 @@ PLAN.md
 .env
 
 # Прогоны ironbench (serial-логи, журналы)
-.ironbench/
+.ironbench*/
+
+# Локальные временные файлы
+tmp/
