@@ -7,6 +7,7 @@ from io_core.errors import (
     SandboxViolation,
     VerificationError,
 )
+from io_core.esp_flash import EspFlasher
 from io_core.file_sandbox import FileSandbox
 from io_core.journal import JsonlJournal, read_events
 from io_core.limits import DeadlineTransport, RateLimitedTransport, RateLimiter
@@ -22,6 +23,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "DeadlineTransport",
+    "EspFlasher",
     "FileSandbox",
     "JsonlJournal",
     "ModbusSimServer",

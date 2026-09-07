@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from io_core.esp_flash import DEFAULT_BOOTLOADER_OFFSET, EspFlasher
 from io_core.file_sandbox import FileSandbox
 from io_core.journal import JsonlJournal
 from io_core.modbus_transport import ModbusTransport
@@ -111,6 +112,19 @@ class Session:
 
     def mqtt_read(self, name: str, timeout: float = 1.0) -> dict[str, str] | None:
         return self._get(name).read_message(timeout)
+
+    # --- esp (прошивка через esptool) ---
+
+    def esp_image_info(self, firmware_path: str, chip: str = "esp32") -> dict[str, Any]:
+        return EspFlasher(chip=chip, on_event=self.journal).image_info(firmware_path)
+
+    def esp_flash(
+        self, port: str, firmware_path: str, *, addr: int = DEFAULT_BOOTLOADER_OFFSET, baud: int = 921600
+    ) -> str:
+        return EspFlasher(on_event=self.journal).flash(port, firmware_path, addr=addr, baud=baud)
+
+    def esp_erase(self, port: str, *, baud: int = 921600) -> str:
+        return EspFlasher(on_event=self.journal).erase(port, baud=baud)
 
     # --- файлы (песочница) ---
 

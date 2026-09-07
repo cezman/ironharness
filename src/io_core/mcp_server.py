@@ -129,6 +129,27 @@ def mqtt_read(name: str, timeout: float = 1.0) -> dict[str, str] | None:
     return get_session().mqtt_read(name, timeout)
 
 
+# --- esp (прошивка; для flash/erase нужна живая плата) ---
+
+
+@mcp.tool()
+def esp_image_info(firmware_path: str, chip: str = "esp32") -> dict:
+    """Разбирает .bin-образ прошивки без железа: entrypoint, сегменты, flash-параметры."""
+    return get_session().esp_image_info(firmware_path)
+
+
+@mcp.tool()
+def esp_flash(port: str, firmware_path: str, addr: int = 0x1000, baud: int = 921600) -> str:
+    """Прошивает образ в плату по указанному порту (классический ESP32: addr=0x1000)."""
+    return get_session().esp_flash(port, firmware_path, addr=addr, baud=baud)
+
+
+@mcp.tool()
+def esp_erase(port: str, baud: int = 921600) -> str:
+    """Стирает всю флеш-память платы (необратимо)."""
+    return get_session().esp_erase(port, baud=baud)
+
+
 # --- файлы (песочница) ---
 
 

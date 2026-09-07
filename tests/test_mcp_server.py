@@ -6,12 +6,14 @@
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
 from io_core import ModbusSimServer, SandboxViolation
 from io_core.mcp_server import (
     echo,
+    esp_image_info,
     file_delete,
     file_list,
     file_read,
@@ -30,6 +32,8 @@ from io_core.mcp_server import (
     serial_write,
 )
 
+FIRMWARE = Path(__file__).parents[1] / "src/ironbench/tasks/_firmware/ESP32_GENERIC-20251209-v1.27.0.bin"
+
 
 @pytest.fixture()
 def mcp_env(tmp_path, monkeypatch):
@@ -44,7 +48,8 @@ def test_tools_are_registered():
     names = {t.name for t in tools}
     assert {"echo", "serial_open", "serial_write", "serial_read", "modbus_open",
             "modbus_read", "modbus_write", "mqtt_open", "mqtt_publish", "mqtt_subscribe",
-            "mqtt_read", "file_write", "file_read", "file_list"} <= names
+            "mqtt_read", "esp_image_info", "esp_flash", "esp_erase",
+            "file_write", "file_read", "file_list"} <= names
 
 
 def test_echo(mcp_env):
@@ -113,3 +118,10 @@ def test_journal_lands_in_home(mcp_env):
     journal = json.loads((mcp_env / "journal.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert journal["actor"] == "mcp"
     assert journal["kind"] == "file_write"
+
+
+def test_esp_image_info_offline(mcp_env):
+    """Разбор реального образа через MCP без железа."""
+    info = esp_image_info(str(FIRMWARE))
+    assert info["chip"] == "esp32"
+    assert len(info["segments"]) >= 3
