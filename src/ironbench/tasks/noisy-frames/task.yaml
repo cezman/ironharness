@@ -1,0 +1,46 @@
+# Золотая задача класса «шумная линия» (план бэклога: frame-corrupt):
+# линия портит и теряет кадры, прошивка обязана проверить контрольную сумму
+# и честно ответить ack/nak; переприёмом занимается отправитель (стимул).
+# Шум детерминирован (seed) и описан секцией noise; op счётчика = один
+# write-serial шаг: op1 портится, op3 выбрасывается.
+name: noisy-frames
+description: >-
+  Прошивка читает кадры из serial-консоли. Кадр — строка "<id>:<payload>:<xor2>",
+  где xor2 — контрольная сумма: XOR всех байтов payload в hex из двух знаков
+  (например, для "1:hello:62": XOR байтов 'h','e','l','l','o' равен 0x62).
+  На каждый кадр прошивка отвечает ровно одной строкой: "ack <id>", если формат
+  верный и сумма сошлась, иначе — "nak". Линия шумная: часть кадров доходит
+  битой или теряется совсем; переприёмом занимается отправитель, прошивка
+  только честно отвечает. Бесконечный цикл.
+entry: solution.py
+target: unix
+timeout_sec: 20
+noise:
+  seed: 7
+  faults:
+    - action: corrupt
+      after_ops: 0
+      count: 1
+      ratio: 1.0
+    - action: drop
+      after_ops: 2
+      count: 1
+expect:
+  - 'nak'
+  - 'ack 1'
+  - 'ack 2'
+  - 'ack 3'
+fail:
+  - 'Traceback'
+stimulus:
+  # первый delay — прогрев: прошивка должна дойти до input()
+  - delay: 100ms
+  - write-serial: "1:hello:62\r"   # кадр испортится линией → nak
+  - wait-serial: "nak"
+  - write-serial: "1:hello:62\r"   # ретрай — чисто → ack 1
+  - wait-serial: "ack 1"
+  - write-serial: "2:abc:60\r"     # тело кадра линия выбросит, а голый \n дойдёт → nak
+  - write-serial: "2:abc:60\r"     # ретрай — чисто → ack 2
+  - wait-serial: "ack 2"
+  - write-serial: "3:x:78\r"       # чисто → ack 3
+  - wait-serial: "ack 3"

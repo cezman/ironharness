@@ -146,3 +146,21 @@ def test_attribute_delegation():
     target = RecordingTransport(read_data=b"ok")
     t = FaultyTransport(target, faults=[])
     assert t.read_data == b"ok"
+
+
+def test_count_limits_fault_window():
+    # окно активности (after_ops, after_ops+count]: сбой бьёт ровно одну операцию
+    target = RecordingTransport()
+    t = FaultyTransport(
+        target,
+        faults=[Fault("drop", after_ops=1, count=1)],
+        rng=random.Random(1),
+    )
+    for chunk in (b"one", b"two", b"three", b"four"):
+        t.write(chunk)
+    assert target.writes == [b"one", b"three", b"four"]
+
+
+def test_count_validation():
+    with pytest.raises(ValueError, match="count"):
+        Fault("drop", count=0)

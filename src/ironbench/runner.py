@@ -32,6 +32,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import os
+import random
 import re
 import shutil
 import socket
@@ -45,6 +46,7 @@ from pathlib import Path
 
 import yaml
 
+from io_core.faults import FaultyTransport
 from ironbench.tasks import Task
 
 # Коды возврата wokwi-cli: сработавший --timeout (42) для бесконечных прошивок — норма
@@ -813,6 +815,18 @@ def _unix_cmd(remote_entry: str) -> list[str]:
     return ["wsl", "-d", _wsl_distro(), "--", "bash", "-c", f"exec {upy_bin} {remote_entry}"]
 
 
+class _StdinWriter:
+    """Адаптер stdin-процесса под протокол Transport.write — цель FaultyTransport."""
+
+    def __init__(self, stdin) -> None:
+        self._stdin = stdin
+
+    def write(self, data: bytes) -> None:
+        assert self._stdin is not None
+        self._stdin.write(data)
+        self._stdin.flush()
+
+
 def _run_unix(
     task: Task,
     *,
@@ -877,9 +891,20 @@ def _run_unix(
             finally:
                 box["eof"] = True
 
-        threading.Thread(target=reader, daemon=True).start()
+        reader_thread = threading.Thread(target=reader, daemon=True)
+        reader_thread.start()
         deadline = time.monotonic() + wall_timeout
         plain = tuple(p for p in task.expect if _plain_text(p))
+        # шумная линия: записи стимула идут через FaultyTransport (drop/corrupt
+        # по сценарию из task.yaml); seed фиксирует сценарий — воспроизводимость
+        # прогона и есть цель, это не криптография (см. io_core/faults.py).
+        # op счётчика = один write-serial шаг стимула. Выход прошивки (stdout)
+        # не шумим: оценка по паттернам остаётся честной.
+        writer = _StdinWriter(proc.stdin)
+        if task.noise:
+            writer = FaultyTransport(
+                writer, task.noise.get("faults", []), rng=random.Random(task.noise.get("seed", 0))
+            )
         try:
             for step in task.stimulus:
                 if time.monotonic() > deadline or box["eof"]:
@@ -897,10 +922,16 @@ def _run_unix(
                     ):
                         time.sleep(0.05)
                 elif "write-serial" in step:
-                    assert proc.stdin is not None
-                    data = str(step["write-serial"]).replace("\r\n", "\n").replace("\r", "\n")
-                    proc.stdin.write(data.encode("utf-8"))
-                    proc.stdin.flush()
+                    raw = str(step["write-serial"]).replace("\r\n", "\n").replace("\r", "\n")
+                    raw = raw.encode("utf-8")
+                    if task.noise and raw.endswith(b"\n"):
+                        # терминатор не шумим: порча \n склеивает кадры в поток,
+                        # из которого input() не выйдет ни при каком ретрае
+                        writer.write(raw[:-1])
+                        proc.stdin.write(b"\n")
+                        proc.stdin.flush()
+                    else:
+                        writer.write(raw)
             # дочитываем: до всех литеральных expect, EOF или дедлайна
             # (бесконечный цикл прошивки — норма, как --timeout в wokwi)
             while time.monotonic() < deadline and not box["eof"]:
@@ -911,16 +942,21 @@ def _run_unix(
             if box["eof"]:
                 exit_code = proc.wait(timeout=5)
             elif matched or time.monotonic() >= deadline:
-                # гасим сразу, не закрывая stdin: EOF у input() бесконечной
-                # прошивки дал бы Traceback в serial-логе (fail-паттерн)
-                proc.kill()
-                proc.wait(timeout=5)
-                exit_code = None
+                try:
+                    # конечная программа могла уже завершиться сама — забираем код
+                    exit_code = proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    # бесконечная: гасим, НЕ закрывая stdin — EOF у input()
+                    # печатал бы Traceback в serial-лог (fail-паттерн)
+                    proc.kill()
+                    proc.wait(timeout=5)
+                    exit_code = None
             else:
                 try:
                     exit_code = proc.wait(timeout=3)  # конечная программа сама выйдет
                 except subprocess.TimeoutExpired:
                     exit_code = None
+            reader_thread.join(timeout=2)  # снимок лога — после дочитывания потока
             serial_text = box["text"]
             if exit_code not in (0, None):
                 error = f"micropython завершился с кодом {exit_code}"

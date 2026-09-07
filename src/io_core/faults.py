@@ -27,12 +27,15 @@ class Fault:
     action: drop (запись теряется), corrupt (инверсия случайных битов), delay
     (задержка seconds), disconnect (ConnectionLost).
     after_ops: сбой активен на операциях с номером (1-based) больше after_ops.
+    count: сколько операций длится активность (None — до конца сессии);
+    окно активности = (after_ops, after_ops + count].
     probability: шанс срабатывания на каждой активной операции.
     ratio: доля байтов, подвергаемых порче (для corrupt).
     """
 
     action: str
     after_ops: int = 0
+    count: int | None = None
     probability: float = 1.0
     ratio: float = 0.25
     seconds: float = 0.0
@@ -48,6 +51,8 @@ class Fault:
             raise ValueError("seconds должна быть >= 0")
         if self.after_ops < 0:
             raise ValueError("after_ops должна быть >= 0")
+        if self.count is not None and self.count < 1:
+            raise ValueError("count должна быть >= 1 или None")
 
 
 def _corrupt(data: bytes, ratio: float, rng: random.Random) -> bytes:
@@ -85,11 +90,15 @@ class FaultyTransport:
 
     def _active(self) -> list[Fault]:
         self.ops += 1
-        return [
-            f
-            for f in self._faults
-            if self.ops > f.after_ops and self._rng.random() < f.probability
-        ]
+        active = []
+        for f in self._faults:
+            if self.ops <= f.after_ops:
+                continue
+            if f.count is not None and self.ops > f.after_ops + f.count:
+                continue
+            if self._rng.random() < f.probability:
+                active.append(f)
+        return active
 
     def write(self, data: bytes) -> None:
         faults = self._active()

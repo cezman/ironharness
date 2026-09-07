@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+from io_core.faults import Fault
+
 TASK_FILE = "task.yaml"
 
 # Мишени запуска задачи; real (этап 3) — в плане. unix = MicroPython unix-port
@@ -19,6 +21,10 @@ STIMULUS_STEP_KEYS = frozenset({"write-serial", "wait-serial", "delay", "set-con
 # Ключи секции renode в task.yaml: платформа (.repl из поставки Renode), прошивка
 # (.elf из каталога задачи или tasks/_firmware), имя UART-периферии для терминала
 RENODE_KEYS = frozenset({"platform", "firmware", "uart"})
+
+# Секция noise: шумная линия поверх стимула мишени unix. seed — детерминизм,
+# faults — те же сценарии, что у io_core.FaultyTransport (словари Fault)
+NOISE_KEYS = frozenset({"seed", "faults"})
 
 
 @dataclasses.dataclass(frozen=True)
@@ -40,6 +46,7 @@ class Task:
     stimulus: tuple[dict, ...] = ()
     target: str = "wokwi"
     renode: dict = dataclasses.field(default_factory=dict)
+    noise: dict = dataclasses.field(default_factory=dict)
 
 
 def load_task(task_dir: Path) -> Task:
@@ -98,6 +105,36 @@ def load_task(task_dir: Path) -> Task:
         for key in ("platform", "firmware", "uart"):
             if key in renode and (not isinstance(renode[key], str) or not renode[key]):
                 raise ValueError(f"{task_file}: renode.{key} должен быть непустой строкой")
+    noise = raw.get("noise", {})
+    if not isinstance(noise, dict):
+        raise TypeError(f"{task_file}: noise должен быть словарём (seed/faults)")
+    unknown_noise = set(noise) - NOISE_KEYS
+    if unknown_noise:
+        raise ValueError(
+            f"{task_file}: неизвестные ключи noise {sorted(unknown_noise)} "
+            f"(разрешены: {sorted(NOISE_KEYS)})"
+        )
+    if "seed" in noise and (
+        isinstance(noise["seed"], bool) or not isinstance(noise["seed"], int)
+    ):
+        raise ValueError(f"{task_file}: noise.seed должен быть целым числом")
+    faults = noise.get("faults", [])
+    if not isinstance(faults, list) or not all(isinstance(f, dict) for f in faults):
+        raise ValueError(f"{task_file}: noise.faults должен быть списком словарей")
+    for f in faults:
+        # disconnect ронял бы прогон (ConnectionLost не ловится в _run_unix),
+        # остальные действия шумной линии честно поддержаны
+        if f.get("action") not in {"drop", "corrupt", "delay"}:
+            raise ValueError(
+                f"{task_file}: noise.faults: действие {f.get('action')!r} не поддерживается "
+                "(разрешены: drop, corrupt, delay)"
+            )
+    try:
+        [Fault(**f) for f in faults]  # валидация сценариев сбоев на этапе загрузки
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"{task_file}: noise.faults: {e}") from None
+    if noise and target != "unix":
+        raise ValueError(f"{task_file}: noise поддерживается только мишенью unix")
     return Task(
         name=name,
         description=str(raw.get("description", "")),
@@ -110,6 +147,7 @@ def load_task(task_dir: Path) -> Task:
         stimulus=tuple(stimulus),
         target=target,
         renode=dict(renode),
+        noise=dict(noise),
     )
 
 

@@ -179,3 +179,127 @@ def test_unix_cli_target_override(tmp_path):
     import dataclasses
 
     assert dataclasses.replace(uart, target="unix").target == "unix"
+
+
+def make_noise_task(tmp_path, noise_yaml, stimulus, expect=("echo: one",), timeout_sec=0):
+    d = tmp_path / "tn"
+    d.mkdir()
+    text = f"""
+name: fake-noise
+description: фейк
+entry: solution.py
+target: unix
+timeout_sec: {timeout_sec}
+{noise_yaml}
+expect:
+"""
+    text += "".join(f"  - {p!r}\n" for p in expect)
+    text += "stimulus:\n" + "\n".join(f"  - {s}" for s in stimulus) + "\n"
+    (d / "task.yaml").write_text(textwrap.dedent(text), encoding="utf-8")
+    (d / "solution.py").write_text('print("hi")\n', encoding="utf-8")
+    return load_task(d)
+
+
+def test_unix_noise_drop_swallows_write_step(tmp_path):
+    # op2 выбрасывается линией: тело two не доходит, aaa/ccc доходят
+    noise = """
+noise:
+  seed: 7
+  faults:
+    - action: drop
+      after_ops: 1
+      count: 1
+"""
+    stimulus = [
+        'write-serial: "one\\r"',
+        'write-serial: "two\\r"',
+        'write-serial: "three\\r"',
+    ]
+    task = make_noise_task(
+        tmp_path, noise, stimulus, expect=("echo: one", "echo: three")
+    )
+    res = run_fake_unix(tmp_path, task, "echo")
+    assert res.passed, res.error
+    log = res.serial_log.read_text("utf-8")
+    assert "echo: two" not in log
+    assert "echo: one" in log and "echo: three" in log
+
+
+def test_unix_noise_corrupt_changes_bytes_then_retry_is_clean(tmp_path):
+    # op1 портится всеми байтами (ratio 1.0), ретрай op2 доходит чисто
+    noise = """
+noise:
+  seed: 7
+  faults:
+    - action: corrupt
+      after_ops: 0
+      count: 1
+      ratio: 1.0
+"""
+    stimulus = [
+        'write-serial: "one\\r"',
+        'write-serial: "one\\r"',
+    ]
+    task = make_noise_task(tmp_path, noise, stimulus, expect=("echo: one",))
+    res = run_fake_unix(tmp_path, task, "echo")
+    assert res.passed, res.error
+    log = res.serial_log.read_text("utf-8")
+    assert "echo: one" in log
+    assert log.count("echo: ") == 2  # битая строка тоже напечатана, но другой
+
+
+def test_unix_noise_validation_bad_action(tmp_path):
+    noise = """
+noise:
+  seed: 7
+  faults:
+    - action: explode
+      count: 1
+"""
+    with pytest.raises(ValueError, match="noise.faults"):
+        make_noise_task(tmp_path, noise, ['write-serial: "x\\r"'])
+
+
+def test_unix_noise_validation_bad_seed(tmp_path):
+    noise = """
+noise:
+  seed: abc
+  faults: []
+"""
+    with pytest.raises(ValueError, match="noise.seed"):
+        make_noise_task(tmp_path, noise, ['write-serial: "x\\r"'])
+
+
+def test_unix_noise_validation_disconnect_rejected(tmp_path):
+    # disconnect из шумной линии не поддержан: валидатор режет на загрузке
+    noise = """
+noise:
+  seed: 7
+  faults:
+    - action: disconnect
+      after_ops: 1
+"""
+    with pytest.raises(ValueError, match="disconnect"):
+        make_noise_task(tmp_path, noise, ['write-serial: "x\\r"'])
+
+
+def test_unix_noise_rejected_on_wokwi_target(tmp_path):
+    d = tmp_path / "tw"
+    d.mkdir()
+    text = """
+name: fake-wokwi-noise
+description: фейк
+entry: main.py
+target: wokwi
+timeout_sec: 5
+noise:
+  seed: 7
+  faults:
+    - action: drop
+      count: 1
+expect:
+  - 'x'
+"""
+    (d / "task.yaml").write_text(textwrap.dedent(text), encoding="utf-8")
+    with pytest.raises(ValueError, match="только мишенью unix"):
+        load_task(d)
