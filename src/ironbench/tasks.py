@@ -153,8 +153,9 @@ def load_task(task_dir: Path) -> Task:
                 or col["count"] < 1
             ):
                 raise ValueError(f"{task_file}: mqtt-collect.count — целое >= 1")
-            if float(col.get("timeout_sec", 10)) <= 0:
-                raise ValueError(f"{task_file}: mqtt-collect.timeout_sec должен быть > 0")
+            ts = col.get("timeout_sec", 10)
+            if isinstance(ts, bool) or not isinstance(ts, (int, float)) or ts <= 0:
+                raise ValueError(f"{task_file}: mqtt-collect.timeout_sec должен быть числом > 0")
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
         raise ValueError(f"{task_file}: неизвестная мишень {target!r} (разрешены: {TASK_TARGETS})")

@@ -292,6 +292,8 @@ def is_infra_error(error: str | None) -> bool:
         return False
     marks = (
         "не реализована",
+        "не поддерживает",
+        "не поддержан",
         "не найден",
         "не удалось подготовить задачу",
         "не удалось подключиться",
@@ -678,20 +680,20 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
     return "".join(parts), None
 
 
-def _read_port_line(stream, timeout: float) -> int:
-    """Читает stdout WSL-конвейера до строки RENODE_PORT=<n> (в отдельном
-    потоке: readline блокирует, а конвейер может умереть до эха порта).
-    Строки до порта (например, служебные сообщения wsl.exe в stderr, который
-    мержится в stdout) пропускаются."""
-    box: dict[str, int] = {}
+def _read_marker_line(stream, marker: str, timeout: float) -> str:
+    """Читает stdout конвейера до строки '<marker>=<значение>' (в отдельном
+    потоке: readline блокирует, а конвейер может умереть до эха). Строки до
+    маркера (например, служебные сообщения wsl.exe в stderr, который мержится
+    в stdout) пропускаются. Возвращает значение после '='."""
+    box: dict[str, str] = {}
 
     def reader():
         try:
             for line in iter(stream.readline, b""):
-                if line.startswith(b"RENODE_PORT="):
+                if line.startswith(marker.encode() + b"="):
                     raw = line.decode("utf-8", "replace").strip().split("=", 1)[1]
-                    if raw.isdigit():  # мусор после '=' — читаем дальше
-                        box["port"] = int(raw)
+                    if raw:  # мусор после '=' — читаем дальше
+                        box["value"] = raw
                         return
         except (OSError, ValueError):
             pass
@@ -699,9 +701,17 @@ def _read_port_line(stream, timeout: float) -> int:
     thread = threading.Thread(target=reader, daemon=True)
     thread.start()
     thread.join(timeout)
-    if "port" not in box:
-        raise ConnectionError("WSL-конвейер не сообщил порт (RENODE_PORT=...)")
-    return box["port"]
+    if "value" not in box:
+        raise ConnectionError(f"WSL-конвейер не сообщил {marker}=...")
+    return box["value"]
+
+
+def _read_port_line(stream, timeout: float) -> int:
+    """Порт socket-терминала Renode из stdout WSL-конвейера."""
+    raw = _read_marker_line(stream, "RENODE_PORT", timeout)
+    if not raw.isdigit():  # мусор после '=' — читаем дальше не выйдет, честный отказ
+        raise ConnectionError(f"WSL-конвейер сообщил нечисловой порт: {raw!r}")
+    return int(raw)
 
 
 def _run_renode(
@@ -785,12 +795,7 @@ def _run_renode(
         error = f"ошибка ввода-вывода при запуске Renode: {e}"
     finally:
         if proc is not None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
+            _reap(proc)
             if proc.stdout is not None:
                 proc.stdout.close()
 
@@ -863,9 +868,13 @@ def _free_tcp_port() -> int:
     return port
 
 
-def _start_wsl_mqtt_broker(task: Task, port: int) -> subprocess.Popen:
+def _start_wsl_mqtt_broker(task: Task, port: int) -> tuple[subprocess.Popen, int | None]:
     """Поднимает mqtt_sim в WSL2 (тот же localhost, что у прошивки); Windows-сторона
-    ходит в него через localhost-forwarding, поэтому бинд на 0.0.0.0."""
+    ходит в него через localhost-forwarding, поэтому бинд на 0.0.0.0.
+
+    terminate() убивает только wsl.exe — линукс-процесс переживает его (зомби с
+    занятым портом, см. zombie-слушатель в wsl-run.sh), поэтому брокер печатает
+    свой PID, и cleanup добивает его kill'ом по PID внутри дистрибутива."""
     remote_dir = f"{RENODE_REMOTE_ROOT}/{task.name}-mqtt"
     _push_to_wsl(_tar_of(MQTT_SIM_PATH, "mqtt_sim.py"), remote_dir, "BROKER-PUSHED")
     proc = subprocess.Popen(
@@ -876,7 +885,10 @@ def _start_wsl_mqtt_broker(task: Task, port: int) -> subprocess.Popen:
             "--",
             "bash",
             "-c",
-            f"exec python3 {remote_dir}/mqtt_sim.py --host 0.0.0.0 --port {port}",
+            (
+                f"python3 {remote_dir}/mqtt_sim.py --host 0.0.0.0 --port {port} & "
+                'echo "BROKER_PID=$!"; wait $!'
+            ),
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -887,23 +899,46 @@ def _start_wsl_mqtt_broker(task: Task, port: int) -> subprocess.Popen:
         try:
             probe = socket.create_connection(("localhost", port), timeout=1.0)
             probe.close()
-            return proc
+            break
         except OSError:
             if proc.poll() is not None or time.monotonic() > deadline:
-                proc.terminate()
+                _stop_broker_proc(proc, None)
                 raise ConnectionError(f"брокер mqtt_sim на :{port} не поднялся") from None
             time.sleep(0.2)
+    try:
+        wsl_pid = int(_read_marker_line(proc.stdout, "BROKER_PID", 5))
+    except (ConnectionError, ValueError):
+        wsl_pid = None  # без PID cleanup сведётся к terminate wsl.exe
+    return proc, wsl_pid
 
 
-def _stop_broker_proc(proc: subprocess.Popen | None) -> None:
-    if proc is None:
-        return
+def _reap(proc: subprocess.Popen) -> None:
+    """Гасит локальный wsl.exe/воркер; второй wait после kill — не исключение."""
     proc.terminate()
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=5)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _stop_broker_proc(proc: subprocess.Popen | None, wsl_pid: int | None) -> None:
+    if proc is None:
+        return
+    if wsl_pid is not None:
+        try:
+            subprocess.run(
+                ["wsl", "-d", _wsl_distro(), "--", "kill", str(wsl_pid)],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    _reap(proc)
     if proc.stdout is not None:
         proc.stdout.close()
 
@@ -950,6 +985,7 @@ def _run_unix(
     proc = None
     mqtt_client: MqttTransport | None = None
     broker_proc: subprocess.Popen | None = None
+    broker_pid: int | None = None
     mqtt_subscribed: set[str] = set()
     try:
         mqtt_port = 0
@@ -958,7 +994,7 @@ def _run_unix(
             if mqtt_broker is not None:
                 mqtt_port = mqtt_broker.port  # тестовый брокер уже запущен
             else:
-                broker_proc = _start_wsl_mqtt_broker(task, mqtt_port)
+                broker_proc, broker_pid = _start_wsl_mqtt_broker(task, mqtt_port)
             mqtt_client = MqttTransport(
                 "127.0.0.1",
                 port=mqtt_port,
@@ -967,6 +1003,15 @@ def _run_unix(
             mqtt_client.open()
             if journal:
                 journal("mqtt_broker_ready", {"task": task.name, "port": mqtt_port})
+            # подписки заранее, до спавна прошивки: первая публикация (QoS0, не
+            # retained) уходит сразу после старта — подписка на шаге collect
+            # могла бы её не поймать
+            for step in task.stimulus:
+                if "mqtt-collect" in step:
+                    topic = str(step["mqtt-collect"]["topic"])
+                    if topic not in mqtt_subscribed:
+                        mqtt_client.subscribe(topic)
+                        mqtt_subscribed.add(topic)
         if unix_cmd is None:
             remote_dir = f"{RENODE_REMOTE_ROOT}/{task.name}-unix"
             _push_to_wsl(
@@ -1115,12 +1160,7 @@ def _run_unix(
         error = f"ошибка ввода-вывода при запуске micropython: {e}"
     finally:
         if proc is not None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
+            _reap(proc)
             if proc.stdout is not None:
                 proc.stdout.close()
         if mqtt_client is not None:
@@ -1128,7 +1168,7 @@ def _run_unix(
                 mqtt_client.close()
             except OSError:
                 pass
-        _stop_broker_proc(broker_proc)
+        _stop_broker_proc(broker_proc, broker_pid)
 
     serial_log.write_text(serial_text, encoding="utf-8")
     duration = round(time.monotonic() - start, 2)
@@ -1226,7 +1266,9 @@ def _run_plant(
         else:
             error = "воркер plant не оставил result.json"
     if report and report.get("error"):
-        error = report["error"]
+        # в error — только заголовок: полный traceback остаётся в логе (фидбек
+        # агенту), а текст исключения агента не должен попадать в is_infra_error
+        error = report["error"].splitlines()[0]
 
     serial_text = (
         serial_log.read_text(encoding="utf-8", errors="replace") if serial_log.is_file() else ""

@@ -37,6 +37,12 @@ SYSTEM_PROMPT = (
     "main.py, без пояснений."
 )
 
+PLANT_SYSTEM_PROMPT = (
+    "Ты — инженер по системам управления. Пишешь контроллер на Python в виде функции "
+    "control(t, y, setpoint). Отвечай только одним блоком ```python с полным кодом "
+    "main.py, без пояснений."
+)
+
 CODE_FENCE = re.compile(r"```(?:python|micropython)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 
 # Название файла, который пишет агент (в золотых задачах это место занято solution.py)
@@ -228,7 +234,7 @@ def solve_attempt(
     work_task = _work_task(task, work_dir)
 
     messages: list[dict] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": PLANT_SYSTEM_PROMPT if task.target == "plant" else SYSTEM_PROMPT},
         {"role": "user", "content": _first_prompt(task)},
     ]
     start = time.monotonic()

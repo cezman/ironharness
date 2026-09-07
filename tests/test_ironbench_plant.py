@@ -167,6 +167,19 @@ def test_plant_controller_crash_is_result_not_infra(tmp_path):
     assert not runner_module.is_infra_error(res.error)
 
 
+def test_plant_controller_sys_exit_is_result(tmp_path):
+    # sys.exit в контроллере — тоже результат прогона: result.json/лог пишутся,
+    # воркер не падает; текст исключения агента не попадает в error (infra-скан)
+    controller = "import sys\ndef control(t, y, setpoint):\n    sys.exit('датчик не найден')\n"
+    task = make_plant_task(tmp_path, controller)
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert not res.passed
+    assert "контроллер упал" in (res.error or "")
+    assert "датчик не найден" not in (res.error or "")  # только в логе-фидбеке
+    assert "датчик не найден" in res.serial_log.read_text("utf-8")
+    assert not runner_module.is_infra_error(res.error)
+
+
 def test_plant_missing_control_function(tmp_path):
     task = make_plant_task(tmp_path, "x = 1\n")
     res = run_task(task, out_dir=tmp_path / "out")

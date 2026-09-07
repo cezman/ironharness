@@ -133,6 +133,8 @@ def test_unix_set_control_rejected_upfront(tmp_path):
     res = run_fake_unix(tmp_path, task, "echo")
     assert not res.passed
     assert "set-control" in (res.error or "")
+    # отказ неисправим для агента — solve-цикл должен выходить сразу, не жечь итерации
+    assert runner_module.is_infra_error(res.error)
 
 
 def test_unix_journal_records_start_and_result(tmp_path):

@@ -140,7 +140,7 @@ def run_closed_loop(
         y_meas = y + noise.gauss(spec.noise_std)
         try:
             raw = control(t, y_meas, spec.setpoint)
-        except Exception:  # noqa: BLE001 — контроллер чужой: любая ошибка = результат прогона
+        except (Exception, SystemExit):  # noqa: BLE001 — код контроллера чужой: любой исход (включая sys.exit) = результат прогона
             return rows, f"контроллер упал на t={t:g} c:\n{traceback.format_exc()}"
         # bool — это int: разрешаем явно, иначе clamp(True) тихо даст 1.0
         if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
@@ -260,7 +260,7 @@ def load_control(entry):
     в отдельном процессе воркера под wall-таймаутом раннера."""
     try:
         namespace = runpy.run_path(str(entry), run_name="controller")
-    except Exception:  # noqa: BLE001 — код контроллера чужой: синтакс/падение = результат
+    except (Exception, SystemExit):  # noqa: BLE001 — код контроллера чужой: любой исход = результат прогона
         return None, f"entry-файл не исполняется:\n{traceback.format_exc()}"
     control = namespace.get("control")
     if not callable(control):
@@ -283,7 +283,16 @@ def worker_main(argv=None) -> int:
     ap.add_argument("--result", required=True, type=Path)
     args = ap.parse_args(argv)
 
-    spec = PlantSpec.from_section(json.loads(args.spec.read_text(encoding="utf-8")))
+    try:
+        spec = PlantSpec.from_section(json.loads(args.spec.read_text(encoding="utf-8")))
+    except Exception:  # noqa: BLE001 — битая спецификация = проблема среды, но отчёт обязан состояться
+        error = "не удалось подготовить задачу: спецификация plant не читается"
+        args.log.write_text(f"# ошибка: {error}\n", encoding="utf-8")
+        args.result.write_text(
+            json.dumps({"error": error, "metrics": None, "missed": [], "steps": 0}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return 0
     control, error = load_control(args.entry)
 
     rows: list = []

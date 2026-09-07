@@ -33,9 +33,8 @@ noise:
       count: 1
 expect:
   - 'ack 1'
-  - 'nak'
+  - 'nak'      # битый кадр (op2) и обрывок в склейке — оба порождают nak
   - 'ack 2'
-  - 'nak'
   - 'ack 4'
   - 'ack 3'
 fail:

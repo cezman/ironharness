@@ -166,8 +166,8 @@ def test_read_port_line_skips_noise_lines():
         b"RENODE_PORT=54321\n"
     )
     assert runner_module._read_port_line(stream, timeout=2) == 54321
-    # мусор вместо числа после '=' — строка пропускается (до EOF → ошибка)
-    with pytest.raises(ConnectionError, match="не сообщил порт"):
+    # пустое значение после '=' — не порт (до EOF → ошибка)
+    with pytest.raises(ConnectionError, match="не сообщил"):
         runner_module._read_port_line(io.BytesIO(b"RENODE_PORT=\n"), timeout=0.3)
 
 
@@ -350,7 +350,7 @@ def test_read_port_line():
 
     port = runner_module._read_port_line(io.BytesIO(b"RENODE_PORT=12345\n"), timeout=1)
     assert port == 12345
-    with pytest.raises(ConnectionError, match="не сообщил порт"):
+    with pytest.raises(ConnectionError, match="не сообщил"):
         runner_module._read_port_line(io.BytesIO(b""), timeout=0.2)
 
 
