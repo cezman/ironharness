@@ -1,0 +1,29 @@
+# Класс «данные»: АЦП + линейная шкала. ЖИВАЯ ВЕРИФИКАЦИЯ ОТЛОЖЕНА (квота Wokwi,
+# 2026-09-07): проверить при живом прогоне, что set-control потенциометра зовётся
+# 'position' и литерал 'mv: 0' уникален в логе (это последний wait-serial).
+name: adc-read
+description: >-
+  Потенциометр подключен к GPIO34 (вход АЦП ADC1). Прошивка настраивает полный
+  диапазон входа (ослабление 11 дБ, ~3.3 В) и в бесконечном цикле раз в 0.3
+  секунды читает АЦП и печатает напряжение в милливольтах строкой "mv: <целое>".
+  Шкала линейная по опорным точкам: raw 0 → 0 мВ, raw 4095 → 3300 мВ
+  (пересчёт raw * 3300 // 4095).
+entry: solution.py
+timeout_sec: 30
+tags: [data]
+level: 2
+expect:
+  - 'mv: (329[5-9]|3300)'
+  - 'mv: 16(4[0-9]|5[0-9])'
+  - 'mv: 0'
+fail:
+  - 'Traceback'
+stimulus:
+  # первый delay — прогрев: прошивка должна дойти до цикла опроса
+  - delay: 1500ms
+  - set-control: {part-id: pot1, control: position, value: 100}
+  - delay: 900ms
+  - set-control: {part-id: pot1, control: position, value: 50}
+  - delay: 900ms
+  - set-control: {part-id: pot1, control: position, value: 0}
+  - wait-serial: "mv: 0"

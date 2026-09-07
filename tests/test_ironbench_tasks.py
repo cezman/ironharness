@@ -132,13 +132,40 @@ def test_golden_tasks_all_load_and_include_expectations():
     assert {
         "blink",
         "uart-echo",
+        "debounce",
+        "sensor-poll",
+        "protocol",
+        "protocol-retry",
+        "traffic-light",
         "noisy-frames",
         "frame-corrupt",
         "uart-menu",
+        "adc-read",
+        "median-filter",
+        "threshold-hysteresis",
         "p-regulator",
         "pid-antiwindup",
         "system-id",
     } <= names
+
+
+def test_wokwi_stimulus_controls_exist_in_diagram():
+    # set-control ссылается только на части из diagram.json задачи (ловит опечатки в id)
+    import json
+    from pathlib import Path
+
+    tasks = load_tasks(Path(__file__).parents[1] / "src" / "ironbench" / "tasks")
+    checked = 0
+    for task in tasks:
+        if task.target != "wokwi":
+            continue
+        diagram = json.loads((task.directory / "diagram.json").read_text("utf-8"))
+        part_ids = {p["id"] for p in diagram["parts"]}
+        for step in task.stimulus:
+            if "set-control" in step:
+                assert step["set-control"]["part-id"] in part_ids, task.name
+                checked += 1
+    assert checked >= 10  # задачи на кнопки/датчики реально покрыты
 
 
 def test_frame_corrupt_stimulus_checksums_are_honest():
