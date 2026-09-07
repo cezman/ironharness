@@ -12,6 +12,8 @@ description: >-
   "blink 0: off", "blink 1: on", "blink 1: off", ...).
 entry: solution.py
 timeout_sec: 20
+tags: [io]
+level: 1
 expect:
   - 'blink 0: on'
   - 'blink 0: off'

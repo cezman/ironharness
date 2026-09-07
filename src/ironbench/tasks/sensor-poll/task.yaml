@@ -6,6 +6,8 @@ description: >-
   "temp: <число>". Ошибку одиночного чтения (OSError) не считать фатальной — продолжать опрос.
 entry: solution.py
 timeout_sec: 30
+tags: [data]
+level: 2
 expect:
   - 'dht ready'
   - 'temp: \d+'

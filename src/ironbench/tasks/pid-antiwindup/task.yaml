@@ -19,6 +19,8 @@ description: >-
 entry: solution.py
 target: plant
 timeout_sec: 30
+tags: [control]
+level: 3
 plant:
   model: heater
   K: 60.0

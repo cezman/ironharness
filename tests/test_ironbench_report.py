@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import json
 
-from ironbench.report import aggregate, build_report, load_results, render_html, write_report
+from ironbench.report import (
+    aggregate,
+    build_report,
+    class_profile,
+    load_results,
+    render_html,
+    write_report,
+)
 
 
 def write_results(solve_dir, records):
@@ -71,3 +78,53 @@ def test_write_report_files(tmp_path):
     assert "blink" in html and "protocol" in html
     assert 'class="pass"' in html and 'class="fail"' in html
     assert render_html(report).startswith("<!doctype html>")
+
+
+def test_class_profile_aggregates_by_tag():
+    meta = {
+        "blink": {"tags": ["io"], "level": 1},
+        "frame-corrupt": {"tags": ["resilience"], "level": 4},
+        "protocol-retry": {"tags": ["protocol", "resilience"], "level": 3},
+    }
+    records = [
+        {"model": "m", "task": "blink", "solved": True},
+        {"model": "m", "task": "protocol-retry", "solved": False},
+        {"model": "m", "task": "frame-corrupt", "solved": True},
+        {"model": "m", "task": "секретная-задача", "solved": True},  # без мета — мимо профиля
+    ]
+    profile = class_profile(records, meta)
+    assert profile["m"]["io"] == {"attempts": 1, "solved": 1, "success_rate": 1.0}
+    # protocol-retry с двумя тегами попадает в оба класса
+    assert profile["m"]["resilience"]["attempts"] == 2
+    assert profile["m"]["resilience"]["success_rate"] == 0.5
+    assert "секретная-задача" not in json.dumps(profile)
+
+
+def test_report_profile_missing_meta_is_compatible(tmp_path):
+    # старая кампания без карты тегов: отчёт строится, профиль пустой
+    write_results(tmp_path, [{"model": "m", "task": "x", "attempt": 1, "solved": True}])
+    report = build_report(tmp_path)
+    assert report["class_profile"] == {}
+    assert report["groups"][0]["tags"] == []
+    assert report["groups"][0]["level"] is None
+
+
+def test_report_html_renders_profile_table(tmp_path):
+    solve_dir = tmp_path / "camp"
+    write_results(
+        solve_dir,
+        [
+            {"model": "m", "task": "blink", "attempt": 1, "solved": True},
+            {"model": "m", "task": "frame-corrupt", "attempt": 1, "solved": False},
+        ],
+    )
+    task_meta = {
+        "blink": {"tags": ["io"], "level": 1},
+        "frame-corrupt": {"tags": ["resilience"], "level": 4},
+    }
+    json_path, html_path = write_report(solve_dir, tmp_path / "out", task_meta)
+    html = html_path.read_text(encoding="utf-8")
+    assert "Профиль по классам" in html
+    assert "resilience" in html and "0/1 (0%)" in html
+    report = json.loads(json_path.read_text(encoding="utf-8"))
+    assert report["class_profile"]["m"]["io"]["solved"] == 1

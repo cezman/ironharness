@@ -82,12 +82,16 @@ def main(argv=None) -> int:
 
     if args.command == "list":
         for t in tasks:
-            print(f"{t.name}: {t.description}")
+            meta = ", ".join(t.tags) + (f" · уровень {t.level}" if t.level else "")
+            print(f"{t.name}" + (f" [{meta}]" if meta else "") + f": {t.description}")
         return 0
 
     if args.command == "report":
         solve_dir = args.solve_dir or (args.out / SOLVE_DIR_NAME)
-        json_path, html_path = write_report(solve_dir, args.out)
+        task_meta = {
+            t.name: {"tags": list(t.tags), "level": t.level} for t in tasks
+        }
+        json_path, html_path = write_report(solve_dir, args.out, task_meta)
         report = json.loads(json_path.read_text(encoding="utf-8"))
         for g in report["groups"]:
             status = "PASS" if g["passed"] else "FAIL"
@@ -95,6 +99,9 @@ def main(argv=None) -> int:
                 f"{status} {g['model']} / {g['task']}: {g['solved']}/{g['attempts']}"
                 f" (в среднем итераций: {g['avg_iterations']})"
             )
+        for model, cells in report.get("class_profile", {}).items():
+            parts = [f"{tag} {c['solved']}/{c['attempts']}" for tag, c in cells.items()]
+            print(f"профиль {model}: " + (", ".join(parts) if parts else "—"))
         print(f"pass@k: {report['pass_at_k']:.0%}")
         print(f"отчёты: {json_path} и {html_path}")
         return 0

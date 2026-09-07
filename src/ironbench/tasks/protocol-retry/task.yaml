@@ -10,6 +10,8 @@ description: >-
   следующие кадры. Работает в бесконечном цикле.
 entry: solution.py
 timeout_sec: 20
+tags: [protocol, resilience]
+level: 3
 expect:
   - 'proto checksum'
   - 'ACK hello'

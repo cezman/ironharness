@@ -51,6 +51,10 @@ PLANT_KEYS = frozenset(
 PLANT_REQUIREMENT_KEYS = frozenset({"steady_error", "overshoot", "settle_time"})
 PLANT_DISTURBANCE_KEYS = frozenset({"at", "ambient"})
 
+# Таксономия бенчмарка: тег класса — ядро навыка задачи, level — ступень
+# сложности 1..5. Отчёт показывает профиль модели по классам, а не одно число
+CLASS_TAGS = ("io", "data", "protocol", "fsm", "control", "resilience")
+
 
 @dataclasses.dataclass(frozen=True)
 class Task:
@@ -73,6 +77,8 @@ class Task:
     renode: dict = dataclasses.field(default_factory=dict)
     noise: dict = dataclasses.field(default_factory=dict)
     plant: dict = dataclasses.field(default_factory=dict)
+    tags: tuple[str, ...] = ()
+    level: int | None = None
 
 
 def load_task(task_dir: Path) -> Task:
@@ -237,6 +243,21 @@ def load_task(task_dir: Path) -> Task:
                 raise ValueError(f"{task_file}: disturbances.at должен быть числом >= 0")
             if isinstance(d["ambient"], bool) or not isinstance(d["ambient"], (int, float)):
                 raise ValueError(f"{task_file}: disturbances.ambient должен быть числом")  # noqa: TRY004
+    tags = raw.get("tags", [])
+    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+        raise ValueError(f"{task_file}: tags должен быть списком строк")
+    if len(set(tags)) != len(tags):
+        raise ValueError(f"{task_file}: tags содержит дубликаты")
+    unknown_tags = set(tags) - set(CLASS_TAGS)
+    if unknown_tags:
+        raise ValueError(
+            f"{task_file}: неизвестные теги {sorted(unknown_tags)} (разрешены: {CLASS_TAGS})"
+        )
+    level = raw.get("level")
+    if level is not None and (
+        isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 5
+    ):
+        raise ValueError(f"{task_file}: level должен быть целым числом 1..5")
     return Task(
         name=name,
         description=str(raw.get("description", "")),
@@ -251,6 +272,8 @@ def load_task(task_dir: Path) -> Task:
         renode=dict(renode),
         noise=dict(noise),
         plant=dict(plant_section),
+        tags=tuple(tags),
+        level=level,
     )
 
 

@@ -88,6 +88,39 @@ def test_load_tasks_missing_dir(tmp_path):
         load_tasks(tmp_path / "nope")
 
 
+def test_load_task_tags_and_level(tmp_path):
+    write_task(tmp_path, "name: aaa\ntags: [io, fsm]\nlevel: 3\n", dirname="aaa")
+    task = load_task(tmp_path / "aaa")
+    assert task.tags == ("io", "fsm")
+    assert task.level == 3
+
+
+def test_load_task_rejects_unknown_tag(tmp_path):
+    write_task(tmp_path, "name: aaa\ntags: [роботы]\n", dirname="aaa")
+    with pytest.raises(ValueError, match="неизвестные теги"):
+        load_task(tmp_path / "aaa")
+
+
+def test_load_task_rejects_duplicate_tags(tmp_path):
+    write_task(tmp_path, "name: aaa\ntags: [io, io]\n", dirname="aaa")
+    with pytest.raises(ValueError, match="дубликаты"):
+        load_task(tmp_path / "aaa")
+
+
+def test_load_task_rejects_bad_level(tmp_path):
+    write_task(tmp_path, "name: aaa\nlevel: 9\n", dirname="aaa")
+    with pytest.raises(ValueError, match="level"):
+        load_task(tmp_path / "aaa")
+
+
+def test_golden_tasks_have_tags_and_levels():
+    from pathlib import Path
+
+    tasks = load_tasks(Path(__file__).parents[1] / "src" / "ironbench" / "tasks")
+    assert all(t.tags for t in tasks), "у всех золотых задач должен быть класс"
+    assert all(t.level is not None for t in tasks), "у всех золотых задач должен быть уровень"
+
+
 # --- золотые задачи репозитория: целостность описаний ---
 
 

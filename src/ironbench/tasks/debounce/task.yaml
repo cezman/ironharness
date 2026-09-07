@@ -6,6 +6,8 @@ description: >-
   ~30 мс не учитывать) и на каждое нажатие печатает "presses: N", где N начинается с 1.
 entry: solution.py
 timeout_sec: 20
+tags: [io]
+level: 2
 expect:
   - 'presses: 1'
 fail:

@@ -4,6 +4,12 @@
 results.jsonl из CLI solve. Метрики на пару (model, task): число попыток, решённых,
 success rate (решённые/попытки) и pass@k — «решается хотя бы одной из k попыток»,
 k = число попыток этой пары.
+
+Таксономия: если передана карта мета-данных задач (теги классов + уровень из
+task.yaml), отчёт дополняется профилем по классам — success rate модели на классе
+(io/data/protocol/fsm/control/resilience), вместо одного числа pass@k. Задача с
+несколькими тегами попадает в каждый из них; задачи без мета-данных (удалены или
+карта не передана) в профиль не входят.
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ HTML_TEMPLATE = """<!doctype html>
 {rows}
 </table>
 <footer>Сгенерировано ironbench · pass@k = доля пар, решённых хотя бы одной из k попыток: {pass_at_k}</footer>
+{profile_table}
 </body>
 </html>
 """
@@ -94,13 +101,19 @@ def aggregate(records: list[dict]) -> list[GroupStats]:
     ]
 
 
-def build_report(solve_dir: Path) -> dict:
-    """Агрегат кампании: JSON-структура + pass@k (доля пар с хотя бы одним решением)."""
+def build_report(solve_dir: Path, task_meta: dict | None = None) -> dict:
+    """Агрегат кампании: JSON-структура + pass@k (доля пар с хотя бы одним решением).
+    task_meta: имя задачи → {"tags": [...], "level": int|None} — для профиля по классам."""
     records = load_results(solve_dir)
     stats = aggregate(records)
     pass_at_k = (
         round(sum(1 for s in stats if s.passed) / len(stats), 2) if stats else 0.0
     )
+    meta = task_meta or {}
+
+    def meta_of(name: str) -> dict:
+        return meta.get(name, {"tags": [], "level": None})
+
     return {
         "campaign": solve_dir.name,
         "models": sorted({s.model for s in stats}),
@@ -111,7 +124,34 @@ def build_report(solve_dir: Path) -> dict:
             "avg_iterations": s.avg_iterations,
             "avg_duration": s.avg_duration,
             "passed": s.passed,
+            "tags": meta_of(s.task)["tags"],
+            "level": meta_of(s.task)["level"],
         } for s in stats],
+        "class_profile": class_profile(records, meta),
+    }
+
+
+def class_profile(records: list[dict], task_meta: dict) -> dict:
+    """Профиль по классам: (модель, тег) → попытки/решённые/success rate."""
+    raw: dict[str, dict[str, list[int]]] = {}
+    for rec in records:
+        meta = task_meta.get(rec.get("task", "?"))
+        if not meta:
+            continue
+        for tag in meta.get("tags", ()):
+            cell = raw.setdefault(rec.get("model", "?"), {}).setdefault(tag, [0, 0])
+            cell[0] += 1
+            cell[1] += 1 if rec.get("solved") else 0
+    return {
+        model: {
+            tag: {
+                "attempts": attempts,
+                "solved": solved,
+                "success_rate": round(solved / attempts, 2) if attempts else 0.0,
+            }
+            for tag, (attempts, solved) in sorted(cells.items())
+        }
+        for model, cells in sorted(raw.items())
     }
 
 
@@ -119,22 +159,49 @@ def render_html(report: dict) -> str:
     rows = []
     for g in report["groups"]:
         cls = "pass" if g["passed"] else "fail"
+        meta = " · ".join(
+            filter(None, (", ".join(g.get("tags", ())), f"ур. {g['level']}" if g.get("level") else ""))
+        )
         rows.append(
-            f'<tr><td>{html_escape(g["model"])}</td><td>{html_escape(g["task"])}</td>'
-            f'<td>{g["attempts"]}</td><td>{g["solved"]}</td>'
+            f'<tr><td>{html_escape(g["model"])}</td><td>{html_escape(g["task"])}'
+            + (f' <small>({html_escape(meta)})</small>' if meta else "")
+            + f'</td><td>{g["attempts"]}</td><td>{g["solved"]}</td>'
             f'<td class="{cls}">{g["success_rate"]:.0%}</td>'
             f"<td>{g['avg_iterations']}</td><td>{g['avg_duration']}</td></tr>"
         )
+    profile_table = _render_profile_table(report.get("class_profile") or {})
     return HTML_TEMPLATE.format(
         campaign=html_escape(report["campaign"]),
         rows="\n".join(rows),
         pass_at_k=f"{report['pass_at_k']:.0%}",
+        profile_table=profile_table,
     )
 
 
-def write_report(solve_dir: Path, out_dir: Path) -> tuple[Path, Path]:
-    """JSON + HTML отчёта; возвращает их пути."""
-    report = build_report(solve_dir)
+def _render_profile_table(profile: dict) -> str:
+    """HTML таблицы «Профиль по классам»; пустая строка, если профиля нет."""
+    if not profile:
+        return ""
+    tags = sorted({t for cells in profile.values() for t in cells})
+    head = "".join(f"<th>{html_escape(t)}</th>" for t in tags)
+    rows = []
+    for model, cells in profile.items():
+        cells_html = "".join(
+            f'<td>{cells[t]["solved"]}/{cells[t]["attempts"]} ({cells[t]["success_rate"]:.0%})</td>'
+            if t in cells
+            else "<td>—</td>"
+            for t in tags
+        )
+        rows.append(f"<tr><td>{html_escape(model)}</td>{cells_html}</tr>")
+    return (
+        "<h1>Профиль по классам (решено/попыток, успех попыток)</h1>"
+        f'<table><tr><th>Модель</th>{head}</tr>{"".join(rows)}</table>'
+    )
+
+
+def write_report(solve_dir: Path, out_dir: Path, task_meta: dict | None = None) -> tuple[Path, Path]:
+    """JSON + HTML отчёта; возвращает их пути. task_meta — карта тегов/уровней."""
+    report = build_report(solve_dir, task_meta)
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / "report.json"
     html_path = out_dir / "report.html"

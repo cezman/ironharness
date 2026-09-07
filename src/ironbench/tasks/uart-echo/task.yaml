@@ -5,6 +5,8 @@ description: >-
   из serial-консоли и на каждую отвечает "echo: <строка>" (без завершения программы).
 entry: solution.py
 timeout_sec: 20
+tags: [io]
+level: 1
 expect:
   - 'echo ready'
   - 'echo: hello'

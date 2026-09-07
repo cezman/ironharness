@@ -10,6 +10,8 @@ description: >-
 entry: solution.py
 target: renode
 timeout_sec: 20
+tags: [io]
+level: 1
 renode:
   platform: litex_vexriscv_micropython
   firmware: LITEX_VEXRISCV-micropython-v1.11.0.elf

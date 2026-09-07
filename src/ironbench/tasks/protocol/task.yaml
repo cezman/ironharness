@@ -7,6 +7,8 @@ description: >-
   "ERR unknown". Работает в бесконечном цикле.
 entry: solution.py
 timeout_sec: 20
+tags: [protocol]
+level: 2
 expect:
   - 'proto v1'
   - 'state: off'

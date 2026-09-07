@@ -6,6 +6,8 @@ description: >-
   и цикличность обязательны.
 entry: solution.py
 timeout_sec: 20
+tags: [fsm]
+level: 3
 expect:
   # 'cycle: 2' — литеральный маркер: wait-serial держит симуляцию до конца второго цикла
   - 'cycle: 2'

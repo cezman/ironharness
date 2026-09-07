@@ -14,6 +14,8 @@ description: >-
 entry: solution.py
 target: unix
 timeout_sec: 20
+tags: [fsm]
+level: 3
 expect:
   - 'MENU'
   - 'ERR'
