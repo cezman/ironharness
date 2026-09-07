@@ -70,6 +70,19 @@ def _encode_packet(type_flags: int, body: bytes) -> bytes:
     return bytes([type_flags]) + bytes(varint) + body
 
 
+def _close_sock(sock: socket.socket) -> None:
+    """shutdown перед close: на Linux close() чужого сокета не будит блокированный
+    recv (на Windows будит) — без shutdown клиенты не видят отключение брокера."""
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
 class _ClientConn:
     """Один подключённый клиент: сокет, его подписки, исходящая блокировка."""
 
@@ -179,12 +192,9 @@ class MqttSimBroker:
         if self._sock is not None:
             with self._lock:
                 for client in self._clients:
-                    try:
-                        client.sock.close()
-                    except OSError:
-                        pass
+                    _close_sock(client.sock)
                 self._clients.clear()
-            self._sock.close()
+            _close_sock(self._sock)
             self._sock = None
 
     def _accept_loop(self) -> None:
@@ -208,10 +218,7 @@ class MqttSimBroker:
             with self._lock:
                 if client in self._clients:
                     self._clients.remove(client)
-            try:
-                client.sock.close()
-            except OSError:
-                pass
+            _close_sock(client.sock)
 
     def _broadcast(self, topic: str, payload: bytes, *, exclude: _ClientConn) -> None:
         body = _ClientConn._publish_body(topic, payload)
