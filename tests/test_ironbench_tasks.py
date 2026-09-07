@@ -86,3 +86,44 @@ def test_load_tasks_sorted_and_skips_dirs_without_task(tmp_path):
 def test_load_tasks_missing_dir(tmp_path):
     with pytest.raises(ValueError, match="не найден"):
         load_tasks(tmp_path / "nope")
+
+
+# --- золотые задачи репозитория: целостность описаний ---
+
+
+def test_golden_tasks_all_load_and_include_expectations():
+    from pathlib import Path
+
+    tasks = load_tasks(Path(__file__).parents[1] / "src" / "ironbench" / "tasks")
+    names = {t.name for t in tasks}
+    assert {
+        "blink",
+        "uart-echo",
+        "noisy-frames",
+        "frame-corrupt",
+        "uart-menu",
+        "p-regulator",
+        "pid-antiwindup",
+        "system-id",
+    } <= names
+
+
+def test_frame_corrupt_stimulus_checksums_are_honest():
+    # ретраи в стимуле обязаны нести корректный xor2, иначе эталон не решит задачу
+    import re
+    from pathlib import Path
+
+    task = load_task(Path(__file__).parents[1] / "src" / "ironbench" / "tasks" / "frame-corrupt")
+    checked = 0
+    for step in task.stimulus:
+        raw = str(step.get("write-serial", ""))
+        m = re.fullmatch(r"#(\w+):(\w+):([0-9a-f]{2})\r?", raw)
+        if not m:
+            continue  # обрывок кадра без xor — законная часть сценария
+        _fid, payload, x2 = m.groups()
+        x = 0
+        for ch in payload:
+            x ^= ord(ch)
+        assert f"{x:02x}" == x2, f"битая сумма в стимуле: {raw!r}"
+        checked += 1
+    assert checked >= 4
