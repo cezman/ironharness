@@ -141,7 +141,7 @@ def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path):
         results = agent_solve(
             task, cfg, attempts=attempts, out_dir=task_dir, journal=journal
         )
-        with results_path.open("a", encoding="utf-8") as fh:
+        with results_path.open("w", encoding="utf-8") as fh:  # перезапись: кампания по задаче заменяет её результаты
             for r in results:
                 fh.write(
                     json.dumps(

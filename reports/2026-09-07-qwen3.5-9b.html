@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>ironbench — отчёт</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", sans-serif; margin: 2rem; color: #222; }
+  h1 { font-size: 1.3rem; }
+  table { border-collapse: collapse; margin-top: 1rem; }
+  th, td { border: 1px solid #ccc; padding: 6px 14px; text-align: left; }
+  th { background: #f4f4f4; }
+  .pass { color: #0a7d24; font-weight: 600; }
+  .fail { color: #b3261e; font-weight: 600; }
+  footer { margin-top: 1.5rem; color: #777; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<h1>ironbench — отчёт solve</h1>
+<table>
+<tr><th>Модель</th><th>Задача</th><th>Попыток</th><th>Решено</th><th>Success rate</th><th>Средних итераций</th><th>Среднее время, с</th></tr>
+<tr><td>qwen3.5-9b</td><td>blink</td><td>3</td><td>3</td><td class="pass">100%</td><td>1.0</td><td>318.4</td></tr>
+<tr><td>qwen3.5-9b</td><td>debounce</td><td>3</td><td>0</td><td class="fail">0%</td><td>2.3</td><td>1052.5</td></tr>
+<tr><td>qwen3.5-9b</td><td>protocol</td><td>3</td><td>0</td><td class="fail">0%</td><td>1.7</td><td>938.5</td></tr>
+<tr><td>qwen3.5-9b</td><td>sensor-poll</td><td>3</td><td>1</td><td class="pass">33%</td><td>2.3</td><td>651.0</td></tr>
+<tr><td>qwen3.5-9b</td><td>traffic-light</td><td>3</td><td>0</td><td class="fail">0%</td><td>3.0</td><td>854.9</td></tr>
+<tr><td>qwen3.5-9b</td><td>uart-echo</td><td>3</td><td>3</td><td class="pass">100%</td><td>1.3</td><td>456.2</td></tr>
+</table>
+<footer>Сгенерировано ironbench · pass@k = доля пар, решённых хотя бы одной из k попыток: 50%</footer>
+</body>
+</html>

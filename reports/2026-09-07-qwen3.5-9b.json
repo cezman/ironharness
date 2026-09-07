@@ -1,0 +1,89 @@
+{
+  "campaign": "solve",
+  "models": [
+    "qwen3.5-9b"
+  ],
+  "tasks": [
+    "blink",
+    "debounce",
+    "protocol",
+    "sensor-poll",
+    "traffic-light",
+    "uart-echo"
+  ],
+  "pass_at_k": 0.5,
+  "groups": [
+    {
+      "model": "qwen3.5-9b",
+      "task": "blink",
+      "attempts": 3,
+      "solved": 3,
+      "total_iterations": 3,
+      "total_duration": 955.07,
+      "success_rate": 1.0,
+      "avg_iterations": 1.0,
+      "avg_duration": 318.4,
+      "passed": true
+    },
+    {
+      "model": "qwen3.5-9b",
+      "task": "debounce",
+      "attempts": 3,
+      "solved": 0,
+      "total_iterations": 7,
+      "total_duration": 3157.5,
+      "success_rate": 0.0,
+      "avg_iterations": 2.3,
+      "avg_duration": 1052.5,
+      "passed": false
+    },
+    {
+      "model": "qwen3.5-9b",
+      "task": "protocol",
+      "attempts": 3,
+      "solved": 0,
+      "total_iterations": 5,
+      "total_duration": 2815.46,
+      "success_rate": 0.0,
+      "avg_iterations": 1.7,
+      "avg_duration": 938.5,
+      "passed": false
+    },
+    {
+      "model": "qwen3.5-9b",
+      "task": "sensor-poll",
+      "attempts": 3,
+      "solved": 1,
+      "total_iterations": 7,
+      "total_duration": 1952.8999999999999,
+      "success_rate": 0.33,
+      "avg_iterations": 2.3,
+      "avg_duration": 651.0,
+      "passed": true
+    },
+    {
+      "model": "qwen3.5-9b",
+      "task": "traffic-light",
+      "attempts": 3,
+      "solved": 0,
+      "total_iterations": 9,
+      "total_duration": 2564.8,
+      "success_rate": 0.0,
+      "avg_iterations": 3.0,
+      "avg_duration": 854.9,
+      "passed": false
+    },
+    {
+      "model": "qwen3.5-9b",
+      "task": "uart-echo",
+      "attempts": 3,
+      "solved": 3,
+      "total_iterations": 4,
+      "total_duration": 1368.48,
+      "success_rate": 1.0,
+      "avg_iterations": 1.3,
+      "avg_duration": 456.2,
+      "passed": true
+    }
+  ]
+}
