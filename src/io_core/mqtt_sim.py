@@ -130,8 +130,9 @@ class _ClientConn:
         return len(t).to_bytes(2, "big") + t + payload
 
     def serve(self) -> None:
-        """Цикл разбора пакетов одного клиента (поток accept-цикла)."""
-        self._reply_connack()
+        """Цикл разбора пакетов одного клиента (поток accept-цикла).
+        CONNACK шлём строго в ответ на CONNECT: безусловный CONNACK при
+        подключении путал бы клиентов, ждущих ответа на свою команду."""
         while True:
             type_flags = _read_exact(self.sock, 1)[0]
             length = _read_varint(self.sock)
@@ -222,3 +223,23 @@ class MqttSimBroker:
                     client.send(_encode_packet(PUBLISH << 4, body))
                 except OSError:
                     pass
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    ap = argparse.ArgumentParser(description="мини-брокер MQTT 3.1.1 (mqtt_sim)")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=1883)
+    args = ap.parse_args()
+    sim = MqttSimBroker(args.host, args.port)
+    port = sim.start()
+    print(f"mqtt-sim ready {port}", flush=True)
+    try:
+        threading.Event().wait()  # навсегда: завершение по SIGTERM/kill
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sim.stop()
+    sys.exit(0)

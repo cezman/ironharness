@@ -53,6 +53,7 @@ from pathlib import Path
 import yaml
 
 from io_core.faults import FaultyTransport
+from io_core.mqtt_transport import MqttTransport
 from ironbench.tasks import Task
 
 # Коды возврата wokwi-cli: сработавший --timeout (42) для бесконечных прошивок — норма
@@ -248,19 +249,24 @@ def run_task(
     renode_cmd: str | list | None = None,
     unix_cmd: str | list | None = None,
     plant_cmd: str | list | None = None,
+    mqtt_broker=None,
     journal=None,
 ) -> TaskResult:
     """Диспетчер мишеней: wokwi/renode/unix/plant реализованы, real — честный FAIL.
 
     cli_path/token/renode_cmd/unix_cmd/plant_cmd — точки инъекции для тестов (фейковые
-    CLI вместо реальных). journal — io_core.JsonlJournal: пишем task_start/task_result.
+    CLI вместо реальных). mqtt_broker — уже запущенный MqttSimBroker для тестов
+    (по умолчанию брокер задачи поднимается в WSL2). journal — io_core.JsonlJournal:
+    пишем task_start/task_result.
     """
     if task.target == "wokwi":
         return _run_wokwi(task, out_dir=out_dir, cli_path=cli_path, token=token, journal=journal)
     if task.target == "renode":
         return _run_renode(task, out_dir=out_dir, renode_cmd=renode_cmd, journal=journal)
     if task.target == "unix":
-        return _run_unix(task, out_dir=out_dir, unix_cmd=unix_cmd, journal=journal)
+        return _run_unix(
+            task, out_dir=out_dir, unix_cmd=unix_cmd, mqtt_broker=mqtt_broker, journal=journal
+        )
     if task.target == "plant":
         return _run_plant(task, out_dir=out_dir, plant_cmd=plant_cmd, journal=journal)
     result = TaskResult(
@@ -818,10 +824,18 @@ def _tar_of_files(stage: Path) -> bytes:
 # --- мишень unix: MicroPython unix-port в WSL2 (бесплатные локальные прогоны) ---
 
 
-def _unix_cmd(remote_entry: str) -> list[str]:
+def _unix_cmd(remote_entry: str, env_prefix: str = "") -> list[str]:
     """micropython исполняет entry напрямую: stdin = stimulus, stdout = serial-лог."""
     upy_bin = os.environ.get("IRONBENCH_UNIX_BIN", "~/bin/micropython")
-    return ["wsl", "-d", _wsl_distro(), "--", "bash", "-c", f"exec {upy_bin} {remote_entry}"]
+    return [
+        "wsl",
+        "-d",
+        _wsl_distro(),
+        "--",
+        "bash",
+        "-c",
+        f"{env_prefix}exec {upy_bin} {remote_entry}",
+    ]
 
 
 class _StdinWriter:
@@ -836,11 +850,70 @@ class _StdinWriter:
         self._stdin.flush()
 
 
+# --- MQTT у мишени unix: брокер mqtt_sim рядом с прошивкой (см. io_core/mqtt_sim.py) ---
+
+MQTT_SIM_PATH = Path(__file__).resolve().parents[1] / "io_core" / "mqtt_sim.py"
+
+
+def _free_tcp_port() -> int:
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def _start_wsl_mqtt_broker(task: Task, port: int) -> subprocess.Popen:
+    """Поднимает mqtt_sim в WSL2 (тот же localhost, что у прошивки); Windows-сторона
+    ходит в него через localhost-forwarding, поэтому бинд на 0.0.0.0."""
+    remote_dir = f"{RENODE_REMOTE_ROOT}/{task.name}-mqtt"
+    _push_to_wsl(_tar_of(MQTT_SIM_PATH, "mqtt_sim.py"), remote_dir, "BROKER-PUSHED")
+    proc = subprocess.Popen(
+        [
+            "wsl",
+            "-d",
+            _wsl_distro(),
+            "--",
+            "bash",
+            "-c",
+            f"exec python3 {remote_dir}/mqtt_sim.py --host 0.0.0.0 --port {port}",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    deadline = time.monotonic() + RENODE_CONNECT_SEC
+    while True:
+        try:
+            probe = socket.create_connection(("localhost", port), timeout=1.0)
+            probe.close()
+            return proc
+        except OSError:
+            if proc.poll() is not None or time.monotonic() > deadline:
+                proc.terminate()
+                raise ConnectionError(f"брокер mqtt_sim на :{port} не поднялся") from None
+            time.sleep(0.2)
+
+
+def _stop_broker_proc(proc: subprocess.Popen | None) -> None:
+    if proc is None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+    if proc.stdout is not None:
+        proc.stdout.close()
+
+
 def _run_unix(
     task: Task,
     *,
     out_dir: Path,
     unix_cmd: str | list | None = None,
+    mqtt_broker=None,
     journal=None,
 ) -> TaskResult:
     """Запускает entry MicroPython-ом unix-port и оценивает вывод.
@@ -848,8 +921,11 @@ def _run_unix(
     Без REPL и paste: скрипт исполняется файлом, input() читает наш stdin —
     значит годятся только чисто-serial задачи (machine/dht недоступны).
     Enter в unix — \\n, поэтому \\r из wokwi-стимула переводится в \\n.
+    Секция mqtt: брокер mqtt_sim поднимается рядом с прошивкой, харнесс ходит
+    в него клиентом (шаги mqtt-publish/mqtt-collect), каждый принятый publish
+    дописывается в serial-лог строкой "mqtt: <topic> <payload>".
     unix_cmd=None → WSL-путь (entry уезжает tar-блобом); инъекция команды —
-    локальный фейк для тестов.
+    локальный фейк для тестов. mqtt_broker — уже запущенный брокер (тесты).
     """
     if "set-control" in {k for step in task.stimulus for k in step}:
         result = TaskResult(
@@ -872,13 +948,36 @@ def _run_unix(
     error: str | None = None
     serial_text = ""
     proc = None
+    mqtt_client: MqttTransport | None = None
+    broker_proc: subprocess.Popen | None = None
+    mqtt_subscribed: set[str] = set()
     try:
+        mqtt_port = 0
+        if task.mqtt:
+            mqtt_port = _free_tcp_port()
+            if mqtt_broker is not None:
+                mqtt_port = mqtt_broker.port  # тестовый брокер уже запущен
+            else:
+                broker_proc = _start_wsl_mqtt_broker(task, mqtt_port)
+            mqtt_client = MqttTransport(
+                "127.0.0.1",
+                port=mqtt_port,
+                client_id=str(task.mqtt.get("client_id") or f"ironbench-{task.name}"),
+            )
+            mqtt_client.open()
+            if journal:
+                journal("mqtt_broker_ready", {"task": task.name, "port": mqtt_port})
         if unix_cmd is None:
             remote_dir = f"{RENODE_REMOTE_ROOT}/{task.name}-unix"
             _push_to_wsl(
                 _tar_of(task.directory / task.entry, task.entry), remote_dir, "STAGE-PUSHED"
             )
-            cmd = _unix_cmd(f"{remote_dir}/{task.entry}")
+            env_prefix = (
+                f"IRONBENCH_MQTT_HOST=127.0.0.1 IRONBENCH_MQTT_PORT={mqtt_port} "
+                if task.mqtt
+                else ""
+            )
+            cmd = _unix_cmd(f"{remote_dir}/{task.entry}", env_prefix)
         else:
             cmd = [unix_cmd] if isinstance(unix_cmd, str) else list(unix_cmd)
         if journal:
@@ -941,6 +1040,37 @@ def _run_unix(
                         proc.stdin.flush()
                     else:
                         writer.write(raw)
+                elif "mqtt-publish" in step and mqtt_client is not None:
+                    pub = step["mqtt-publish"]
+                    mqtt_client.publish(
+                        str(pub["topic"]),
+                        str(pub["payload"]),
+                        qos=int(pub.get("qos", 0)),
+                        retain=bool(pub.get("retain", False)),
+                    )
+                elif "mqtt-collect" in step and mqtt_client is not None:
+                    col = step["mqtt-collect"]
+                    topic = str(col["topic"])
+                    if topic not in mqtt_subscribed:
+                        # брокер дублирует доставку при повторной подписке — подписываем один раз
+                        mqtt_client.subscribe(topic)
+                        mqtt_subscribed.add(topic)
+                    need = int(col["count"])
+                    got = 0
+                    collect_deadline = time.monotonic() + float(col.get("timeout_sec", 10))
+                    while (
+                        got < need
+                        and time.monotonic() < collect_deadline
+                        and not box["eof"]
+                    ):
+                        msg = mqtt_client.read_message(timeout=0.2)
+                        if msg is not None:
+                            got += 1
+                            box["text"] += f"mqtt: {msg['topic']} {msg['payload']}\n"
+                    if got < need:
+                        box["text"] += (
+                            f"mqtt: collect {col['topic']}: получено {got} из {need}\n"
+                        )
             # дочитываем: до всех литеральных expect, EOF или дедлайна
             # (бесконечный цикл прошивки — норма, как --timeout в wokwi)
             while time.monotonic() < deadline and not box["eof"]:
@@ -993,6 +1123,12 @@ def _run_unix(
                 proc.wait(timeout=5)
             if proc.stdout is not None:
                 proc.stdout.close()
+        if mqtt_client is not None:
+            try:
+                mqtt_client.close()
+            except OSError:
+                pass
+        _stop_broker_proc(broker_proc)
 
     serial_log.write_text(serial_text, encoding="utf-8")
     duration = round(time.monotonic() - start, 2)

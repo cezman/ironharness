@@ -18,7 +18,12 @@ TASK_FILE = "task.yaml"
 TASK_TARGETS = ("wokwi", "renode", "unix", "plant", "real")
 
 # Типы шагов сценария wokwi, разрешённые в stimulus; расширять вместе с wokwi-cli
-STIMULUS_STEP_KEYS = frozenset({"write-serial", "wait-serial", "delay", "set-control"})
+STIMULUS_STEP_KEYS = frozenset(
+    {"write-serial", "wait-serial", "delay", "set-control", "mqtt-publish", "mqtt-collect"}
+)
+# MQTT-шаги (харнесс выступает вторым участником обмена): доступны только
+# мишени unix (брокер mqtt_sim поднимается рядом с прошивкой в WSL2)
+MQTT_STEP_KEYS = frozenset({"mqtt-publish", "mqtt-collect"})
 
 # Ключи секции renode в task.yaml: платформа (.repl из поставки Renode), прошивка
 # (.elf из каталога задачи или tasks/_firmware), имя UART-периферии для терминала
@@ -51,6 +56,12 @@ PLANT_KEYS = frozenset(
 PLANT_REQUIREMENT_KEYS = frozenset({"steady_error", "overshoot", "settle_time"})
 PLANT_DISTURBANCE_KEYS = frozenset({"at", "ambient"})
 
+# Секция mqtt (мишень unix): харнесс поднимает мини-брокер mqtt_sim рядом с
+# прошивкой (в WSL2) и сам участвует в обмене шагами mqtt-publish/mqtt-collect.
+# Каждый принятый харнессом publish дописывается в serial-лог строкой
+# "mqtt: <topic> <payload>" — поэтому expect/fail-паттерны работают и на MQTT.
+MQTT_KEYS = frozenset({"client_id"})
+
 # Таксономия бенчмарка: тег класса — ядро навыка задачи, level — ступень
 # сложности 1..5. Отчёт показывает профиль модели по классам, а не одно число
 CLASS_TAGS = ("io", "data", "protocol", "fsm", "control", "resilience")
@@ -77,6 +88,7 @@ class Task:
     renode: dict = dataclasses.field(default_factory=dict)
     noise: dict = dataclasses.field(default_factory=dict)
     plant: dict = dataclasses.field(default_factory=dict)
+    mqtt: dict = dataclasses.field(default_factory=dict)
     tags: tuple[str, ...] = ()
     level: int | None = None
 
@@ -115,6 +127,34 @@ def load_task(task_dir: Path) -> Task:
                 f"{task_file}: неизвестный шаг stimulus {sorted(unknown)} "
                 f"(разрешены: {sorted(STIMULUS_STEP_KEYS)})"
             )
+        if "mqtt-publish" in step:
+            pub = step["mqtt-publish"]
+            if not isinstance(pub, dict) or not pub.get("topic") or "payload" not in pub:
+                raise ValueError(
+                    f"{task_file}: mqtt-publish требует topic и payload"
+                )
+            if set(pub) - {"topic", "payload", "retain", "qos"}:
+                raise ValueError(
+                    f"{task_file}: неизвестные ключи mqtt-publish {sorted(set(pub) - {'topic', 'payload', 'retain', 'qos'})}"
+                )
+            if not isinstance(pub.get("retain", False), bool) or pub.get("qos", 0) not in (0, 1):
+                raise ValueError(f"{task_file}: mqtt-publish.retain — bool, qos — 0 или 1")
+        if "mqtt-collect" in step:
+            col = step["mqtt-collect"]
+            if not isinstance(col, dict) or not col.get("topic") or "count" not in col:
+                raise ValueError(f"{task_file}: mqtt-collect требует topic и count")
+            if set(col) - {"topic", "count", "timeout_sec"}:
+                raise ValueError(
+                    f"{task_file}: неизвестные ключи mqtt-collect {sorted(set(col) - {'topic', 'count', 'timeout_sec'})}"
+                )
+            if (
+                isinstance(col["count"], bool)
+                or not isinstance(col["count"], int)
+                or col["count"] < 1
+            ):
+                raise ValueError(f"{task_file}: mqtt-collect.count — целое >= 1")
+            if float(col.get("timeout_sec", 10)) <= 0:
+                raise ValueError(f"{task_file}: mqtt-collect.timeout_sec должен быть > 0")
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
         raise ValueError(f"{task_file}: неизвестная мишень {target!r} (разрешены: {TASK_TARGETS})")
@@ -167,6 +207,25 @@ def load_task(task_dir: Path) -> Task:
         raise ValueError(f"{task_file}: noise.faults: {e}") from None
     if noise and target != "unix":
         raise ValueError(f"{task_file}: noise поддерживается только мишенью unix")
+    mqtt_section = raw.get("mqtt", {})
+    if mqtt_section and target != "unix":
+        raise ValueError(f"{task_file}: секция mqtt поддерживается только мишенью unix")
+    if MQTT_STEP_KEYS & {k for step in stimulus for k in step}:
+        if target != "unix":
+            raise ValueError(f"{task_file}: mqtt-шаги поддерживаются только мишенью unix")
+        if not isinstance(mqtt_section, dict) or not mqtt_section:
+            raise ValueError(
+                f"{task_file}: для mqtt-шагов нужна непустая секция mqtt (ключи: {sorted(MQTT_KEYS)})"
+            )
+    if mqtt_section:
+        if not isinstance(mqtt_section, dict):
+            raise TypeError(f"{task_file}: секция mqtt должна быть словарём")
+        unknown_mqtt = set(mqtt_section) - MQTT_KEYS
+        if unknown_mqtt:
+            raise ValueError(
+                f"{task_file}: неизвестные ключи mqtt {sorted(unknown_mqtt)} "
+                f"(разрешены: {sorted(MQTT_KEYS)})"
+            )
     plant_section = raw.get("plant", {})
     if plant_section and target != "plant":
         raise ValueError(f"{task_file}: секция plant поддерживается только мишенью plant")
@@ -272,6 +331,7 @@ def load_task(task_dir: Path) -> Task:
         renode=dict(renode),
         noise=dict(noise),
         plant=dict(plant_section),
+        mqtt=dict(mqtt_section),
         tags=tuple(tags),
         level=level,
     )

@@ -142,6 +142,7 @@ def test_golden_tasks_all_load_and_include_expectations():
         "uart-menu",
         "watchdog",
         "coop-scheduler",
+        "mqtt-device",
         "adc-read",
         "median-filter",
         "threshold-hysteresis",

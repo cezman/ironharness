@@ -1,0 +1,39 @@
+# Сетевая задача: прошивка сама говорит по MQTT с брокером (mqtt_sim рядом в WSL2).
+# Харнесс — второй участник обмена: собирает публикации в serial-лог (строки
+# "mqtt: <topic> <payload>", expect работают и на них) и шлёт retained-команду.
+# Самый высокий уровень: агент пишет собственный мини-MQTT-клиент по проводу.
+name: mqtt-device
+description: >-
+  Прошивка — MQTT-устройство. Адрес брокера задан в переменных окружения
+  IRONBENCH_MQTT_HOST (127.0.0.1) и IRONBENCH_MQTT_PORT. Реализуй по TCP
+  мини-клиент MQTT 3.1.1 (без библиотек: CONNECT/CONNACK, SUBSCRIBE/SUBACK,
+  PUBLISH QoS0, разбор входящих PUBLISH). Подключись с client id "dev1",
+  подпиской на топик "dev1/cmd" (QoS 0) и после CONNACK+SUBACK напечатай
+  "mqtt ready". Дальше в цикле 12 итераций с паузой ~0.5 c: публиковать
+  в топик "dev1/value" строку счётчика (первая публикация "1", каждая
+  следующая на 1 больше), прибавляя текущий offset. Входящее сообщение
+  в "dev1/cmd" формата "add <целое>" (QoS 0) увеличивает offset на <целое>;
+  при каждом применении печатать "applied". После 12-й публикации напечатать
+  "mqtt done <offset>" и завершиться. Всё общение с брокером — по MQTT,
+  print — только указанные строки в serial.
+entry: solution.py
+target: unix
+timeout_sec: 25
+tags: [protocol]
+level: 5
+mqtt:
+  client_id: ironbench-mqtt-device
+expect:
+  - 'mqtt ready'
+  - 'mqtt: dev1/value 1\n'
+  - 'applied'
+  - 'mqtt: dev1/value 4[0-9]'
+  - 'mqtt done 40'
+fail:
+  - 'Traceback'
+stimulus:
+  # харнесс собирает первые публикации (offset=0), затем шлёт retained-команду
+  - mqtt-collect: {topic: dev1/value, count: 3, timeout_sec: 15}
+  - mqtt-publish: {topic: dev1/cmd, payload: "add 40", retain: true}
+  - mqtt-collect: {topic: dev1/value, count: 3, timeout_sec: 15}
+  - wait-serial: "mqtt done"
