@@ -178,5 +178,10 @@ def file_delete(path: str) -> str:
     return f"ok: удалён {path}"
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Точка входа консольного скрипта ironharness-mcp (и python -m)."""
     mcp.run()  # stdio
+
+
+if __name__ == "__main__":
+    main()

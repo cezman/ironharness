@@ -1,6 +1,6 @@
 [project]
 name = "ironharness"
-version = "0.1.0"
+version = "0.2.0"
 description = "io-core — безопасный I/O-слой для агентов (MCP); ironbench — бенчмарк для firmware-агентов"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,6 +22,7 @@ dev = [
 
 [project.scripts]
 ironbench = "ironbench.cli:main"
+ironharness-mcp = "io_core.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]
