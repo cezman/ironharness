@@ -9,6 +9,9 @@ import yaml
 
 TASK_FILE = "task.yaml"
 
+# Мишени запуска задачи; wokwi реализована, renode (этап 2.6) и real (этап 3) — в плане
+TASK_TARGETS = ("wokwi", "renode", "real")
+
 # Типы шагов сценария wokwi, разрешённые в stimulus; расширять вместе с wokwi-cli
 STIMULUS_STEP_KEYS = frozenset({"write-serial", "wait-serial", "delay", "set-control"})
 
@@ -30,6 +33,7 @@ class Task:
     expect: tuple[str, ...]
     fail: tuple[str, ...]
     stimulus: tuple[dict, ...] = ()
+    target: str = "wokwi"
 
 
 def load_task(task_dir: Path) -> Task:
@@ -66,6 +70,9 @@ def load_task(task_dir: Path) -> Task:
                 f"{task_file}: неизвестный шаг stimulus {sorted(unknown)} "
                 f"(разрешены: {sorted(STIMULUS_STEP_KEYS)})"
             )
+    target = str(raw.get("target", "wokwi"))
+    if target not in TASK_TARGETS:
+        raise ValueError(f"{task_file}: неизвестная мишень {target!r} (разрешены: {TASK_TARGETS})")
     return Task(
         name=name,
         description=str(raw.get("description", "")),
@@ -76,6 +83,7 @@ def load_task(task_dir: Path) -> Task:
         expect=tuple(expect),
         fail=tuple(fail),
         stimulus=tuple(stimulus),
+        target=target,
     )
 
 

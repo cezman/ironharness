@@ -1,4 +1,5 @@
-"""Раннер задач ironbench: wokwi-cli headless → serial-лог → оценка по паттернам.
+"""Раннер задач ironbench: мишени (план 3.2) — wokwi (реализована), renode (2.6) и
+real (этап 3) пока дают честный FAIL; serial-лог → оценка по паттернам.
 
 Оценка принадлежит раннеру (не сценарию Wokwi): после каждого запуска serial-лог
 перепроверяется на expect/fail-паттерны из task.yaml.
@@ -183,6 +184,22 @@ def _stage_firmware(task: Task, stage: Path) -> None:
                 )
 
 
+def _journal_result(journal, result: TaskResult) -> None:
+    if journal:
+        journal(
+            "task_result",
+            {
+                "task": result.task,
+                "passed": result.passed,
+                "exit_code": result.exit_code,
+                "duration_sec": result.duration_sec,
+                "missed": list(result.missed),
+                "hit_fail": list(result.hit_fail),
+                "error": result.error,
+            },
+        )
+
+
 def run_task(
     task: Task,
     *,
@@ -191,11 +208,42 @@ def run_task(
     token: str | None = None,
     journal=None,
 ) -> TaskResult:
-    """Запускает задачу в Wokwi и возвращает результат (pass/fail + причина).
+    """Диспетчер мишеней (план 3.2): wokwi реализована, renode/real — честный FAIL.
 
     cli_path/token — точки инъекции для тестов (фейковый CLI вместо реального).
     journal — io_core.JsonlJournal: пишем task_start/task_result.
     """
+    if task.target == "wokwi":
+        return _run_wokwi(task, out_dir=out_dir, cli_path=cli_path, token=token, journal=journal)
+    stage_note = {
+        "renode": "этап 2.6: нужен Renode-бэкенд (WSL2)",
+        "real": "этап 3: нужны живая плата (usbipd) и бэкенд real",
+    }
+    result = TaskResult(
+        task=task.name,
+        passed=False,
+        exit_code=None,
+        duration_sec=0.0,
+        serial_log=None,
+        missed=tuple(task.expect),
+        error=(
+            f"мишень {task.target!r} не реализована ({stage_note.get(task.target, 'вне плана')}); "
+            "проверки не выполнялись"
+        ),
+    )
+    _journal_result(journal, result)
+    return result
+
+
+def _run_wokwi(
+    task: Task,
+    *,
+    out_dir: Path,
+    cli_path: str | None = None,
+    token: str | None = None,
+    journal=None,
+) -> TaskResult:
+    """Запускает задачу в Wokwi и возвращает результат (pass/fail + причина)."""
     cli = cli_path or default_cli()
     cli_cmd = [cli] if isinstance(cli, str) else list(cli)  # тесты передают список-команду
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -267,17 +315,5 @@ def run_task(
         hit_fail=hit_fail,
         error=error,
     )
-    if journal:
-        journal(
-            "task_result",
-            {
-                "task": result.task,
-                "passed": result.passed,
-                "exit_code": result.exit_code,
-                "duration_sec": result.duration_sec,
-                "missed": list(result.missed),
-                "hit_fail": list(result.hit_fail),
-                "error": result.error,
-            },
-        )
+    _journal_result(journal, result)
     return result

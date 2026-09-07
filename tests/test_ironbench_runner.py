@@ -8,6 +8,7 @@ import os
 import sys
 import textwrap
 
+import pytest
 import yaml
 
 import ironbench.runner as runner_module
@@ -272,3 +273,47 @@ def test_missing_firmware_is_clean_fail(tmp_path):
     res = run_fake(tmp_path, task, {})
     assert not res.passed
     assert "no-such.bin" in (res.error or "")
+
+
+# --- мишени (план 3.2): диспетчер run_task ---
+
+
+def test_unknown_target_rejected(tmp_path):
+    d = tmp_path / "t"
+    d.mkdir()
+    (d / "task.yaml").write_text("name: fake\ntarget: qemu\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="неизвестная мишень"):
+        load_task(d)
+
+
+def test_explicit_wokwi_target_loads(tmp_path):
+    d = tmp_path / "t"
+    d.mkdir()
+    (d / "task.yaml").write_text("name: fake\ntarget: wokwi\n", encoding="utf-8")
+    assert load_task(d).target == "wokwi"
+
+
+@pytest.mark.parametrize("target,stage_note", [("renode", "2.6"), ("real", "этап 3")])
+def test_unready_target_is_clean_fail_without_cli(tmp_path, monkeypatch, target, stage_note):
+    task = dataclasses.replace(make_task(tmp_path), target=target)
+
+    # wokwi-бэкенд не должен зваться для нереализованных мишеней
+    def forbidden_wokwi(*a, **k):
+        raise AssertionError("wokwi-бэкенд вызван для нереализованной мишени")
+
+    monkeypatch.setattr(runner_module, "_run_wokwi", forbidden_wokwi)
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert not res.passed
+    assert res.exit_code is None
+    assert stage_note in (res.error or "")
+    assert "не реализована" in (res.error or "")
+    assert res.missed == task.expect  # проверки не выполнялись
+
+
+def test_unready_target_journaled(tmp_path):
+    task = dataclasses.replace(make_task(tmp_path), target="real")
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr:
+        run_task(task, out_dir=tmp_path / "out", cli_path=["never"], journal=jr)
+    kinds = [json.loads(line)["kind"] for line in jpath.read_text(encoding="utf-8").splitlines()]
+    assert kinds == ["task_result"]  # task_start нет — запуска не было
