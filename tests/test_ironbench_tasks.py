@@ -140,6 +140,8 @@ def test_golden_tasks_all_load_and_include_expectations():
         "noisy-frames",
         "frame-corrupt",
         "uart-menu",
+        "watchdog",
+        "coop-scheduler",
         "adc-read",
         "median-filter",
         "threshold-hysteresis",
