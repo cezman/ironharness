@@ -56,8 +56,11 @@ class SolveConfig:
     model: str
     max_iterations: int = 5
     temperature: float = 0.7
-    timeout_sec: int = 300
+    timeout_sec: int = 600
     allow_local: bool = True
+    # потолок генерации: без него рассуждающие модели на сложных задачах
+    # зависают в бесконечном "думании" и занимают очередь сервера
+    max_tokens: int = 8192
 
 
 def _env_map() -> dict[str, str]:
@@ -89,6 +92,7 @@ def resolve_llm_config(
         # локальные 9B с длинным контекстом думают по несколько минут на вызов
         timeout_sec=int(_pick(None, ("LLM_TIMEOUT",), "600") or 600),
         allow_local=_pick(None, ("LLM_ALLOW_LOCAL",), "1").strip().lower() not in ("0", "false", "no"),
+        max_tokens=int(_pick(None, ("LLM_MAX_TOKENS",), "8192") or 8192),
     )
 
 
@@ -135,6 +139,7 @@ def chat(cfg: SolveConfig, messages: list[dict]) -> str:
             "model": cfg.model,
             "messages": messages,
             "temperature": cfg.temperature,
+            "max_tokens": cfg.max_tokens,
             "stream": False,
         }
     ).encode("utf-8")
