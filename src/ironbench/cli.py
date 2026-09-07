@@ -15,7 +15,7 @@ from ironbench.agent import resolve_llm_config
 from ironbench.agent import solve as agent_solve
 from ironbench.report import write_report
 from ironbench.runner import run_task
-from ironbench.tasks import load_tasks
+from ironbench.tasks import TASK_TARGETS, load_tasks
 
 DEFAULT_TASKS_DIR = Path(__file__).resolve().parent / "tasks"
 SOLVE_DIR_NAME = "solve"
@@ -48,6 +48,12 @@ def main(argv=None) -> int:
     run.add_argument("--task", help="имя задачи (например, blink)")
     run.add_argument("--all", action="store_true", help="запустить все задачи")
     run.add_argument(
+        "--target",
+        choices=TASK_TARGETS,
+        default=None,
+        help="переопределить мишень (например, --target unix: локальный бесплатный прогон)",
+    )
+    run.add_argument(
         "--serial", action="store_true", help="печатать хвост serial-лога после задачи"
     )
 
@@ -56,6 +62,12 @@ def main(argv=None) -> int:
     solve_p.add_argument("--attempts", type=int, default=1, help="попыток на задачу (k)")
     solve_p.add_argument(
         "--iterations", type=int, default=None, help="лимит итераций на попытку"
+    )
+    solve_p.add_argument(
+        "--target",
+        choices=TASK_TARGETS,
+        default=None,
+        help="переопределить мишень (например, --target unix: кампания без квоты Wokwi)",
     )
 
     rep = sub.add_parser("report", parents=[common], help="отчёт pass@k по solve-кампаниям")
@@ -95,6 +107,8 @@ def main(argv=None) -> int:
         if args.attempts < 1:
             print("--attempts должен быть >= 1")
             return 2
+        if args.target:
+            task = dataclasses.replace(task, target=args.target)
         cfg = resolve_llm_config()
         if args.iterations is not None:
             cfg = dataclasses.replace(cfg, max_iterations=args.iterations)
@@ -114,6 +128,8 @@ def main(argv=None) -> int:
     else:
         print("укажите --task <имя> или --all")
         return 2
+    if args.target:
+        selected = [dataclasses.replace(t, target=args.target) for t in selected]
 
     with JsonlJournal(args.out / "journal.jsonl", actor="ironbench") as journal:
         all_passed = True

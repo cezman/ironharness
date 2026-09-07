@@ -238,17 +238,20 @@ def run_task(
     cli_path: str | None = None,
     token: str | None = None,
     renode_cmd: str | list | None = None,
+    unix_cmd: str | list | None = None,
     journal=None,
 ) -> TaskResult:
-    """Диспетчер мишеней: wokwi и renode реализованы, real — честный FAIL.
+    """Диспетчер мишеней: wokwi/renode/unix реализованы, real — честный FAIL.
 
-    cli_path/token/renode_cmd — точки инъекции для тестов (фейковые CLI вместо
-    реальных). journal — io_core.JsonlJournal: пишем task_start/task_result.
+    cli_path/token/renode_cmd/unix_cmd — точки инъекции для тестов (фейковые
+    CLI вместо реальных). journal — io_core.JsonlJournal: пишем task_start/task_result.
     """
     if task.target == "wokwi":
         return _run_wokwi(task, out_dir=out_dir, cli_path=cli_path, token=token, journal=journal)
     if task.target == "renode":
         return _run_renode(task, out_dir=out_dir, renode_cmd=renode_cmd, journal=journal)
+    if task.target == "unix":
+        return _run_unix(task, out_dir=out_dir, unix_cmd=unix_cmd, journal=journal)
     result = TaskResult(
         task=task.name,
         passed=False,
@@ -799,3 +802,166 @@ def _tar_of_files(stage: Path) -> bytes:
         for item in sorted(stage.iterdir()):
             tar.add(item, arcname=item.name)
     return buf.getvalue()
+
+
+# --- мишень unix: MicroPython unix-port в WSL2 (бесплатные локальные прогоны) ---
+
+
+def _unix_cmd(remote_entry: str) -> list[str]:
+    """micropython исполняет entry напрямую: stdin = stimulus, stdout = serial-лог."""
+    upy_bin = os.environ.get("IRONBENCH_UNIX_BIN", "~/bin/micropython")
+    return ["wsl", "-d", _wsl_distro(), "--", "bash", "-c", f"exec {upy_bin} {remote_entry}"]
+
+
+def _run_unix(
+    task: Task,
+    *,
+    out_dir: Path,
+    unix_cmd: str | list | None = None,
+    journal=None,
+) -> TaskResult:
+    """Запускает entry MicroPython-ом unix-port и оценивает вывод.
+
+    Без REPL и paste: скрипт исполняется файлом, input() читает наш stdin —
+    значит годятся только чисто-serial задачи (machine/dht недоступны).
+    Enter в unix — \\n, поэтому \\r из wokwi-стимула переводится в \\n.
+    unix_cmd=None → WSL-путь (entry уезжает tar-блобом); инъекция команды —
+    локальный фейк для тестов.
+    """
+    if "set-control" in {k for step in task.stimulus for k in step}:
+        result = TaskResult(
+            task=task.name,
+            passed=False,
+            exit_code=None,
+            duration_sec=0.0,
+            serial_log=None,
+            missed=tuple(task.expect),
+            error="мишень unix не поддерживает set-control (кнопки/датчики Wokwi)",
+        )
+        _journal_result(journal, result)
+        return result
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    serial_log = out_dir / f"{task.name}.serial.log"
+    wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
+    start = time.monotonic()
+    exit_code: int | None = None
+    error: str | None = None
+    serial_text = ""
+    proc = None
+    try:
+        if unix_cmd is None:
+            remote_dir = f"{RENODE_REMOTE_ROOT}/{task.name}-unix"
+            _push_to_wsl(
+                _tar_of(task.directory / task.entry, task.entry), remote_dir, "STAGE-PUSHED"
+            )
+            cmd = _unix_cmd(f"{remote_dir}/{task.entry}")
+        else:
+            cmd = [unix_cmd] if isinstance(unix_cmd, str) else list(unix_cmd)
+        if journal:
+            journal("task_start", {"task": task.name})
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # traceback'и unix-port пишет в stderr
+        )
+        box = {"text": "", "eof": False}
+
+        def reader():
+            try:
+                for line in iter(proc.stdout.readline, b""):
+                    box["text"] += line.decode("utf-8", "replace")
+            except OSError:
+                pass
+            finally:
+                box["eof"] = True
+
+        threading.Thread(target=reader, daemon=True).start()
+        deadline = time.monotonic() + wall_timeout
+        plain = tuple(p for p in task.expect if _plain_text(p))
+        try:
+            for step in task.stimulus:
+                if time.monotonic() > deadline or box["eof"]:
+                    break
+                if "delay" in step:
+                    time.sleep(
+                        min(_parse_delay(step["delay"]), max(0.0, deadline - time.monotonic()))
+                    )
+                elif "wait-serial" in step:
+                    needle = str(step["wait-serial"])
+                    while (
+                        needle not in box["text"]
+                        and time.monotonic() < deadline
+                        and not box["eof"]
+                    ):
+                        time.sleep(0.05)
+                elif "write-serial" in step:
+                    assert proc.stdin is not None
+                    data = str(step["write-serial"]).replace("\r\n", "\n").replace("\r", "\n")
+                    proc.stdin.write(data.encode("utf-8"))
+                    proc.stdin.flush()
+            # дочитываем: до всех литеральных expect, EOF или дедлайна
+            # (бесконечный цикл прошивки — норма, как --timeout в wokwi)
+            while time.monotonic() < deadline and not box["eof"]:
+                if plain and all(p in box["text"] for p in plain):
+                    break
+                time.sleep(0.05)
+            matched = bool(plain) and all(p in box["text"] for p in plain)
+            if box["eof"]:
+                exit_code = proc.wait(timeout=5)
+            elif matched or time.monotonic() >= deadline:
+                # гасим сразу, не закрывая stdin: EOF у input() бесконечной
+                # прошивки дал бы Traceback в serial-логе (fail-паттерн)
+                proc.kill()
+                proc.wait(timeout=5)
+                exit_code = None
+            else:
+                try:
+                    exit_code = proc.wait(timeout=3)  # конечная программа сама выйдет
+                except subprocess.TimeoutExpired:
+                    exit_code = None
+            serial_text = box["text"]
+            if exit_code not in (0, None):
+                error = f"micropython завершился с кодом {exit_code}"
+        finally:
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
+    except ValueError as e:
+        error = f"не удалось подготовить задачу: {e}"
+    except ConnectionError as e:
+        error = f"не удалось подключиться: {e}"
+    except FileNotFoundError as e:
+        error = f"не найден: {e.filename or e}"
+    except OSError as e:
+        error = f"ошибка ввода-вывода при запуске micropython: {e}"
+    finally:
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+            if proc.stdout is not None:
+                proc.stdout.close()
+
+    serial_log.write_text(serial_text, encoding="utf-8")
+    duration = round(time.monotonic() - start, 2)
+    missed, hit_fail = _check_patterns(serial_text, task.expect, task.fail)
+    passed = not missed and not hit_fail and error is None
+    result = TaskResult(
+        task=task.name,
+        passed=passed,
+        exit_code=exit_code,
+        duration_sec=duration,
+        serial_log=serial_log if serial_text else None,
+        missed=missed,
+        hit_fail=hit_fail,
+        error=error,
+    )
+    _journal_result(journal, result)
+    return result

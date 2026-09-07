@@ -9,8 +9,9 @@ import yaml
 
 TASK_FILE = "task.yaml"
 
-# Мишени запуска задачи; real (этап 3) — в плане
-TASK_TARGETS = ("wokwi", "renode", "real")
+# Мишени запуска задачи; real (этап 3) — в плане. unix = MicroPython unix-port
+# в WSL2: бесплатные локальные прогоны чисто-serial задач (см. runner._run_unix)
+TASK_TARGETS = ("wokwi", "renode", "unix", "real")
 
 # Типы шагов сценария wokwi, разрешённые в stimulus; расширять вместе с wokwi-cli
 STIMULUS_STEP_KEYS = frozenset({"write-serial", "wait-serial", "delay", "set-control"})
