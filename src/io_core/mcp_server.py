@@ -99,6 +99,36 @@ def modbus_write(name: str, address: int, values: list[int]) -> str:
     return f"ok: записано {len(values)} регистр(ов) с адреса {address}"
 
 
+# --- mqtt ---
+
+
+@mcp.tool()
+def mqtt_open(name: str, host: str, port: int = 1883, client_id: str = "", timeout: float = 3.0) -> str:
+    """Открывает именованное MQTT-соединение с брокером."""
+    get_session().mqtt_open(name, host, port=port, client_id=client_id, timeout=timeout)
+    return f"ok: mqtt {name!r} -> {host}:{port}"
+
+
+@mcp.tool()
+def mqtt_publish(name: str, topic: str, payload: str, qos: int = 0, retain: bool = False) -> str:
+    """Публикует сообщение в топик (payload — текст)."""
+    get_session().mqtt_publish(name, topic, payload, qos=qos, retain=retain)
+    return f"ok: опубликовано в {topic!r}"
+
+
+@mcp.tool()
+def mqtt_subscribe(name: str, topic: str, qos: int = 0) -> str:
+    """Подписывается на топик (допустимы маски: sensors/#, +/temperature)."""
+    get_session().mqtt_subscribe(name, topic, qos=qos)
+    return f"ok: подписка на {topic!r}"
+
+
+@mcp.tool()
+def mqtt_read(name: str, timeout: float = 1.0) -> dict[str, str] | None:
+    """Читает следующее входящее сообщение {"topic", "payload"}; null — таймаут."""
+    return get_session().mqtt_read(name, timeout)
+
+
 # --- файлы (песочница) ---
 
 

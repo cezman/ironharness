@@ -8,6 +8,7 @@ actor (кто), kind (тип события) + payload. Совместим с х
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any, Self
@@ -21,23 +22,26 @@ class JsonlJournal:
         self._actor = actor
         self._seq = 0
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()  # колбэки MQTT пишут из сетевого потока paho
         # Режим "a": несколько сессий могут дописывать один файл
         self._fh = self._path.open("a", encoding="utf-8")
 
     def __call__(self, kind: str, data: dict[str, Any]) -> None:
-        self._seq += 1
-        rec: Event = {
-            "ts": round(time.time(), 3),
-            "seq": self._seq,
-            "actor": self._actor,
-            "kind": kind,
-        }
-        rec.update(data)
-        self._fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        self._fh.flush()
+        with self._lock:
+            self._seq += 1
+            rec: Event = {
+                "ts": round(time.time(), 3),
+                "seq": self._seq,
+                "actor": self._actor,
+                "kind": kind,
+            }
+            rec.update(data)
+            self._fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            self._fh.flush()
 
     def close(self) -> None:
-        self._fh.close()
+        with self._lock:  # колбэк из сетевого потока не должен писать в закрытый файл
+            self._fh.close()
 
     def __enter__(self) -> Self:
         return self

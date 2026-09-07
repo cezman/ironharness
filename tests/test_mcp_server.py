@@ -20,6 +20,10 @@ from io_core.mcp_server import (
     modbus_open,
     modbus_read,
     modbus_write,
+    mqtt_open,
+    mqtt_publish,
+    mqtt_read,
+    mqtt_subscribe,
     reset_session,
     serial_open,
     serial_read,
@@ -39,7 +43,8 @@ def test_tools_are_registered():
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}
     assert {"echo", "serial_open", "serial_write", "serial_read", "modbus_open",
-            "modbus_read", "modbus_write", "file_write", "file_read", "file_list"} <= names
+            "modbus_read", "modbus_write", "mqtt_open", "mqtt_publish", "mqtt_subscribe",
+            "mqtt_read", "file_write", "file_read", "file_list"} <= names
 
 
 def test_echo(mcp_env):
@@ -70,6 +75,37 @@ def test_modbus_tools_roundtrip(mcp_env):
         modbus_open("m", "127.0.0.1", port=srv.port)
         modbus_write("m", 0, [1, 2])
         assert modbus_read("m", 0, 2) == [1, 2]
+
+
+class _FakeMqttTransport:
+    """Офлайн-заглушка MqttTransport: брокера нет, одно заранее положенное сообщение."""
+
+    def __init__(self, host, *, port=1883, client_id="", timeout=3.0, on_event=None):
+        self.inbox = [{"topic": "cmd/led", "payload": "done"}]
+
+    def open(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def publish(self, topic, payload, *, qos=0, retain=False):
+        pass
+
+    def subscribe(self, topic, *, qos=0):
+        pass
+
+    def read_message(self, timeout: float = 1.0):
+        return self.inbox.pop(0) if self.inbox else None
+
+
+def test_mqtt_tools_roundtrip(mcp_env, monkeypatch):
+    monkeypatch.setattr("io_core.session.MqttTransport", _FakeMqttTransport)
+    assert "ok" in mqtt_open("bus", "broker.test")
+    assert "ok" in mqtt_subscribe("bus", "cmd/#")
+    assert "ok" in mqtt_publish("bus", "cmd/led", "on")
+    assert mqtt_read("bus") == {"topic": "cmd/led", "payload": "done"}
+    assert mqtt_read("bus") is None  # буфер пуст → таймаут
 
 
 def test_journal_lands_in_home(mcp_env):

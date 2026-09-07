@@ -12,6 +12,7 @@ from typing import Any
 from io_core.file_sandbox import FileSandbox
 from io_core.journal import JsonlJournal
 from io_core.modbus_transport import ModbusTransport
+from io_core.mqtt_transport import MqttTransport
 from io_core.serial_transport import SerialTransport
 
 
@@ -83,6 +84,33 @@ class Session:
             t.write_register(address, values[0])
         else:
             t.write_registers(address, values)
+
+    # --- mqtt ---
+
+    def mqtt_open(
+        self,
+        name: str,
+        host: str,
+        *,
+        port: int = 1883,
+        client_id: str = "",
+        timeout: float = 3.0,
+    ) -> None:
+        self._check_free(name)
+        t = MqttTransport(
+            host, port=port, client_id=client_id, timeout=timeout, on_event=self.journal
+        )
+        t.open()
+        self._transports[name] = t
+
+    def mqtt_publish(self, name: str, topic: str, payload: str, *, qos: int = 0, retain: bool = False) -> None:
+        self._get(name).publish(topic, payload, qos=qos, retain=retain)
+
+    def mqtt_subscribe(self, name: str, topic: str, *, qos: int = 0) -> None:
+        self._get(name).subscribe(topic, qos=qos)
+
+    def mqtt_read(self, name: str, timeout: float = 1.0) -> dict[str, str] | None:
+        return self._get(name).read_message(timeout)
 
     # --- файлы (песочница) ---
 
