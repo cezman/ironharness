@@ -10,7 +10,7 @@ An agent harness for I/O and firmware. Two modules:
   file sandbox), a Modbus simulator, ESP32 flashing tools (esptool: offline image
   inspection, flash/erase on a live board), a JSONL journal of every operation, a
   replayer, limits (rate limit, deadlines), effect verification (`expect_read`), and
-  an MCP server (19 tools).
+  an MCP server (22 tools).
 - **ironbench** — a benchmark for firmware agents: golden tasks in simulators
   (Wokwi ESP32/MicroPython, plus Renode), an agent loop over any LLM API, pass@k reports.
 
@@ -32,8 +32,8 @@ uv run ironharness-mcp               # MCP server (stdio; or: python -m io_core.
 
 ## Agent tools (MCP)
 
-`echo` · `serial_open/write/read/read_line` · `modbus_open/read/write` ·
-`mqtt_open/publish/subscribe/read` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
+`echo` · `serial_open/write/read/read_line/close` · `modbus_open/read/write/close` ·
+`mqtt_open/publish/subscribe/read/close` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
 
 Every operation is journaled to JSONL (`$IRONHARNESS_HOME/journal.jsonl`,
 default `~/.ironharness/`); file operations are confined by the sandbox
@@ -90,6 +90,8 @@ classes, not a single number. LLM config — environment variables: `LLM_BASE_UR
   dependency: `pip install 'ironharness[flash]'`.
 - Transports are not restricted to specific hosts/ports by design — the operator
   (you) decides what the agent may reach; every operation is journaled for audit.
+  Flash/erase failures are journaled with full details (`esp_flash_failed`) even
+  when the MCP envelope truncates them.
 
 ## Status
 
