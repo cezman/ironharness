@@ -7,6 +7,10 @@ Configuration via environment:
     IRONHARNESS_HOME     — base for the journal and sandbox (default ~/.ironharness)
     IRONHARNESS_SANDBOX  — file sandbox root (default IRONHARNESS_HOME/sandbox)
     IRONHARNESS_ALLOW_REAL_FLASH — set to 1 to allow live esp_flash/esp_erase
+    IRONHARNESS_ALLOWED_HOSTS — comma-separated host / host:port allowlist for
+                         modbus/mqtt (unset = allow all; denials -> PolicyViolation)
+    IRONHARNESS_ENABLED_KINDS — comma list of serial,modbus,mqtt,esp,file to enable
+                         (unset = all enabled)
 """
 
 from __future__ import annotations

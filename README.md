@@ -91,10 +91,18 @@ classes, not a single number. LLM config — environment variables: `LLM_BASE_UR
   `IRONHARNESS_ALLOW_REAL_FLASH=1` (opt-in). erasing flash is irreversible
   (ESP32 recovers by reflashing, but data is gone). esptool is an optional
   dependency: `pip install 'ironharness[flash]'`.
-- Transports are not restricted to specific hosts/ports by design — the operator
-  (you) decides what the agent may reach; every operation is journaled for audit.
-  Flash/erase failures are journaled with full details (`esp_flash_failed`) even
-  when the MCP envelope truncates them.
+- Transports are not restricted to specific hosts/ports by default — the operator
+  (you) decides what the agent may reach, optionally via the access policy below;
+  every operation is journaled for audit. Flash/erase failures are journaled with
+  full details (`esp_flash_failed`) even when the MCP envelope truncates them.
+- **Access policy (opt-in)**: set `IRONHARNESS_ALLOWED_HOSTS` (comma-separated
+  `host` or `host:port` entries) to restrict Modbus/MQTT connections to the
+  listed hosts — anything else is denied with `PolicyViolation` before a
+  connection is attempted (`broker.lan:1883` matches that exact port, a bare
+  `broker.lan` matches any port). Set `IRONHARNESS_ENABLED_KINDS` (comma list of
+  `serial,modbus,mqtt,esp,file`) to disable whole transport kinds — disabled
+  open/esp/file operations fail fast. Unset variables keep the allow-everything
+  default, and every denial is journaled as a `policy_violation` event.
 
 ## Status
 

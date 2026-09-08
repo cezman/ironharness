@@ -4,6 +4,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from io_core.errors import (
     OperationTimeout,
+    PolicyViolation,
     QuotaExceeded,
     RateLimitExceeded,
     SandboxViolation,
@@ -16,6 +17,7 @@ from io_core.limits import DeadlineTransport, RateLimitedTransport, RateLimiter
 from io_core.modbus_sim import ModbusSimServer
 from io_core.modbus_transport import ModbusTransport
 from io_core.mqtt_transport import MqttTransport
+from io_core.policy import AccessPolicy
 from io_core.replay import ReplayMismatch, ReplayTransport
 from io_core.serial_transport import SerialTransport
 from io_core.session import Session
@@ -27,6 +29,7 @@ except PackageNotFoundError:  # запущен из исходников без 
     __version__ = "0.3.0"
 
 __all__ = [
+    "AccessPolicy",
     "DeadlineTransport",
     "EspFlasher",
     "FileSandbox",
@@ -35,6 +38,7 @@ __all__ = [
     "ModbusTransport",
     "MqttTransport",
     "OperationTimeout",
+    "PolicyViolation",
     "QuotaExceeded",
     "RateLimitExceeded",
     "RateLimitedTransport",

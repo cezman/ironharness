@@ -17,6 +17,8 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any, Self
 
+from io_core.policy import AccessPolicy
+
 EventHook = Callable[[str, dict[str, Any]], None]
 
 DEFAULT_QUEUE_SIZE = 256
@@ -90,6 +92,7 @@ class MqttTransport:
     # --- жизненный цикл ---
 
     def open(self) -> None:
+        AccessPolicy.from_env(on_event=self._on_event).check_host(self._host, self._port)
         client = self._client_factory()
         client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect
