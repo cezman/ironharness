@@ -291,6 +291,7 @@ def is_infra_error(error: str | None) -> bool:
     if not error:
         return False
     marks = (
+        # RU: runner messages not yet translated (churn pass pending)
         "не реализована",
         "не поддерживает",
         "не поддержан",
@@ -298,6 +299,13 @@ def is_infra_error(error: str | None) -> bool:
         "не удалось подготовить задачу",
         "не удалось подключиться",
         "не отвечает",
+        # EN: translated transport/io-core messages
+        "not implemented",
+        "not supported",
+        "not found",
+        "failed to prepare task",
+        "failed to connect",
+        "not responding",
         "paste mode",
     )
     return any(m in error for m in marks)

@@ -19,7 +19,7 @@ class _ModbusSimHandler(socketserver.StreamRequestHandler):
         while len(buf) < n:
             chunk = self.request.recv(n - len(buf))
             if not chunk:
-                raise ConnectionError("клиент закрыл соединение")
+                raise ConnectionError("client closed the connection")
             buf += chunk
         return buf
 

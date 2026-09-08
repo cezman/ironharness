@@ -101,7 +101,7 @@ class MqttTransport:
         if not self._connected.wait(timeout=self._timeout):
             self._teardown()
             raise ConnectionError(
-                f"не удалось подключиться к mqtt-брокеру {self._host}:{self._port}"
+                f"failed to connect to mqtt broker {self._host}:{self._port}"
             )
         self._emit("mqtt_open", {"host": self._host, "port": self._port})
 
@@ -128,7 +128,7 @@ class MqttTransport:
         self.close()
 
     def _require_client(self) -> Any:
-        assert self._client is not None, "соединение не открыто"
+        assert self._client is not None, "connection is not open"
         return self._client
 
     # --- операции ---
@@ -142,7 +142,7 @@ class MqttTransport:
         info.wait_for_publish(timeout=self._timeout)
         # wait_for_publish молчит по таймауту: PUBACK не пришёл => публикация не подтверждена
         if not info.is_published():
-            raise OSError(f"mqtt publish {topic!r}: нет подтверждения за {self._timeout}с")
+            raise OSError(f"mqtt publish {topic!r}: not acknowledged within {self._timeout}s")
         self._emit("mqtt_publish", {"topic": topic, "payload": payload, "qos": qos, "retain": retain})
 
     def subscribe(self, topic: str, *, qos: int = 0) -> None:
@@ -156,11 +156,11 @@ class MqttTransport:
             while mid not in self._suback_results:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise OSError(f"mqtt subscribe {topic!r}: нет SUBACK за {self._timeout}с")
+                    raise OSError(f"mqtt subscribe {topic!r}: no SUBACK within {self._timeout}s")
                 self._suback_cond.wait(remaining)
             codes = self._suback_results.pop(mid)
         if any(getattr(c, "is_failure", False) for c in codes):
-            raise OSError(f"mqtt subscribe {topic!r}: брокер отказал ({[str(c) for c in codes]})")
+            raise OSError(f"mqtt subscribe {topic!r}: broker refused ({[str(c) for c in codes]})")
         self._emit("mqtt_subscribe", {"topic": topic, "qos": qos})
 
     def read_message(self, timeout: float = 1.0) -> dict[str, str] | None:

@@ -40,10 +40,10 @@ class FileSandbox:
 
     def resolve(self, rel_path: str) -> Path:
         if Path(rel_path).is_absolute():
-            raise SandboxViolation(f"абсолютный путь запрещён: {rel_path!r}")
+            raise SandboxViolation(f"absolute path is not allowed: {rel_path!r}")
         resolved = (self._root / rel_path).resolve()
         if resolved != self._root and self._root not in resolved.parents:
-            raise SandboxViolation(f"путь {rel_path!r} выходит за корень {self._root}")
+            raise SandboxViolation(f"path {rel_path!r} escapes the sandbox root {self._root}")
         return resolved
 
     def _usage(self) -> tuple[int, int]:
@@ -54,11 +54,11 @@ class FileSandbox:
         used_bytes, used_files = self._usage()
         if used_bytes + extra_bytes > self._max_bytes:
             raise QuotaExceeded(
-                f"байты: используется {used_bytes}, добавка {extra_bytes}, лимит {self._max_bytes}"
+                f"bytes: used {used_bytes}, adding {extra_bytes}, limit {self._max_bytes}"
             )
         if used_files + new_files > self._max_files:
             raise QuotaExceeded(
-                f"файлы: используется {used_files}, лимит {self._max_files}"
+                f"files: used {used_files}, limit {self._max_files}"
             )
 
     def write_file(self, rel_path: str, data: bytes, *, overwrite: bool = False) -> int:
