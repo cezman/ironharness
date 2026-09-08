@@ -23,3 +23,7 @@ PLAN.md
 
 # Локальные временные файлы
 tmp/
+
+# Tool state (Mimosa hook, ZCode session data) — never publish
+.mimosa/
+.zcode/
