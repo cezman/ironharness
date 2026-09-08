@@ -297,8 +297,9 @@ def test_explicit_wokwi_target_loads(tmp_path):
     assert load_task(d).target == "wokwi"
 
 
-def test_real_target_is_clean_fail_without_cli(tmp_path, monkeypatch):
+def test_real_target_without_port_is_infra_fail(tmp_path, monkeypatch):
     task = dataclasses.replace(make_task(tmp_path), target="real")
+    monkeypatch.delenv("IRONBENCH_REAL_PORT", raising=False)
 
     # бэкенды реализованных мишеней не должны зваться для real
     def forbidden_backend(*a, **k):
@@ -309,8 +310,7 @@ def test_real_target_is_clean_fail_without_cli(tmp_path, monkeypatch):
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
     assert res.exit_code is None
-    assert "этап 3" in (res.error or "")
-    assert "не реализована" in (res.error or "")
+    assert "IRONBENCH_REAL_PORT" in (res.error or "")
     assert res.missed == task.expect  # проверки не выполнялись
 
 
