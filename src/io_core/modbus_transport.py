@@ -11,6 +11,8 @@ from typing import Any, Self
 
 from pymodbus.client import ModbusTcpClient
 
+from io_core.policy import AccessPolicy
+
 EventHook = Callable[[str, dict[str, Any]], None]
 
 
@@ -36,6 +38,7 @@ class ModbusTransport:
             self._on_event(event, data)
 
     def open(self) -> None:
+        AccessPolicy.from_env(on_event=self._on_event).check_host(self._host, self._port)
         self._client = ModbusTcpClient(self._host, port=self._port, timeout=self._timeout)
         if not self._client.connect():
             raise ConnectionError(f"failed to connect to {self._host}:{self._port}")
