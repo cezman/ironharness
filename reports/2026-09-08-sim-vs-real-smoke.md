@@ -58,3 +58,27 @@ Caveats: task descriptions are still Russian (IH-9 translation pending);
 
 Next: rerun with `qwen3.5-9b` (reasoning model, slower — the first try hit a
 300 s per-call timeout; needs `LLM_TIMEOUT=900+`), then extend to more tasks.
+
+## qwen3.5-9b (reasoning) datapoint (2026-09-09)
+
+`LLM_TIMEOUT=900`. Task: uart-echo, 2 attempts, iteration limit 5.
+
+| target | attempts | solved | wall time |
+|--------|----------|--------|-----------|
+| unix (sim) | 2 | **1/2** (attempt-1 SOLVED in 1 iteration, 502 s; attempt-2: one LLM call exceeded 900 s) | 1404.5 s |
+| real (ESP32, COM4) | 2 | **1/2** (attempt-2 SOLVED in 1 iteration, 640 s; attempt-1: 5 iterations exhausted, 1171 s) | 1811.5 s |
+
+The solved real-board firmware used `sys.stdin.readline()` (stdin = the REPL
+UART) — a one-iteration correct solution, with `echo: hello` / `echo: world`
+present in the board's serial log.
+
+## Combined picture (uart-echo so far)
+
+| model | unix | real |
+|-------|------|------|
+| qwen2.5-7b-instruct (non-reasoning) | 0/2 | 0/2 |
+| qwen3.5-9b (reasoning) | 1/2 | 1/2 |
+
+Early signal: pass rate is currently driven by the model, not by the
+sim-vs-real switch; the real target costs ~2x wall time per attempt
+(staging + boot pauses). More tasks and attempts needed before any claim.
