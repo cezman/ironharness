@@ -29,6 +29,20 @@ def test_duplicate_open_raises(session):
         session.serial_open("s", "loop://", timeout=0.5)
 
 
+def test_typed_close_releases_transport(session):
+    session.serial_open("s", "loop://", timeout=0.5)
+    session.serial_close("s")
+    with pytest.raises(KeyError):
+        session.serial_write("s", "00")
+    session.serial_open("s", "loop://", timeout=0.5)  # имя освободилось
+
+
+def test_typed_close_rejects_wrong_kind(session):
+    session.serial_open("s", "loop://", timeout=0.5)
+    with pytest.raises(KeyError):
+        session.modbus_close("s")
+
+
 def test_modbus_via_session(session):
     with ModbusSimServer(port=0, registers=[5, 6] + [0] * 62) as srv:
         session.modbus_open("m", "127.0.0.1", port=srv.port)

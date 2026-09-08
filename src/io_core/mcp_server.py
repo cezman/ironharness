@@ -77,6 +77,13 @@ def serial_read_line(name: str, max_len: int = 256) -> str:
     return get_session().serial_read_line(name, max_len)
 
 
+@mcp.tool()
+def serial_close(name: str) -> str:
+    """Closes the named serial port and releases it for other applications."""
+    get_session().serial_close(name)
+    return f"ok: serial {name!r} closed"
+
+
 # --- modbus ---
 
 
@@ -98,6 +105,13 @@ def modbus_write(name: str, address: int, values: list[int]) -> str:
     """Writes holding registers: one value -> FC6, several -> FC16."""
     get_session().modbus_write(name, address, values)
     return f"ok: wrote {len(values)} register(s) at address {address}"
+
+
+@mcp.tool()
+def modbus_close(name: str) -> str:
+    """Closes the named Modbus TCP connection."""
+    get_session().modbus_close(name)
+    return f"ok: modbus {name!r} closed"
 
 
 # --- mqtt ---
@@ -128,6 +142,13 @@ def mqtt_subscribe(name: str, topic: str, qos: int = 0) -> str:
 def mqtt_read(name: str, timeout: float = 1.0) -> dict[str, str] | None:
     """Reads the next incoming message {"topic", "payload"}; null — timeout."""
     return get_session().mqtt_read(name, timeout)
+
+
+@mcp.tool()
+def mqtt_close(name: str) -> str:
+    """Closes the named MQTT connection and stops its network loop."""
+    get_session().mqtt_close(name)
+    return f"ok: mqtt {name!r} closed"
 
 
 # --- esp (flashing; needs the [flash] extra and IRONHARNESS_ALLOW_REAL_FLASH=1) ---

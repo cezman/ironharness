@@ -27,6 +27,7 @@ from io_core.mcp_server import (
     mqtt_read,
     mqtt_subscribe,
     reset_session,
+    serial_close,
     serial_open,
     serial_read,
     serial_write,
@@ -46,9 +47,10 @@ def mcp_env(tmp_path, monkeypatch):
 def test_tools_are_registered():
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}
-    assert {"echo", "serial_open", "serial_write", "serial_read", "modbus_open",
-            "modbus_read", "modbus_write", "mqtt_open", "mqtt_publish", "mqtt_subscribe",
-            "mqtt_read", "esp_image_info", "esp_flash", "esp_erase",
+    assert {"echo", "serial_open", "serial_write", "serial_read", "serial_close",
+            "modbus_open", "modbus_read", "modbus_write", "modbus_close",
+            "mqtt_open", "mqtt_publish", "mqtt_subscribe", "mqtt_read", "mqtt_close",
+            "esp_image_info", "esp_flash", "esp_erase",
             "file_write", "file_read", "file_list"} <= names
 
 
@@ -73,6 +75,9 @@ def test_serial_tools_roundtrip(mcp_env):
     serial_open("s", "loop://", timeout=0.5)
     serial_write("s", "deadbeef")
     assert serial_read("s", 4) == "deadbeef"
+    assert serial_close("s") == "ok: serial 's' closed"
+    with pytest.raises(KeyError):
+        serial_write("s", "00")
 
 
 def test_modbus_tools_roundtrip(mcp_env):
