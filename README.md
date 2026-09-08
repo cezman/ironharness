@@ -2,7 +2,7 @@
 
 [English](README.md) | [Русский](README.ru.md)
 
-> harness — «упряжь»: we harness LLM agents to hardware.
+> we harness LLM agents to hardware.
 
 An agent harness for I/O and firmware. Two modules:
 
