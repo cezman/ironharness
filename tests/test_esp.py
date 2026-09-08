@@ -1,8 +1,8 @@
-"""Тесты инструментов прошивки ESP: разбор образа — офлайн на реальном .bin,
-прошивка/стирание — на моках esptool (платы нет).
+"""ESP flashing tools tests: image parsing runs offline on a real .bin,
+flash/erase run against esptool fakes (no board attached).
 
-Моки повторяют каноническую последовательность esptool CLI:
-connect_esp (контекст-менеджер) → run_stub → change_baud → attach_flash → операция.
+The fakes replay the canonical esptool CLI sequence:
+connect_esp (context manager) -> run_stub -> change_baud -> attach_flash -> operation.
 """
 
 import json
@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Self
 
 import pytest
+
+pytest.importorskip("esptool", reason="esp tests need the [flash] extra (esptool)")
+
 from esptool.cmds import FatalError
 
 import io_core.esp_flash as esp_mod
@@ -52,6 +55,8 @@ class FakeEsptool:
         self.fail_at: str | None = None  # имя шага, на котором бросить ошибку
 
     def install(self, monkeypatch) -> None:
+        # fakes replace the real esptool path, but the live-flash opt-in guard still applies
+        monkeypatch.setenv("IRONHARNESS_ALLOW_REAL_FLASH", "1")
         monkeypatch.setattr(esp_mod, "connect_esp", self._connect)
         monkeypatch.setattr(esp_mod, "run_stub", self._step("run_stub"))
         monkeypatch.setattr(esp_mod, "attach_flash", self._step("attach_flash"))
@@ -109,7 +114,7 @@ def test_flash_canonical_sequence(tmp_path, monkeypatch):
     jpath = tmp_path / "j.jsonl"
     with JsonlJournal(jpath, actor="test") as jr:
         result = EspFlasher(on_event=jr).flash("COM7", FIRMWARE)
-    assert "прошит" in result
+    assert "flashed" in result
     assert fake.calls[0] == ("connect", {"port": "COM7", "chip": "esp32"})
     assert "run_stub" in fake.steps()
     assert ("write_flash", {"addr_data": [(0x1000, str(FIRMWARE))]}) in fake.calls
@@ -123,7 +128,7 @@ def test_flash_write_failure_journals_and_closes_port(tmp_path, monkeypatch):
     fake.fail_at = "write_flash"
     fake.install(monkeypatch)
     jpath = tmp_path / "j.jsonl"
-    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ConnectionError, match="не удалось прошить"):
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ConnectionError, match="failed to flash"):
         EspFlasher(on_event=jr).flash("COM7", FIRMWARE)
     assert fake.esp._port.closed  # неудача операции не оставляет порт открытым
     events = read_events(jpath)
@@ -135,7 +140,7 @@ def test_flash_connect_failure(monkeypatch):
     fake = FakeEsptool()
     fake.fail_at = "connect"
     fake.install(monkeypatch)
-    with pytest.raises(ConnectionError, match="не удалось прошить"):
+    with pytest.raises(ConnectionError, match="failed to flash"):
         EspFlasher().flash("COM9", FIRMWARE)
 
 
@@ -145,7 +150,7 @@ def test_erase_canonical_sequence(tmp_path, monkeypatch):
     jpath = tmp_path / "j.jsonl"
     with JsonlJournal(jpath, actor="test") as jr:
         result = EspFlasher(on_event=jr).erase("/dev/ttyUSB0")
-    assert "стёрт" in result
+    assert "erased" in result
     assert fake.steps() == ["connect", "run_stub", "attach_flash", "erase_flash"]
     assert fake.esp._port.closed
     assert [e["kind"] for e in read_events(jpath)] == ["esp_erase"]
@@ -156,7 +161,7 @@ def test_erase_connect_failure(tmp_path, monkeypatch):
     fake.fail_at = "connect"
     fake.install(monkeypatch)
     jpath = tmp_path / "j.jsonl"
-    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ConnectionError, match="не удалось стереть"):
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ConnectionError, match="failed to erase"):
         EspFlasher(on_event=jr).erase("COM9")
     assert [e["kind"] for e in read_events(jpath)] == ["esp_erase_failed"]
 

@@ -67,21 +67,21 @@ class SerialTransport:
         self.close()
 
     def write(self, data: bytes) -> int:
-        assert self._serial is not None, "порт не открыт"
+        assert self._serial is not None, "port is not open"
         n = self._serial.write(data)
         self._emit("write", {"data_hex": data.hex(), "bytes": n})
         return n
 
     def read(self, size: int = 1) -> bytes:
         # До size байт; по таймауту возвращает то, что успело накопиться (может b"")
-        assert self._serial is not None, "порт не открыт"
+        assert self._serial is not None, "port is not open"
         data = self._serial.read(size)
         self._emit("read", {"data_hex": data.hex(), "bytes": len(data)})
         return data
 
     def read_line(self, max_len: int = 256) -> bytes:
         # Читает до \n включительно; по таймауту — что успело прийти
-        assert self._serial is not None, "порт не открыт"
+        assert self._serial is not None, "port is not open"
         data = self._serial.read_until(b"\n", size=max_len)
         self._emit("read_line", {"data_hex": data.hex(), "bytes": len(data)})
         return data

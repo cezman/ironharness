@@ -42,17 +42,17 @@ class Fault:
 
     def __post_init__(self) -> None:
         if self.action not in ACTIONS:
-            raise ValueError(f"неизвестное действие {self.action!r}; разрешены: {ACTIONS}")
+            raise ValueError(f"unknown action {self.action!r}; allowed: {ACTIONS}")
         if not 0 <= self.probability <= 1:
-            raise ValueError("probability должна быть в [0, 1]")
+            raise ValueError("probability must be in [0, 1]")
         if not 0 <= self.ratio <= 1:
-            raise ValueError("ratio должна быть в [0, 1]")
+            raise ValueError("ratio must be in [0, 1]")
         if self.seconds < 0:
-            raise ValueError("seconds должна быть >= 0")
+            raise ValueError("seconds must be >= 0")
         if self.after_ops < 0:
-            raise ValueError("after_ops должна быть >= 0")
+            raise ValueError("after_ops must be >= 0")
         if self.count is not None and self.count < 1:
-            raise ValueError("count должна быть >= 1 или None")
+            raise ValueError("count must be >= 1 or None")
 
 
 def _corrupt(data: bytes, ratio: float, rng: random.Random) -> bytes:
@@ -103,7 +103,7 @@ class FaultyTransport:
     def write(self, data: bytes) -> None:
         faults = self._active()
         if any(f.action == "disconnect" for f in faults):
-            raise ConnectionLost(f"обрыв по сценарию на операции {self.ops}")
+            raise ConnectionLost(f"scripted disconnect at operation {self.ops}")
         for f in faults:
             if f.action == "delay":
                 self._sleep(f.seconds)
@@ -118,7 +118,7 @@ class FaultyTransport:
     def read(self, size: int) -> bytes:
         faults = self._active()
         if any(f.action == "disconnect" for f in faults):
-            raise ConnectionLost(f"обрыв по сценарию на операции {self.ops}")
+            raise ConnectionLost(f"scripted disconnect at operation {self.ops}")
         for f in faults:
             if f.action == "delay":
                 self._sleep(f.seconds)

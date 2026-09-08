@@ -8,6 +8,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
@@ -15,9 +16,25 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - name: Зависимости
-        run: uv sync
-      - name: Линтер
+      - name: Install deps (with the flash extra)
+        run: uv sync --extra flash
+      - name: Lint
         run: uv run ruff check .
-      - name: Тесты
+      - name: Tests
         run: uv run pytest -q
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel and sdist
+        run: uv build
+      - name: Wheel installs without extras (base deps only)
+        run: |
+          uv venv .venv-smoke
+          uv pip install --python .venv-smoke dist/ironharness-*.whl
+          .venv-smoke/bin/ironbench --version
+          .venv-smoke/bin/python -c "import io_core; print('io_core', io_core.__version__, 'imports ok')"

@@ -127,7 +127,7 @@ def test_read_passthrough():
 
 
 def test_fault_validation():
-    with pytest.raises(ValueError, match="действие"):
+    with pytest.raises(ValueError, match="unknown action"):
         Fault(action="explode")
     with pytest.raises(ValueError, match="probability"):
         Fault(action="drop", probability=2.0)

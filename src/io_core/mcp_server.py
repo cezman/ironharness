@@ -1,11 +1,12 @@
-"""MCP-сервер ironharness: инструменты io-core для агентов (этап 1, задача 7).
+"""ironharness MCP server: io-core tools for agents.
 
-Конвенция MCP-first: агенты работают с I/O только через этот сервер,
-и каждая операция сессии автоматически пишется в журнал.
+MCP-first convention: agents do I/O only through this server, and every
+session operation is journaled automatically.
 
-Конфигурация через окружение:
-    IRONHARNESS_HOME     — база для журнала и песочницы (по умолчанию ~/.ironharness)
-    IRONHARNESS_SANDBOX  — корень файловой песочницы (по умолчанию IRONHARNESS_HOME/sandbox)
+Configuration via environment:
+    IRONHARNESS_HOME     — base for the journal and sandbox (default ~/.ironharness)
+    IRONHARNESS_SANDBOX  — file sandbox root (default IRONHARNESS_HOME/sandbox)
+    IRONHARNESS_ALLOW_REAL_FLASH — set to 1 to allow live esp_flash/esp_erase
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ def get_session() -> Session:
 
 
 def reset_session() -> None:
-    """Сбрасывает сессию (для тестов и смены окружения)."""
+    """Resets the session (for tests and environment switches)."""
     global _session
     if _session is not None:
         _session.close()
@@ -44,35 +45,35 @@ def reset_session() -> None:
 
 @mcp.tool()
 def echo(text: str) -> str:
-    """Возвращает текст обратно. Служебный инструмент для проверки работы MCP."""
+    """Returns the text back. Service tool to verify the MCP setup works."""
     return text
 
 
-# --- serial (бинарные данные — hex-строками, JSON-дружелюбно) ---
+# --- serial (binary data as hex strings, JSON-friendly) ---
 
 
 @mcp.tool()
 def serial_open(name: str, port: str, baudrate: int = 115200, timeout: float = 1.0) -> str:
-    """Открывает именованный serial-порт (COM3, /dev/ttyUSB0, loop:// для теста)."""
+    """Opens a named serial port (COM3, /dev/ttyUSB0, loop:// for tests)."""
     get_session().serial_open(name, port, baudrate=baudrate, timeout=timeout)
     return f"ok: serial {name!r} -> {port}"
 
 
 @mcp.tool()
 def serial_write(name: str, data_hex: str) -> int:
-    """Пишет байты в serial-порт; data_hex — hex-строка (например 48656c6c6f)."""
+    """Writes bytes to the serial port; data_hex is a hex string (e.g. 48656c6c6f)."""
     return get_session().serial_write(name, data_hex)
 
 
 @mcp.tool()
 def serial_read(name: str, size: int = 64) -> str:
-    """Читает до size байт из serial-порта; возвращает hex-строку ("" — таймаут)."""
+    """Reads up to size bytes from the serial port; returns a hex string ("" — timeout)."""
     return get_session().serial_read(name, size)
 
 
 @mcp.tool()
 def serial_read_line(name: str, max_len: int = 256) -> str:
-    """Читает строку до \\n из serial-порта; возвращает hex-строку."""
+    """Reads one \\n-terminated line; returns a hex string."""
     return get_session().serial_read_line(name, max_len)
 
 
@@ -81,22 +82,22 @@ def serial_read_line(name: str, max_len: int = 256) -> str:
 
 @mcp.tool()
 def modbus_open(name: str, host: str, port: int = 502, device_id: int = 1) -> str:
-    """Открывает именованное Modbus TCP-соединение."""
+    """Opens a named Modbus TCP connection."""
     get_session().modbus_open(name, host, port=port, device_id=device_id)
     return f"ok: modbus {name!r} -> {host}:{port}"
 
 
 @mcp.tool()
 def modbus_read(name: str, address: int, count: int = 1) -> list[int]:
-    """Читает count holding-регистров начиная с address."""
+    """Reads count holding registers starting at address."""
     return get_session().modbus_read(name, address, count)
 
 
 @mcp.tool()
 def modbus_write(name: str, address: int, values: list[int]) -> str:
-    """Пишет holding-регистры: один элемент → FC6, несколько → FC16."""
+    """Writes holding registers: one value -> FC6, several -> FC16."""
     get_session().modbus_write(name, address, values)
-    return f"ok: записано {len(values)} регистр(ов) с адреса {address}"
+    return f"ok: wrote {len(values)} register(s) at address {address}"
 
 
 # --- mqtt ---
@@ -104,82 +105,88 @@ def modbus_write(name: str, address: int, values: list[int]) -> str:
 
 @mcp.tool()
 def mqtt_open(name: str, host: str, port: int = 1883, client_id: str = "", timeout: float = 3.0) -> str:
-    """Открывает именованное MQTT-соединение с брокером."""
+    """Opens a named MQTT connection to a broker. Plaintext TCP (no TLS/auth) — for bench use."""
     get_session().mqtt_open(name, host, port=port, client_id=client_id, timeout=timeout)
     return f"ok: mqtt {name!r} -> {host}:{port}"
 
 
 @mcp.tool()
 def mqtt_publish(name: str, topic: str, payload: str, qos: int = 0, retain: bool = False) -> str:
-    """Публикует сообщение в топик (payload — текст)."""
+    """Publishes a message to a topic (payload is text)."""
     get_session().mqtt_publish(name, topic, payload, qos=qos, retain=retain)
-    return f"ok: опубликовано в {topic!r}"
+    return f"ok: published to {topic!r}"
 
 
 @mcp.tool()
 def mqtt_subscribe(name: str, topic: str, qos: int = 0) -> str:
-    """Подписывается на топик (допустимы маски: sensors/#, +/temperature)."""
+    """Subscribes to a topic (wildcards allowed: sensors/#, +/temperature)."""
     get_session().mqtt_subscribe(name, topic, qos=qos)
-    return f"ok: подписка на {topic!r}"
+    return f"ok: subscribed to {topic!r}"
 
 
 @mcp.tool()
 def mqtt_read(name: str, timeout: float = 1.0) -> dict[str, str] | None:
-    """Читает следующее входящее сообщение {"topic", "payload"}; null — таймаут."""
+    """Reads the next incoming message {"topic", "payload"}; null — timeout."""
     return get_session().mqtt_read(name, timeout)
 
 
-# --- esp (прошивка; для flash/erase нужна живая плата) ---
+# --- esp (flashing; needs the [flash] extra and IRONHARNESS_ALLOW_REAL_FLASH=1) ---
 
 
 @mcp.tool()
 def esp_image_info(firmware_path: str, chip: str = "esp32") -> dict:
-    """Разбирает .bin-образ прошивки без железа: entrypoint, сегменты, flash-параметры."""
+    """Parses a .bin firmware image without hardware: entrypoint, segments, flash params."""
     return get_session().esp_image_info(firmware_path)
 
 
 @mcp.tool()
 def esp_flash(port: str, firmware_path: str, addr: int = 0x1000, baud: int = 921600) -> str:
-    """Прошивает образ в плату по указанному порту (классический ESP32: addr=0x1000)."""
+    """Flashes an image to the board on the given port (classic ESP32: addr=0x1000).
+
+    Requires the [flash] extra and IRONHARNESS_ALLOW_REAL_FLASH=1 (modifies real hardware).
+    """
     return get_session().esp_flash(port, firmware_path, addr=addr, baud=baud)
 
 
 @mcp.tool()
 def esp_erase(port: str, baud: int = 921600) -> str:
-    """Стирает всю флеш-память платы (необратимо)."""
+    """Erases the board's entire flash (irreversible).
+
+    Requires the [flash] extra and IRONHARNESS_ALLOW_REAL_FLASH=1 (modifies real hardware).
+    """
     return get_session().esp_erase(port, baud=baud)
 
 
-# --- файлы (песочница) ---
+# --- files (sandboxed) ---
 
 
 @mcp.tool()
 def file_write(path: str, content: str) -> int:
-    """Пишет текстовый файл (utf-8) внутрь песочницы; выход за песочницу запрещён."""
+    """Writes a text file (utf-8) inside the sandbox; escaping the sandbox is denied."""
     return get_session().file_write(path, content)
 
 
 @mcp.tool()
 def file_read(path: str) -> str:
-    """Читает текстовый файл из песочницы."""
+    """Reads a text file from the sandbox."""
     return get_session().file_read(path)
 
 
 @mcp.tool()
 def file_list(path: str = ".") -> list[str]:
-    """Список файлов и каталогов песочницы (относительные пути)."""
+    """Lists files and directories in the sandbox (relative paths)."""
     return get_session().file_list(path)
 
 
 @mcp.tool()
 def file_delete(path: str) -> str:
-    """Удаляет файл из песочницы."""
+    """Deletes a file from the sandbox."""
     get_session().file_delete(path)
-    return f"ok: удалён {path}"
+    return f"ok: deleted {path}"
 
 
 def main() -> None:
-    """Точка входа консольного скрипта ironharness-mcp (и python -m)."""
+    """Entry point of the ironharness-mcp console script (and python -m)."""
     mcp.run()  # stdio
 
 
