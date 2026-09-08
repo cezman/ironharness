@@ -80,5 +80,6 @@ present in the board's serial log.
 | qwen3.5-9b (reasoning) | 1/2 | 1/2 |
 
 Early signal: pass rate is currently driven by the model, not by the
-sim-vs-real switch; the real target costs ~2x wall time per attempt
-(staging + boot pauses). More tasks and attempts needed before any claim.
+sim-vs-real switch; the real target adds ~1.3-2.5x wall time per attempt
+(staging + boot pauses; varies by run). More tasks and attempts needed
+before any claim.
