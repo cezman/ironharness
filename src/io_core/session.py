@@ -1,7 +1,8 @@
-"""Сессия агента: именованные транспорты + песочница + единый журнал (этап 1, задача 7).
+"""Agent session: named transports + sandbox + unified journal.
 
-Единица работы агента: MCP-инструменты оперируют сессией, каждая операция
-автоматически попадает в журнал сессии (конвенция «без лога = не выполнено»).
+The unit of agent work: MCP tools operate on a session, and every operation
+lands in the session journal automatically (the "no log = didn't happen"
+convention).
 """
 
 from __future__ import annotations
@@ -9,12 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from io_core.esp_flash import DEFAULT_BOOTLOADER_OFFSET, EspFlasher
 from io_core.file_sandbox import FileSandbox
 from io_core.journal import JsonlJournal
 from io_core.modbus_transport import ModbusTransport
 from io_core.mqtt_transport import MqttTransport
 from io_core.serial_transport import SerialTransport
+
+DEFAULT_BOOTLOADER_OFFSET = 0x1000  # classic ESP32 (canonical value lives in esp_flash)
 
 
 class Session:
@@ -31,13 +33,13 @@ class Session:
 
     def _check_free(self, name: str) -> None:
         if name in self._transports:
-            raise KeyError(f"транспорт {name!r} уже открыт")
+            raise KeyError(f"transport {name!r} is already open")
 
     def _get(self, name: str) -> Any:
         try:
             return self._transports[name]
         except KeyError:
-            raise KeyError(f"транспорт {name!r} не открыт") from None
+            raise KeyError(f"transport {name!r} is not open") from None
 
     # --- serial ---
 
@@ -113,17 +115,23 @@ class Session:
     def mqtt_read(self, name: str, timeout: float = 1.0) -> dict[str, str] | None:
         return self._get(name).read_message(timeout)
 
-    # --- esp (прошивка через esptool) ---
+    # --- esp (flashing via esptool; needs the [flash] extra) ---
 
     def esp_image_info(self, firmware_path: str, chip: str = "esp32") -> dict[str, Any]:
+        from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
+
         return EspFlasher(chip=chip, on_event=self.journal).image_info(firmware_path)
 
     def esp_flash(
         self, port: str, firmware_path: str, *, addr: int = DEFAULT_BOOTLOADER_OFFSET, baud: int = 921600
     ) -> str:
+        from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
+
         return EspFlasher(on_event=self.journal).flash(port, firmware_path, addr=addr, baud=baud)
 
     def esp_erase(self, port: str, *, baud: int = 921600) -> str:
+        from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
+
         return EspFlasher(on_event=self.journal).erase(port, baud=baud)
 
     # --- файлы (песочница) ---

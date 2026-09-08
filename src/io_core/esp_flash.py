@@ -1,40 +1,70 @@
-"""Инструменты прошивки ESP32 через esptool (план 3.3; офлайн-часть этапа 3).
+"""ESP32 flashing tools backed by esptool.
 
-image_info() разбирает .bin-образ без железа (проверка агентом перед прошивкой);
-flash()/erase() требуют живую плату — в тестах функции esptool подменяются моками.
-Последовательность flash/erase — каноническая для esptool CLI (см. докстринг
-connect_esp): connect на 115200 → run_stub → change_baud → attach_flash → операция.
-Порт закрывается контекст-менеджером ESPLoader даже при ошибке операции.
+image_info() parses a .bin image without hardware (lets an agent inspect an
+image before flashing); flash()/erase() talk to a live board — tests replace
+the esptool functions with fakes. The flash/erase sequence mirrors the
+canonical esptool CLI flow (see connect_esp docs): connect at 115200 ->
+run_stub -> change_baud -> attach_flash -> operation. ESPLoader's context
+manager closes the port even when the operation fails.
 
-Внимание: без платы connect_esp делает 7 попыток синхронизации — вызов
-flash/erase блокируется до ~30 секунд, потом ConnectionError.
+Note: with no board attached connect_esp makes 7 sync attempts — flash/erase
+blocks for up to ~30 seconds, then raises ConnectionError.
 
-Классический ESP32: один образ (MicroPython) шьётся по адресу 0x1000.
-Пути к .bin не ограничены файловой песочницей (образы лежат вне её корня),
-но каждая операция журналируется с полным путём, включая неудачные попытки.
+Classic ESP32: a single image (MicroPython) is flashed at offset 0x1000.
+.bin paths are NOT restricted to the file sandbox (images live outside its
+root), but every operation — including failures — is journaled with the full
+path.
+
+Safety: flash()/erase() modify real hardware and are gated behind the
+IRONHARNESS_ALLOW_REAL_FLASH=1 environment variable (opt-in). image_info()
+is offline and needs no guard. esptool itself is an optional dependency:
+install the `flash` extra (pip install 'ironharness[flash]').
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from esptool.cmds import (
-    CHIP_DEFS,
-    FLASH_MODES,
-    FatalError,
-    LoadFirmwareImage,
-    attach_flash,
-    connect_esp,
-    erase_flash,
-    run_stub,
-    write_flash,
-)
+try:  # esptool is an optional dependency — see the [flash] extra
+    from esptool.cmds import (
+        CHIP_DEFS,
+        FLASH_MODES,
+        FatalError,
+        LoadFirmwareImage,
+        attach_flash,
+        connect_esp,
+        erase_flash,
+        run_stub,
+        write_flash,
+    )
+
+    _ESPTOOL_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised via importorskip in tests
+    _ESPTOOL_AVAILABLE = False
 
 EventHook = Callable[[str, dict[str, Any]], None]
 
-DEFAULT_BOOTLOADER_OFFSET = 0x1000  # классический ESP32
+DEFAULT_BOOTLOADER_OFFSET = 0x1000  # classic ESP32
+ALLOW_REAL_FLASH_ENV = "IRONHARNESS_ALLOW_REAL_FLASH"
+
+
+def _require_esptool() -> None:
+    if not _ESPTOOL_AVAILABLE:
+        raise ImportError(
+            "esptool is not installed — flashing tools need the [flash] extra: "
+            "pip install 'ironharness[flash]'"
+        )
+
+
+def _require_real_flash_allowed() -> None:
+    if os.environ.get(ALLOW_REAL_FLASH_ENV) != "1":
+        raise PermissionError(
+            f"{ALLOW_REAL_FLASH_ENV}=1 is required for live flash/erase — "
+            "these operations modify real hardware"
+        )
 
 
 def _reverse_lookup(table: dict, value: int, fallback: str) -> str:
@@ -50,15 +80,16 @@ class EspFlasher:
         if self._on_event is not None:
             self._on_event(event, data)
 
-    # --- офлайн: разбор образа без платы ---
+    # --- offline: image inspection, no board needed ---
 
     def image_info(self, firmware_path: str | Path) -> dict[str, Any]:
         path = Path(firmware_path)
         if not path.is_file():
-            raise FileNotFoundError(f"образ не найден: {path}")
+            raise FileNotFoundError(f"image not found: {path}")
+        _require_esptool()
         img = LoadFirmwareImage(self._chip, str(path))
         segments = [{"addr": hex(s.addr), "size": len(s.data)} for s in img.segments]
-        # flash_size_freq: старший ниббл — размер, младший — частота; таблицы — в классе таргета
+        # flash_size_freq: high nibble is size, low nibble is frequency; tables live on the target class
         size_nibble = (img.flash_size_freq >> 4) & 0xF
         freq_nibble = img.flash_size_freq & 0xF
         target = CHIP_DEFS[self._chip]
@@ -81,7 +112,7 @@ class EspFlasher:
         self._emit("esp_image_info", info)
         return info
 
-    # --- живая плата ---
+    # --- live board ---
 
     def flash(
         self,
@@ -93,7 +124,9 @@ class EspFlasher:
     ) -> str:
         path = Path(firmware_path)
         if not path.is_file():
-            raise FileNotFoundError(f"образ не найден: {path}")
+            raise FileNotFoundError(f"image not found: {path}")
+        _require_esptool()
+        _require_real_flash_allowed()
         try:
             with connect_esp(port=port, chip=self._chip) as esp:
                 esp = run_stub(esp)
@@ -105,11 +138,13 @@ class EspFlasher:
                 "esp_flash_failed",
                 {"port": port, "addr": addr, "baud": baud, "path": str(path), "error": str(e)},
             )
-            raise ConnectionError(f"esp {port}: не удалось прошить ({e})") from None
+            raise ConnectionError(f"esp {port}: failed to flash ({e})") from None
         self._emit("esp_flash", {"port": port, "addr": addr, "baud": baud, "path": str(path)})
-        return f"ok: {path.name} прошит по 0x{addr:x} ({port})"
+        return f"ok: {path.name} flashed at 0x{addr:x} ({port})"
 
     def erase(self, port: str, *, baud: int = 921600) -> str:
+        _require_esptool()
+        _require_real_flash_allowed()
         try:
             with connect_esp(port=port, chip=self._chip) as esp:
                 esp = run_stub(esp)
@@ -118,6 +153,6 @@ class EspFlasher:
                 erase_flash(esp)
         except (OSError, FatalError) as e:
             self._emit("esp_erase_failed", {"port": port, "baud": baud, "error": str(e)})
-            raise ConnectionError(f"esp {port}: не удалось стереть ({e})") from None
+            raise ConnectionError(f"esp {port}: failed to erase ({e})") from None
         self._emit("esp_erase", {"port": port, "baud": baud})
-        return f"ok: флеш стёрт ({port})"
+        return f"ok: flash erased ({port})"

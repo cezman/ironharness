@@ -38,7 +38,7 @@ class ModbusTransport:
     def open(self) -> None:
         self._client = ModbusTcpClient(self._host, port=self._port, timeout=self._timeout)
         if not self._client.connect():
-            raise ConnectionError(f"не удалось подключиться к {self._host}:{self._port}")
+            raise ConnectionError(f"failed to connect to {self._host}:{self._port}")
         self._emit("modbus_open", {"host": self._host, "port": self._port})
 
     def close(self) -> None:
@@ -55,7 +55,7 @@ class ModbusTransport:
         self.close()
 
     def _require_client(self) -> ModbusTcpClient:
-        assert self._client is not None, "соединение не открыто"
+        assert self._client is not None, "connection is not open"
         return self._client
 
     def _check(self, result: Any, op: str) -> None:

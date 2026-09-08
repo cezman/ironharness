@@ -116,7 +116,7 @@ def test_publish_without_puback_raises():
     t, fake = opened_transport()
     fake.publish_acked = False
     try:
-        with pytest.raises(OSError, match="подтверждения"):
+        with pytest.raises(OSError, match="not acknowledged"):
             t.publish("t", "x")
     finally:
         t.close()
@@ -126,7 +126,7 @@ def test_subscribe_rejected_by_broker_raises():
     t, fake = opened_transport()
     fake.suback_codes = [reason(135)]  # Not authorized
     try:
-        with pytest.raises(OSError, match="отказал"):
+        with pytest.raises(OSError, match="refused"):
             t.subscribe("secret/#")
     finally:
         t.close()
@@ -190,7 +190,7 @@ def test_open_silent_broker_raises_connection_error():
     fake = FakeClient()
     fake.silent_open = True
     t = MqttTransport("broker.test", timeout=0.2, client_factory=lambda: fake)
-    with pytest.raises(ConnectionError, match="mqtt-брокеру"):
+    with pytest.raises(ConnectionError, match="mqtt broker"):
         t.open()
     assert t._client is None
 
@@ -199,7 +199,7 @@ def test_open_connack_failure_raises_connection_error():
     fake = FakeClient()
     fake.connack_rc = reason(134)  # Bad user name or password
     t = MqttTransport("broker.test", timeout=0.5, client_factory=lambda: fake)
-    with pytest.raises(ConnectionError, match="mqtt-брокеру"):
+    with pytest.raises(ConnectionError, match="mqtt broker"):
         t.open()
     assert t._client is None
 
@@ -251,7 +251,7 @@ def test_subscribe_error_rc_raises():
 
 def test_operation_before_open_raises():
     t = MqttTransport("broker.test", client_factory=FakeClient)
-    with pytest.raises(AssertionError, match="не открыто"):
+    with pytest.raises(AssertionError, match="not open"):
         t.publish("t", "x")
 
 

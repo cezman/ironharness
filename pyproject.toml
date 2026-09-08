@@ -1,7 +1,7 @@
 [project]
 name = "ironharness"
-version = "0.3.0"
-description = "io-core — безопасный I/O-слой для агентов (MCP); ironbench — бенчмарк для firmware-агентов"
+version = "0.3.1"
+description = "io-core — a safe I/O layer for LLM agents (MCP server); ironbench — a benchmark for firmware agents"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -16,13 +16,15 @@ classifiers = [
 ]
 
 dependencies = [
-    "esptool>=5",
     "mcp>=1.2.0",
     "paho-mqtt>=2.0",
     "pymodbus>=3.7",
     "pyserial>=3.5",
     "pyyaml>=6.0.3",
 ]
+
+[project.optional-dependencies]
+flash = ["esptool>=5"]  # GPLv2+ dependency kept out of the MIT core
 
 [project.urls]
 Repository = "https://github.com/cezman/ironharness"

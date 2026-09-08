@@ -38,7 +38,7 @@ def _read_exact(sock: socket.socket, n: int) -> bytes:
     while len(buf) < n:
         chunk = sock.recv(n - len(buf))
         if not chunk:
-            raise ConnectionError("клиент отключился")
+            raise ConnectionError("client disconnected")
         buf.extend(chunk)
     return bytes(buf)
 
@@ -53,7 +53,7 @@ def _read_varint(sock: socket.socket) -> int:
         if not byte & 0x80:
             return value
         multiplier *= 128
-    raise ValueError("некорректный Remaining Length (больше 4 байт)")
+    raise ValueError("invalid Remaining Length (more than 4 bytes)")
 
 
 def _encode_packet(type_flags: int, body: bytes) -> bytes:

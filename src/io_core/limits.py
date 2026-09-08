@@ -75,9 +75,9 @@ class DeadlineTransport:
         self._started: float | None = None
 
     def _check(self) -> None:
-        assert self._started is not None, "транспорт не открыт"
+        assert self._started is not None, "transport is not open"
         if self._clock() - self._started > self._seconds:
-            raise OperationTimeout(f"дедлайн {self._seconds}s истёк")
+            raise OperationTimeout(f"deadline of {self._seconds}s expired")
 
     def open(self) -> None:
         self._t.open()

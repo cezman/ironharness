@@ -1,73 +1,97 @@
 # ironharness
 
-> harness — «упряжь»: впрягаем LLM-агентов в железо.
+[English](README.md) | [Русский](README.ru.md)
 
-Агентский харнесс для I/O и прошивок. Два модуля:
+> harness — «упряжь»: we harness LLM agents to hardware.
 
-- **io-core** — безопасный I/O-слой для агентов: транспорты (serial, Modbus TCP, MQTT,
-  файловая песочница), симулятор Modbus, инструменты прошивки ESP32 (esptool: разбор образа
-  офлайн, flash/erase на живой плате), JSONL-журнал всех операций, реплеер, лимиты
-  (rate-limit, дедлайны), верификация эффектов (`expect_read`), MCP-сервер (19 инструментов).
-- **ironbench** — бенчмарк для firmware-агентов: золотые задачи в симуляторах
-  (Wokwi ESP32/MicroPython, далее Renode), агентский цикл поверх LLM API, отчёты pass@k.
+An agent harness for I/O and firmware. Two modules:
 
-## Быстрый старт
+- **io-core** — a safe I/O layer for agents: transports (serial, Modbus TCP, MQTT,
+  file sandbox), a Modbus simulator, ESP32 flashing tools (esptool: offline image
+  inspection, flash/erase on a live board), a JSONL journal of every operation, a
+  replayer, limits (rate limit, deadlines), effect verification (`expect_read`), and
+  an MCP server (19 tools).
+- **ironbench** — a benchmark for firmware agents: golden tasks in simulators
+  (Wokwi ESP32/MicroPython, plus Renode), an agent loop over any LLM API, pass@k reports.
+
+## Quick start
 
 ```bash
-uv sync                              # зависимости (+ сам проект editable)
-uv run pytest                        # тесты (без железа: loop:// и симуляторы)
-uv run ruff check .                  # линтер
-uv run ironharness-mcp               # MCP-сервер (stdio; или: python -m io_core.mcp_server)
+uvx ironharness-mcp                  # run the MCP server (no install)
 ```
 
-## Инструменты агента (MCP)
+From source:
+
+```bash
+uv sync                              # dependencies (+ the project itself, editable)
+uv sync --extra flash                # + esptool (GPLv2+, kept out of the MIT core)
+uv run pytest                        # tests (no hardware: loop:// and simulators)
+uv run ruff check .                  # linter
+uv run ironharness-mcp               # MCP server (stdio; or: python -m io_core.mcp_server)
+```
+
+## Agent tools (MCP)
 
 `echo` · `serial_open/write/read/read_line` · `modbus_open/read/write` ·
 `mqtt_open/publish/subscribe/read` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
 
-Все операции автоматически пишутся в JSONL-журнал (`$IRONHARNESS_HOME/journal.jsonl`,
-по умолчанию `~/.ironharness/`); файловые операции изолированы песочницей
-(`$IRONHARNESS_SANDBOX`, по умолчанию `~/.ironharness/sandbox`).
+Every operation is journaled to JSONL (`$IRONHARNESS_HOME/journal.jsonl`,
+default `~/.ironharness/`); file operations are confined by the sandbox
+(`$IRONHARNESS_SANDBOX`, default `~/.ironharness/sandbox`).
 
-## Подключение внешнего агента
+## Connecting an external agent
 
-Любой MCP-совместимый агент (Claude Code, Codex, Cursor, OpenCode…) получает все
-инструменты io-core одной записью в конфиг — свой цикл агент приносит с собой,
-ironharness даёт «руки»: транспорты, песочницу, журнал, верификацию.
+Any MCP-compatible agent (Claude Code, Codex, Cursor, OpenCode…) gets all io-core
+tools with one config entry — the agent brings its own loop, ironharness provides
+the hands: transports, sandbox, journal, verification.
 
 ```json
 {
   "mcpServers": {
     "ironharness": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/ironharness", "ironharness-mcp"]
+      "command": "uvx",
+      "args": ["ironharness-mcp"]
     }
   }
 }
 ```
 
-После публикации пакета на PyPI то же самое одной строкой: `"command": "uvx", "args": ["ironharness-mcp"]`.
+For unreliable-line testing there is `io_core.faults.FaultyTransport` — scripted
+failures (disconnect, delay, bit corruption, byte loss) over any transport — and
+`io_core.mqtt_sim.MqttSimBroker`, a minimal MQTT broker for offline runs.
 
-Для испытаний на ненадёжных линиях есть `io_core.faults.FaultyTransport` — сценарные
-сбои (обрыв, задержка, порча и потеря байтов) поверх любого транспорта, и
-`io_core.mqtt_sim.MqttSimBroker` — мини-брокер MQTT (подмножество) для офлайн-прогонов.
-
-## ironbench — бенчмарк firmware-агентов
+## ironbench — a benchmark for firmware agents
 
 ```bash
-uv run ironbench list                              # каталог золотых задач
-uv run ironbench run --all                         # эталонные прогоны (нужен WOKWI_CLI_TOKEN)
-uv run ironbench solve --task blink --attempts 3   # LLM-агент решает задачу
+uv run ironbench list                              # catalog of golden tasks
+uv run ironbench run --all                         # reference runs (needs WOKWI_CLI_TOKEN)
+uv run ironbench solve --task blink --attempts 3   # an LLM agent solves a task
 uv run ironbench report                            # pass@k: report.json + report.html
 ```
 
-Задачи — ESP32/MicroPython в Wokwi (headless `wokwi-cli`), Renode, MicroPython unix-port
-(бесплатные локальные прогоны) и plant-мишень (замкнутая петля «объект + регулятор» в
-Python, оценка по метрикам переходной характеристики: p-regulator, pid-antiwindup,
-system-id). У каждой задачи класс (io/data/protocol/fsm/control/resilience) и уровень
-1–5; `ironbench report` показывает профиль модели по классам, а не одно число.
-LLM-конфиг — переменные окружения: `LLM_BASE_URL` (по умолчанию локальный LM Studio),
-`LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT`.
+Tasks run on ESP32/MicroPython in Wokwi (headless `wokwi-cli`), Renode, the
+MicroPython unix port (free local runs), and a plant target (a closed-loop
+«object + controller» simulation scored on step-response metrics: p-regulator,
+pid-antiwindup, system-id). Every task has a class (io/data/protocol/fsm/control/
+resilience) and a level 1–5; `ironbench report` shows a model's profile across
+classes, not a single number. LLM config — environment variables: `LLM_BASE_URL`
+(default: local LM Studio), `LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT`.
 
-Статус: MVP в активной разработке. Примеры результатов — в `reports/`: зафиксированные
-прогоны бенчмарка (JSON + HTML, отчёт открывается в браузере).
+## Safety / intended use
+
+- This is a **bench tool for developing and testing agents, not production
+  middleware**. It is designed to be run locally against simulators and your own
+  dev hardware.
+- **MQTT transport is plaintext TCP** — no TLS, no authentication. Do not point it
+  at production brokers or untrusted networks.
+- **esp_flash/esp_erase modify real hardware** and are gated behind
+  `IRONHARNESS_ALLOW_REAL_FLASH=1` (opt-in). erasing flash is irreversible
+  (ESP32 recovers by reflashing, but data is gone). esptool is an optional
+  dependency: `pip install 'ironharness[flash]'`.
+- Transports are not restricted to specific hosts/ports by design — the operator
+  (you) decides what the agent may reach; every operation is journaled for audit.
+
+## Status
+
+MVP under active development. Example benchmark results live in [`reports/`](reports/)
+— recorded runs (JSON + HTML, open in a browser).
