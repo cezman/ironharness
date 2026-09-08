@@ -1,6 +1,6 @@
 [project]
 name = "ironharness"
-version = "0.3.1"
+version = "0.3.2"
 description = "io-core — a safe I/O layer for LLM agents (MCP server); ironbench — a benchmark for firmware agents"
 readme = "README.md"
 requires-python = ">=3.12"
