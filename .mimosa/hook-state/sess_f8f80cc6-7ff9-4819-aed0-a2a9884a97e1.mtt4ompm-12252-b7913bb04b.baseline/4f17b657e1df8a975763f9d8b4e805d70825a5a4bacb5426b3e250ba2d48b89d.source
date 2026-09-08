@@ -1,0 +1,51 @@
+import machine
+import time
+
+# GPIO настройки для ESP32 (адаптируйте под вашу схему)
+PIN_RED = 15
+PIN_GREEN = 4
+PIN_YELLOW = 26
+
+def main():
+    # Инициализация светодиодов как выходов
+    red_led = machine.Pin(PIN_RED, machine.Pin.OUT)
+    green_led = machine.Pin(PIN_GREEN, machine.Pin.OUT)
+    yellow_led = machine.Pin(PIN_YELLOW, machine.Pin.OUT)
+    
+    # Сброс всех светодиодов в начальное состояние
+    red_led.off()
+    green_led.off()
+    yellow_led.off()
+    
+    current_state = "red"
+    states = ["red", "green", "yellow"]
+    
+    while True:
+        index = states.index(current_state)
+        
+        # Включение правильного светодиода для текущего состояния
+        if current_state == "red":
+            red_led.on()
+            green_led.off()
+            yellow_led.off()
+        elif current_state == "green":
+            red_led.off()
+            green_led.on()
+            yellow_led.off()
+        elif current_state == "yellow":
+            red_led.off()
+            green_led.off()
+            yellow_led.on()
+        
+        # Печать состояния в формате "state: <имя>"
+        print(f"state: {current_state}")
+        
+        # Задержка по времени для каждого состояния
+        durations = {"red": 3.0, "green": 3.0, "yellow": 1.0}
+        time.sleep(durations[current_state])
+        
+        # Переход к следующему состоянию циклично
+        current_state = states[(index + 1) % len(states)]
+
+if __name__ == "__main__":
+    main()

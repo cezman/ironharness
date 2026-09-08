@@ -1,0 +1,48 @@
+import machine
+import time
+
+# Настройка GPIO выходов (пример для ESP32 DevKit V1)
+# Измените значения под вашу схему подключения светодиодов
+PIN_RED = 15       # Красный светодиод
+PIN_GREEN = 4      # Зеленый светодиод
+PIN_YELLOW = 26    # Желтый светодиод
+
+def main():
+    # Инициализация пинов как выходов
+    red_led = machine.Pin(PIN_RED, machine.Pin.OUT)
+    green_led = machine.Pin(PIN_GREEN, machine.Pin.OUT)
+    yellow_led = machine.Pin(PIN_YELLOW, machine.Pin.OUT)
+    
+    # Начальное состояние машины состояний
+    state = "red"
+
+    while True:
+        if state == "red":
+            print("state: red")
+            # Состояние Red (3 секунды)
+            red_led.value(1)  # Включить красный
+            green_led.value(0)
+            yellow_led.value(0)
+            time.sleep(3.0)   # Задержка
+            state = "green"
+
+        elif state == "green":
+            print("state: green")
+            # Состояние Green (3 секунды)
+            red_led.value(0)  # Выключить красный
+            green_led.value(1)  # Включить зеленый
+            yellow_led.value(0)
+            time.sleep(3.0)   # Задержка
+            state = "yellow"
+
+        elif state == "yellow":
+            print("state: yellow")
+            # Состояние Yellow (1 секунда)
+            red_led.value(0)  # Выключить красный
+            green_led.value(0)
+            yellow_led.value(1)  # Включить желтый
+            time.sleep(1.0)   # Задержка
+            state = "red"
+
+if __name__ == "__main__":
+    main()

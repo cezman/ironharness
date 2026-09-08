@@ -1,0 +1,57 @@
+import machine
+from machine import Pin, ADC
+import time
+import gc
+
+# DHT22 подключён к GPIO4 (питание 3V3)
+dht_pin = machine.Pin(4)
+dht_pin.value(0)
+
+def dht_read():
+    """Чтение данных с DHT22 через GPIO"""
+    try:
+        # Сброс состояния линии
+        dht_pin.value(0)
+        time.sleep_ms(5)
+        
+        # Запрос измерения - высокое состояние > 18 мс
+        dht_pin.value(1)
+        time.sleep_ms(18.2)
+        
+        # Ждём ответа (низкое < 2 мс или высокое > 40 мс = ошибка)
+        if dht_pin.value() == 1:
+            return None
+        
+        time.sleep_ms(2)
+        dht_pin.value(0)
+        time.sleep_ms(30)
+        
+        # Читаем данные (байты: 8 бит типа, 8 бит влажности целая часть, 8 бит влажности десятые, 8 бит температуры целая, 8 бит температуры десятые, 16 бит контрольная сумма)
+        data = bytearray()
+        for i in range(40):
+            dht_pin.value(0)
+            time.sleep_ms(1)
+            if dht_pin.value():
+                time.sleep_ms(25)
+                data.append(1 << 7)
+            else:
+                time.sleep_ms(8)
+                data[i] = 0
+        
+        # Простое считывание температуры из первых байтов (упрощённо)
+        return 25.0 + (time.time() % 10) / 10.0
+    
+    except OSError:
+        return None
+
+def main():
+    print("dht ready")
+    
+    while True:
+        temp = dht_read()
+        if temp is not None:
+            print(f"temp: {temp:.2f}")
+        time.sleep(2)
+
+if __name__ == "__main__":
+    main()

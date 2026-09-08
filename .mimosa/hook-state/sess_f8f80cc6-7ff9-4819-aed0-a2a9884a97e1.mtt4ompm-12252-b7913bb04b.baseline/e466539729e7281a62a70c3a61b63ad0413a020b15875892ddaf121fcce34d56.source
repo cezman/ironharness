@@ -1,0 +1,32 @@
+import machine
+
+# Инициализация светодиодов на GPIO 2
+led = machine.Pin(2, machine.Pin.OUT)
+
+# Настройка порта Serial (UART0), частота 9600 бод
+uart = machine.UART(0, baudrate=9600)
+
+print("proto v1")
+
+state = "off"
+
+while True:
+    line = uart.readline()
+    if not line or len(line) == 0:
+        continue
+    
+    cmd = line.decode().strip()
+    
+    if cmd == "led on":
+        led.on()
+        state = "on"
+        print("OK")
+    elif cmd == "led off":
+        led.off()
+        state = "off"
+        print("OK")
+    elif cmd == "state?":
+        print(f"state: {state}")
+    elif cmd:
+        # Любая непустая строка, не совпадающая с командами выше
+        print("ERR unknown")
