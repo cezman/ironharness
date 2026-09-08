@@ -1,0 +1,42 @@
+import machine
+
+# Инициализация последовательного порта UART0 со скоростью 115200 бод
+uart = machine.UART(0, baudrate=115200)
+
+# Настройка GPIO2 для управления светодиодом (вывод)
+led_pin = 2
+led = machine.Pin(led_pin, machine.Pin.OUT)
+
+# Переменная состояния: False - выкл, True - вкл
+state_led = False
+
+# Вывод сообщения при старте системы
+print("proto v1")
+
+# Основной цикл обработки протокола
+while True:
+    # Чтение строки из порта (блокирует до получения данных)
+    line_bytes = uart.readline()
+    
+    if not line_bytes:
+        continue
+    
+    # Декодирование байтов в строку и удаление пробелов/переносов строк
+    command = line_bytes.decode().strip()
+    
+    if command == "led on":
+        led.value(1)      # Включаем светодиод
+        state_led = True  # Обновляем состояние
+        print("OK")       # Ответ сервера
+        
+    elif command == "led off":
+        led.value(0)      # Выключаем светодиод
+        state_led = False # Обновляем состояние
+        print("OK")       # Ответ сервера
+        
+    elif command == "state?":
+        status_str = "on" if state_led else "off"
+        print(f"state: {status_str}")  # Возврат текущего состояния
+        
+    elif command:  # Любая непустая строка, не совпадающая с известными командами
+        print("ERR unknown")  # Ошибка для неизвестной команды

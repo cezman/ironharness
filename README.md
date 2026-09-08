@@ -99,7 +99,8 @@ classes, not a single number. LLM config — environment variables: `LLM_BASE_UR
   `host` or `host:port` entries) to restrict Modbus/MQTT connections to the
   listed hosts — anything else is denied with `PolicyViolation` before a
   connection is attempted (`broker.lan:1883` matches that exact port, a bare
-  `broker.lan` matches any port). Set `IRONHARNESS_ENABLED_KINDS` (comma list of
+  `broker.lan` matches any port). Hosts match as exact strings (no DNS
+  resolution; IPv6 entries are not supported yet). Set `IRONHARNESS_ENABLED_KINDS` (comma list of
   `serial,modbus,mqtt,esp,file`) to disable whole transport kinds — disabled
   open/esp/file operations fail fast. Unset variables keep the allow-everything
   default, and every denial is journaled as a `policy_violation` event.

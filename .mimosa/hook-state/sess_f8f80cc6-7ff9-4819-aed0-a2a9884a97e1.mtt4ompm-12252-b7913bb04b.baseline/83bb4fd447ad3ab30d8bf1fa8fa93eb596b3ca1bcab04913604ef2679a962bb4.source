@@ -1,0 +1,15 @@
+import machine
+import time
+import dht
+
+sensor = dht.DHT22(machine.Pin(4))
+print("dht ready")
+
+while True:
+    try:
+        temperature, humidity = dht.read(sensor)
+        print(f"temp: {temperature}")
+    except OSError:
+        pass
+    
+    time.sleep(2)

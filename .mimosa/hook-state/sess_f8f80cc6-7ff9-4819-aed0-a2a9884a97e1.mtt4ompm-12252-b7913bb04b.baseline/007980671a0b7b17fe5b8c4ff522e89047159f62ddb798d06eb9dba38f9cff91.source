@@ -1,0 +1,10 @@
+import sys
+
+print("echo ready")
+
+while True:
+    try:
+        line = input()
+        print(f"echo: {line}")
+    except EOFError:
+        pass

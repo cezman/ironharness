@@ -1,0 +1,57 @@
+import machine
+from machine import Pin, UART
+
+# Настройка последовательного порта для ESP32
+try:
+    uart = UART(0, 115200)
+except OSError:
+    # Пытаемся использовать UART1 если UART0 недоступен
+    from machine import UART as Uart
+    try:
+        uart = Uart(1, baudrate=115200, tx=17, rx=16)
+    except Exception:
+        print("Ошибка инициализации UART")
+        raise
+
+# Настройка GPIO для светодиодов
+led_pin = 2
+led = Pin(led_pin, mode=Pin.OUT, value=False)
+
+# Переменная состояния
+state_led = False
+
+# Вывод сообщения при старте системы
+print("proto v1")
+
+# Основной цикл обработки протокола
+while True:
+    try:
+        # Чтение строки из порта (блокирует до получения данных)
+        line_bytes = uart.readline()
+        
+        if not line_bytes or len(line_bytes) == 0:
+            continue
+        
+        # Декодирование байтов в строку и удаление пробелов/переносов строк
+        command = line_bytes.decode().strip()
+        
+        # Обработка команд
+        if command == "led on":
+            led.value(1)      # Включаем светодиод
+            state_led = True  # Обновляем состояние
+            print("OK")       # Ответ сервера
+        
+        elif command == "led off":
+            led.value(0)      # Выключаем светодиод
+            state_led = False # Обновляем состояние
+            print("OK")       # Ответ сервера
+        
+        elif command == "state?":
+            status_str = "on" if state_led else "off"
+            print(f"state: {status_str}")  # Возврат текущего состояния
+        
+        elif command:  # Любая непустая строка, не совпадающая с известными командами
+            print("ERR unknown")  # Ошибка для неизвестной команды
+            
+    except Exception as e:
+        print(f"Error: {e}")

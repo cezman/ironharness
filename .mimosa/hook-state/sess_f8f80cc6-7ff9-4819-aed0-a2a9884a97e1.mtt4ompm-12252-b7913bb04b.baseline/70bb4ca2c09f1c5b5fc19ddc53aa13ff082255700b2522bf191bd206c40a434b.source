@@ -1,0 +1,14 @@
+import sys
+
+# Print startup message immediately to serial console
+print("echo ready", flush=True)
+
+while True:
+    try:
+        # Read a line from serial input (stdin)
+        line = input()
+        # Echo response with prefix
+        print(f"echo: {line}")
+    except (EOFError, KeyboardInterrupt):
+        # Handle disconnect or interrupt without terminating the program loop
+        continue
