@@ -1,13 +1,13 @@
-# Класс «данные»: АЦП + линейная шкала. ЖИВАЯ ВЕРИФИКАЦИЯ ОТЛОЖЕНА (квота Wokwi,
-# 2026-09-07): проверить при живом прогоне, что set-control потенциометра зовётся
-# 'position' и литерал 'mv: 0' уникален в логе (это последний wait-serial).
+# Data class: ADC + linear scale. LIVE VERIFICATION POSTPONED (Wokwi quota,
+# 2026-09-07): at a live run check that the potentiometer set-control is called
+# 'position' and the literal 'mv: 0' is unique in the log (it is the last wait-serial).
 name: adc-read
 description: >-
-  Потенциометр подключен к GPIO34 (вход АЦП ADC1). Прошивка настраивает полный
-  диапазон входа (ослабление 11 дБ, ~3.3 В) и в бесконечном цикле раз в 0.3
-  секунды читает АЦП и печатает напряжение в милливольтах строкой "mv: <целое>".
-  Шкала линейная по опорным точкам: raw 0 → 0 мВ, raw 4095 → 3300 мВ
-  (пересчёт raw * 3300 // 4095).
+  A potentiometer is connected to GPIO34 (an ADC1 input). The firmware configures
+  the full input range (11 dB attenuation, ~3.3 V) and in an infinite loop reads
+  the ADC every 0.3 seconds, printing the voltage in millivolts as "mv: <integer>".
+  The scale is linear over the reference points: raw 0 -> 0 mV, raw 4095 ->
+  3300 mV (conversion raw * 3300 // 4095).
 entry: solution.py
 timeout_sec: 30
 tags: [data]
@@ -19,7 +19,7 @@ expect:
 fail:
   - 'Traceback'
 stimulus:
-  # первый delay — прогрев: прошивка должна дойти до цикла опроса
+  # the first delay is a warm-up: the firmware must reach the polling loop
   - delay: 1500ms
   - set-control: {part-id: pot1, control: position, value: 100}
   - delay: 900ms

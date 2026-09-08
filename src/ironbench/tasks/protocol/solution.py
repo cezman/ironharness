@@ -1,8 +1,8 @@
 from machine import Pin
 
-# Командный протокол по serial: "led on"/"led off" -> "OK", "state?" -> "state: on|off",
-# любая другая строка -> "ERR unknown". Светодиод на GPIO2 отражает состояние.
-# Баннеры склеены из частей: эхо вставленного исходника не должно совпадать с expect.
+# A command protocol over serial: "led on"/"led off" -> "OK", "state?" -> "state: on|off",
+# any other line -> "ERR unknown". The LED on GPIO2 mirrors the state.
+# The banners are glued from parts: the echo of the pasted source must not match expect.
 led = Pin(2, Pin.OUT)
 state = False
 print("proto " + "v1")

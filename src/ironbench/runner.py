@@ -1,36 +1,38 @@
-"""Раннер задач ironbench: мишени wokwi (облако), renode (WSL2), unix (локально),
-plant (Python-петля) и real (живая плата, REPL поверх SerialTransport — см. realhw.py).
-serial-лог → оценка по паттернам.
+"""ironbench task runner: targets wokwi (cloud), renode (WSL2), unix (local),
+plant (a pure-Python loop) and real (a live board, REPL over SerialTransport -
+see realhw.py). serial log -> pattern scoring.
 
-Оценка принадлежит раннеру (не сценарию Wokwi): после каждого запуска serial-лог
-перепроверяется на expect/fail-паттерны из task.yaml.
+Scoring belongs to the runner (not the Wokwi scenario): after every run the
+serial log is re-checked against the expect/fail patterns from task.yaml.
 
-MicroPython в wokwi-cli не автозапускает main.py (голая прошивка + REPL), поэтому
-если у задачи нет статического scenario, раннер генерирует REPL-paste сценарий:
-ждёт приглашения '>>>', вставляет код entry-файла в raw-paste режиме (Ctrl+E/Ctrl+D)
-и ждёт ожидаемые строки. У золотых задач entry — solution.py (эталон); main.py —
-файл, который в бенчмарке пишет агент.
+MicroPython under wokwi-cli does not auto-run main.py (bare firmware + REPL),
+so when a task has no static scenario the runner generates a REPL-paste
+scenario: wait for the '>>>' prompt, paste the entry file code in raw-paste
+mode (Ctrl+E/Ctrl+D) and wait for the expected lines. For golden tasks the
+entry is solution.py (the reference); main.py is the file the benchmark agent
+writes.
 
-Выход wokwi-cli: 0 — сценарий завершился, 42 — сработал --timeout. Для прошивки с
-бесконечным циклом 42 — норма, поэтому успешными считаются оба кода при полном
-совпадении паттернов. Прогоны журналируются через io_core.JsonlJournal.
+wokwi-cli exit codes: 0 - the scenario finished, 42 - the --timeout fired.
+For firmware with an infinite loop 42 is normal, so both codes count as
+success when all patterns match. Runs are journaled via io_core.JsonlJournal.
 
-Мишень renode: MicroPython крутится в Renode под WSL2 (litex_vexriscv, ELF см.
-tasks/_firmware). UART подключается к TCP-терминалу Renode; раннер сам говорит
-по сокету тот же REPL-протокол (nudge → Ctrl+E paste-mode → код → Ctrl+D →
-stimulus) и пишет serial-лог. Задачи объявляют мишень секцией renode в task.yaml
-(platform/firmware/uart). Из Windows порт Renode доступен напрямую
-(localhost-forwarding WSL2). Файлы стейджа уходят в WSL tar-потоком через stdin,
-потому что drvfs-автомонтирование в дистрибутиве выключено.
+Renode target: MicroPython runs in Renode under WSL2 (litex_vexriscv, the ELF
+lives in tasks/_firmware). The UART is attached to a Renode TCP terminal; the
+runner itself speaks the same REPL protocol over the socket (nudge -> Ctrl+E
+paste mode -> code -> Ctrl+D -> stimulus) and writes the serial log. Tasks
+declare the target with the renode section in task.yaml
+(platform/firmware/uart). From Windows the Renode port is reachable directly
+(WSL2 localhost-forwarding). Stage files travel into WSL as a tar stream over
+stdin, because drvfs automounting is disabled in the distro.
 
-Ограничение закреплённого litex-ELF (v1.11, 2019): куча ~2 КБ, нет machine/time/
-input/sys.stdin — под ним идут только задачи «печать без ввода». Задачи с GPIO
-остаются на wokwi; свежая сборка MicroPython для litex — в бэклоге (PLAN.md).
+Limitation of the pinned litex-ELF (v1.11, 2019): ~2 KB heap, no machine/time/
+input/sys.stdin - only "print without input" tasks run under it. GPIO tasks
+stay on wokwi; a fresh MicroPython build for litex is in the backlog (PLAN.md).
 
-Мишень plant (см. ironbench/plant.py): закрытая петля «объект первого порядка +
-регулятор» целиком в Python, без симуляторов и WSL. Контроллер (entry) воркер
-исполняет в отдельном процессе; оценка — метрики переходной характеристики из
-task.yaml (missed = невыполненные требования человекочитаемыми строками).
+Plant target (see ironbench/plant.py): a closed "first-order plant +
+controller" loop entirely in Python, no simulators or WSL. The worker runs the
+controller (entry) in a separate process; scoring uses the step-response
+metrics from task.yaml (missed = unmet requirements as human-readable strings).
 """
 
 from __future__ import annotations
@@ -59,39 +61,40 @@ from io_core.serial_transport import SerialTransport
 from ironbench.realhw import RealRepl
 from ironbench.tasks import Task
 
-# Коды возврата wokwi-cli: сработавший --timeout (42) для бесконечных прошивок — норма
+# wokwi-cli exit codes: a fired --timeout (42) is normal for infinite firmware
 WOKWI_TIMEOUT_EXIT = 42
 OK_EXIT_CODES = (0, WOKWI_TIMEOUT_EXIT)
 
-# Запас настенного времени поверх симуляционного лимита (старт симуляции в облаке).
-# Модульная константа — тесты подменяют её, чтобы не ждать по-настоящему.
+# Wall-clock headroom on top of the sim timeout (cloud simulation
+# startup). Module constant - tests patch it to avoid really waiting.
 WALL_GRACE_SEC = 15
 
-# Приглашение REPL MicroPython, по которому понимаем, что устройство готово к вставке
+# MicroPython REPL prompt telling us the device is ready for pasting
 REPL_PROMPT = ">>>"
 
-# Общий каталог закреплённых прошивок: в каталоге задачи бин не дублируем,
-# раннер докладывает его в стейдж по ссылкам elf/firmware из wokwi.toml
+# Shared directory of pinned firmware: do not duplicate a bin into the task
+# directory; the runner stages it per the elf/firmware links in wokwi.toml
 FIRMWARE_DIR = Path(__file__).resolve().parent / "tasks" / "_firmware"
 
-# --- мишень renode ---
+# --- renode target ---
 
-# Порт socket-терминала по умолчанию: в WSL-режиме это лишь заполнитель в .resc —
-# конвейер подставляет свободный порт (RENODE_PORT=...) и раннер подключается к нему;
-# в тестовом режиме (инъекция команды) порт берётся из IRONBENCH_RENODE_PORT
+# Default socket-terminal port: in WSL mode it is only a placeholder in
+# the .resc - the pipeline substitutes a free port (RENODE_PORT=...) and the
+# runner connects to it; in test mode (command injection) the port comes
+# from IRONBENCH_RENODE_PORT
 RENODE_PORT = 3456
 
-# Дедлайны стен часов: старт Renode+Mono занимает секунды, paste-mode отвечает сразу.
-# Модульные константы — тесты подменяют их, чтобы не ждать по-настоящему.
+# Wall-clock deadlines: Renode+Mono startup takes seconds, paste mode answers
+# at once. Module constants - tests patch them to avoid really waiting.
 RENODE_CONNECT_SEC = 20
 RENODE_STEP_SEC = 10
 
-# Куда в WSL2 складывается стейдж задачи (внутри дистрибутива drvfs выключен)
+# Where the task stage lands in WSL2 (drvfs automount is disabled in the distro)
 RENODE_REMOTE_ROOT = "$HOME/ironharness-runs"
 
 
 def load_env_file(path: Path) -> dict[str, str]:
-    """Разбирает .env: KEY=VALUE / export KEY=VALUE / $env:KEY='VALUE' (стиль владельца)."""
+    """Parses .env: KEY=VALUE / export KEY=VALUE / $env:KEY='VALUE' (owner's style)."""
     env: dict[str, str] = {}
     if not path.is_file():
         return env
@@ -113,13 +116,13 @@ def load_env_file(path: Path) -> dict[str, str]:
 
 
 def find_env_file() -> Path | None:
-    """Первый существующий .env: в cwd или в корне репозитория (два уровня выше src/)."""
+    """First existing .env: in cwd or at the repository root (two levels above src/)."""
     candidates = [Path.cwd() / ".env", Path(__file__).resolve().parents[2] / ".env"]
     return next((p for p in candidates if p.is_file()), None)
 
 
 def resolve_token(explicit: str | None = None) -> str | None:
-    """Токен Wokwi: явный аргумент > переменная окружения WOKWI_CLI_TOKEN > .env."""
+    """Wokwi token: explicit argument > WOKWI_CLI_TOKEN env var > .env."""
     if explicit:
         return explicit
     if os.environ.get("WOKWI_CLI_TOKEN"):
@@ -131,7 +134,7 @@ def resolve_token(explicit: str | None = None) -> str | None:
 
 
 def default_cli() -> str:
-    """Путь к wokwi-cli: в PATH или стандартное место установщика (~/.wokwi/bin)."""
+    """wokwi-cli path: on PATH or the installer default location (~/.wokwi/bin)."""
     found = shutil.which("wokwi-cli")
     if found:
         return found
@@ -141,23 +144,23 @@ def default_cli() -> str:
 
 
 def _plain_text(pattern: str) -> str | None:
-    """Паттерн без regex-метасимволов годится для wait-serial (досрочное завершение)."""
+    """A pattern without regex metacharacters also works as wait-serial (early finish)."""
     return pattern if not re.search(r"[\\^$.|?*+()\[\]{}]", pattern) else None
 
 
 def generate_paste_scenario(task: Task) -> str:
-    """YAML сценария: вставить код entry-файла в REPL, выполнить stimulus, ждать expect."""
+    """Scenario YAML: paste the entry file code into the REPL, run the stimulus, wait for expect."""
     code = (task.directory / task.entry).read_text(encoding="utf-8")
     steps: list[dict[str, object]] = [
         {"wait-serial": REPL_PROMPT},
-        {"write-serial": "\x05"},  # Ctrl+E: raw-paste режим
+        {"write-serial": "\x05"},  # Ctrl+E: raw-paste mode
         {"delay": "200ms"},
         {"write-serial": code},
-        {"write-serial": "\x04"},  # Ctrl+D: выполнить
-        *task.stimulus,  # взаимодействие с прошивкой (ввод serial, кнопки, датчики)
+        {"write-serial": "\x04"},  # Ctrl+D: execute
+        *task.stimulus,  # interaction with the firmware (serial input, buttons, sensors)
     ]
-    # wait-serial по литеральным expect-паттернам: сценарий завершит симуляцию
-    # досрочно, когда всё ожидаемое уже напечатано (экономия квоты Wokwi)
+# wait-serial on literal expect patterns: the scenario finishes the
+    # simulation early once everything expected has been printed (saves Wokwi quota)
     for pattern in task.expect:
         plain = _plain_text(pattern)
         if plain:
@@ -173,7 +176,7 @@ def generate_paste_scenario(task: Task) -> str:
 
 @dataclasses.dataclass(frozen=True)
 class TaskResult:
-    """Итог прогона одной задачи."""
+    """Result of a single task run."""
 
     task: str
     passed: bool
@@ -194,9 +197,9 @@ def _check_patterns(
 
 
 def _stage_task(task: Task, out_dir: Path) -> tuple[Path, str]:
-    """Копирует каталог задачи в чистый стейдж; возвращает (путь, имя сценария)."""
+    """Copies the task directory into a clean stage; returns (path, scenario name)."""
     stage = out_dir / task.name
-    shutil.rmtree(stage, ignore_errors=True)  # без этого старые файлы переживают прогон
+    shutil.rmtree(stage, ignore_errors=True)  # without this, stale files survive the run
     stage.mkdir(parents=True, exist_ok=True)
     for item in task.directory.iterdir():
         if item.is_file():
@@ -210,7 +213,7 @@ def _stage_task(task: Task, out_dir: Path) -> tuple[Path, str]:
 
 
 def _stage_firmware(task: Task, stage: Path) -> None:
-    """Докладывает elf/firmware из общего FIRMWARE_DIR, если в задаче их нет."""
+    """Adds elf/firmware from the shared FIRMWARE_DIR when the task does not ship them."""
     wokwi_toml = stage / "wokwi.toml"
     if not wokwi_toml.is_file():
         return
@@ -223,7 +226,7 @@ def _stage_firmware(task: Task, stage: Path) -> None:
                 shutil.copy2(shared, stage / name)
             else:
                 raise ValueError(
-                    f"прошивка {name!r} не найдена ни в задаче, ни в tasks/_firmware/"
+                    f"firmware {name!r} not found in the task directory or in tasks/_firmware/"
                 )
 
 
@@ -257,13 +260,14 @@ def run_task(
     real_transport=None,
     real_port: str | None = None,
 ) -> TaskResult:
-    """Диспетчер мишеней: wokwi/renode/unix/plant/real реализованы.
+    """Target dispatcher: wokwi/renode/unix/plant/real are implemented.
 
-    cli_path/token/renode_cmd/unix_cmd/plant_cmd — точки инъекции для тестов (фейковые
-    CLI вместо реальных). mqtt_broker — уже запущенный MqttSimBroker для тестов
-    (по умолчанию брокер задачи поднимается в WSL2). journal — io_core.JsonlJournal:
-    пишем task_start/task_result. real: real_transport — готовый транспорт (тесты,
-    обычно loop://), real_port — COM-порт живой платы (иначе env IRONBENCH_REAL_PORT).
+    cli_path/token/renode_cmd/unix_cmd/plant_cmd are injection points for tests
+    (fake CLIs instead of real ones). mqtt_broker - an already-running
+    MqttSimBroker for tests (by default the task broker starts in WSL2).
+    journal - io_core.JsonlJournal: we write task_start/task_result. real:
+    real_transport - a ready transport (tests, usually loop://), real_port -
+    the live board's COM port (otherwise env IRONBENCH_REAL_PORT).
     """
     if task.target == "wokwi":
         return _run_wokwi(task, out_dir=out_dir, cli_path=cli_path, token=token, journal=journal)
@@ -293,20 +297,12 @@ def run_task(
 
 
 def is_infra_error(error: str | None) -> bool:
-    """Инфраструктурный сбой среды (агент не может его исправить) — для раннего
-    выхода из solve-цикла, чтобы не жечь LLM-итерации на неисправимой ошибке."""
+    """An environment-level infrastructure failure (the agent cannot fix it) -
+    used for an early exit from the solve loop, so LLM iterations are not
+    burned on a hopeless error."""
     if not error:
         return False
     marks = (
-        # RU: runner messages not yet translated (churn pass pending)
-        "не реализована",
-        "не поддерживает",
-        "не поддержан",
-        "не найден",
-        "не удалось подготовить задачу",
-        "не удалось подключиться",
-        "не отвечает",
-        # EN: translated transport/io-core messages
         "not implemented",
         "not supported",
         "not found",
@@ -326,9 +322,9 @@ def _run_wokwi(
     token: str | None = None,
     journal=None,
 ) -> TaskResult:
-    """Запускает задачу в Wokwi и возвращает результат (pass/fail + причина)."""
+    """Runs the task in Wokwi and returns the result (pass/fail + reason)."""
     cli = cli_path or default_cli()
-    cli_cmd = [cli] if isinstance(cli, str) else list(cli)  # тесты передают список-команду
+    cli_cmd = [cli] if isinstance(cli, str) else list(cli)  # tests pass a command list
     out_dir.mkdir(parents=True, exist_ok=True)
     serial_log = out_dir / f"{task.name}.serial.log"
     wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
@@ -345,8 +341,8 @@ def _run_wokwi(
     try:
         stage, scenario_name = _stage_task(task, out_dir)
     except (OSError, ValueError) as e:
-        # отсутствующий entry/прошивка, битый wokwi.toml — аккуратный FAIL вместо краха
-        error = f"не удалось подготовить задачу: {e}"
+        # missing entry/firmware, broken wokwi.toml - a clean FAIL instead of a crash
+        error = f"failed to prepare task: {e}"
     if stage is not None:
         cmd = [
             *cli_cmd,
@@ -378,9 +374,9 @@ def _run_wokwi(
             if proc.returncode not in OK_EXIT_CODES:
                 error = (proc.stderr or proc.stdout or "").strip()[-500:] or None
         except subprocess.TimeoutExpired:
-            error = f"wall-clock таймаут раннера ({wall_timeout} c)"
+            error = f"runner wall-clock timeout ({wall_timeout} s)"
         except FileNotFoundError:
-            error = f"wokwi-cli не найден: {cli}"
+            error = f"wokwi-cli not found: {cli}"
 
     duration = round(time.monotonic() - start, 2)
     serial_text = (
@@ -402,11 +398,11 @@ def _run_wokwi(
     return result
 
 
-# --- мишень renode: Renode в WSL2, UART → TCP-терминал ---
+# --- renode target: Renode in WSL2, UART over a TCP terminal ---
 
 
 def _parse_delay(value: str) -> float:
-    """'1500ms' → 1.5, '2s' → 2.0; без суффикса — секунды."""
+    """'1500ms' -> 1.5, '2s' -> 2.0; no suffix means seconds."""
     text = str(value).strip().lower()
     if text.endswith("ms"):
         return int(text[:-2]) / 1000
@@ -416,12 +412,14 @@ def _parse_delay(value: str) -> float:
 
 
 def generate_renode_resc(task: Task, port: int) -> str:
-    """Скрипт Renode: платформа из поставки, UART на TCP-терминал, прошивка.
+    """Renode script: platform from the Renode shipset, UART on a TCP terminal,
+    firmware from __FIRMWARE__.
 
-    __FIRMWARE__ подменяет sed внутри WSL на абсолютный путь стейджа (Python не
-    знает $HOME дистрибутива); маркер пути @ остаётся в шаблоне — sed съедал его
-    вместе с плейсхолдером @FIRMWARE@, и монитору уходил путь без @. Имя
-    UART-периферии берётся из секции renode.
+    __FIRMWARE__ is substituted by sed inside WSL with the absolute stage path
+    (Python does not know the distro's $HOME); the @ path marker stays in the
+    template - sed used to swallow it together with the @FIRMWARE@ placeholder,
+    so the monitor got a path without @. The UART peripheral name comes from
+    the renode section.
     """
     uart = task.renode.get("uart", "uart")
     return f""":name: ironbench {task.name}
@@ -436,23 +434,23 @@ start
 
 
 def _stage_renode_task(task: Task, out_dir: Path, port: int) -> Path:
-    """Стейдж задачи для renode: .resc и wsl-run.sh (едут в WSL), локальные
-    копии — для разбора полётов. Прошивку возим отдельно (_push_firmware):
-    большие блобы через stdin-релей wsl.exe доходят битыми."""
+    """Task stage for renode: .resc and wsl-run.sh (they travel into WSL); local
+    copies stay behind for debugging. The firmware ships separately
+    (_push_firmware): large blobs arrive corrupted through the wsl.exe stdin relay."""
     if not task.renode.get("platform") or not task.renode.get("firmware"):
-        raise ValueError("в секции renode нужны platform и firmware")
+        raise ValueError("the renode section requires platform and firmware")
     stage = out_dir / task.name
     shutil.rmtree(stage, ignore_errors=True)
     stage.mkdir(parents=True, exist_ok=True)
     entry = task.directory / task.entry
     if not entry.is_file():
-        raise ValueError(f"entry-файл не найден: {entry}")
+        raise ValueError(f"entry file not found: {entry}")
     firmware = task.renode["firmware"]
     firmware_src = task.directory / firmware
     if not firmware_src.is_file():
         firmware_src = FIRMWARE_DIR / firmware
     if not firmware_src.is_file():
-        raise ValueError(f"прошивка {firmware!r} не найдена ни в задаче, ни в tasks/_firmware/")
+        raise ValueError(f"firmware {firmware!r} not found in the task directory or in tasks/_firmware/")
     (stage / "renode.resc").write_text(
         generate_renode_resc(task, port), encoding="utf-8", newline="\n"
     )
@@ -461,12 +459,12 @@ def _stage_renode_task(task: Task, out_dir: Path, port: int) -> Path:
 
 
 def _wsl_run_script(task: Task) -> str:
-    """wsl-run.sh: вся логика запуска Renode внутри WSL. Живёт файлом (едет в
-    крошечном tar стейджа), поэтому не зависит от капризов передачи argv через
-    wsl.exe. Порт выбирается свободный: порт прошлого прогона может держать
-    zombie-слушатель WSL2-релея. pkill -9 обязателен: mono умирает от SIGTERM
-    дольше секунды и не отпускает порт; шаблон ловит пути бинарника (symlink и
-    portable), но не наши каталоги/файлы с именем renode-*."""
+    """wsl-run.sh: all the Renode startup logic inside WSL. It lives as a file
+    (travels in the tiny stage tar), so it does not depend on wsl.exe argv
+    quirks. The port is a free one: the previous run's port may be held by a
+    zombie listener of the WSL2 relay. pkill -9 is required: mono takes over a
+    second to die from SIGTERM and keeps the port; the pattern matches binary
+    paths (symlink and portable) but not our renode-* directories/files."""
     renode_bin = os.environ.get("IRONBENCH_RENODE_BIN", "~/renode/renode")
     firmware = task.renode["firmware"]
     script = f"""#!/bin/bash
@@ -486,7 +484,7 @@ def _wsl_distro() -> str:
 
 
 def _tar_of(path: Path, arcname: str) -> bytes:
-    """Один файл tar.gz-блобом (для передачи в stdin WSL через communicate)."""
+    """One file as a tar.gz blob (to pass into WSL stdin via communicate)."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         tar.add(path, arcname=arcname)
@@ -494,8 +492,8 @@ def _tar_of(path: Path, arcname: str) -> bytes:
 
 
 def _push_to_wsl(blob: bytes, remote_dir: str, marker: str) -> None:
-    """tar.gz-блоб в stdin WSL (через communicate: relay wsl.exe надёжен только
-    так); маркер в stdout подтверждает распаковку."""
+    """tar.gz blob into WSL stdin (via communicate: the wsl.exe relay is only
+    reliable that way); the marker in stdout confirms the extraction."""
     try:
         proc = subprocess.run(
             [
@@ -513,41 +511,42 @@ def _push_to_wsl(blob: bytes, remote_dir: str, marker: str) -> None:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        raise ConnectionError("WSL не ответил при передаче файлов (таймаут 120 c)") from None
+        raise ConnectionError("WSL did not respond during file transfer (120 s timeout)") from None
     if marker not in proc.stdout.decode("utf-8", "replace"):
         raise ConnectionError(
-            f"не удалось передать файлы в WSL ({remote_dir}): "
+            f"failed to push files into WSL ({remote_dir}): "
             + (proc.stdout + proc.stderr).decode("utf-8", "replace")[-300:]
         )
 
 
 def _push_firmware(task: Task) -> None:
-    """Докладывает прошивку в постоянный каталог WSL ~/ironharness-firmware,
-    откуда её читает wsl-run.sh (путь подставляет sed в .resc)."""
+    """Pushes the firmware into the persistent WSL directory
+    ~/ironharness-firmware, where wsl-run.sh reads it (sed substitutes the path
+    into the .resc)."""
     firmware = task.renode["firmware"]
     src = task.directory / firmware
     if not src.is_file():
         src = FIRMWARE_DIR / firmware
     if not src.is_file():
-        raise ValueError(f"прошивка {firmware!r} не найдена ни в задаче, ни в tasks/_firmware/")
+        raise ValueError(f"firmware {firmware!r} not found in the task directory or in tasks/_firmware/")
     _push_to_wsl(_tar_of(src, src.name), "$HOME/ironharness-firmware", "FW-PUSHED")
 
 
 def _wsl_renode_cmd(remote_dir: str) -> list[str]:
-    """Запуск wsl-run.sh из стейджа; stdin свободен (DEVNULL), логи — в stdout."""
+    """Runs wsl-run.sh from the stage; stdin stays free (DEVNULL), logs go to stdout."""
     return ["wsl", "-d", _wsl_distro(), "--", "bash", "-c", f"bash {remote_dir}/wsl-run.sh"]
 
 
 class _TelnetFilter:
-    """Срезает telnet-IAC-последовательности: socket-терминал Renode — telnet-сервер
-    и присылает согласование (IAC WILL/DO...) и экранирует байты 0xFF в данных.
-    Неполная IAC-последовательность на границе чанков ждёт продолжения в
-    следующем чанке (хвост буфера живёт между feed)."""
+    """Strips telnet IAC sequences: the Renode socket terminal is a telnet
+    server, it sends negotiation (IAC WILL/DO...) and escapes 0xFF bytes in
+    data. An incomplete IAC sequence at a chunk boundary waits for the rest in
+    the next chunk (the buffer tail persists between feed calls)."""
 
     def __init__(self) -> None:
         self._buf = bytearray()
-        self._iac = False  # ждём байт-команду после IAC
-        self._sub = False  # внутри IAC SB ... IAC SE
+        self._iac = False  # waiting for the command byte after IAC
+        self._sub = False  # inside IAC SB ... IAC SE
 
     def feed(self, data: bytes) -> str:
         self._buf += data
@@ -558,28 +557,28 @@ class _TelnetFilter:
             b = self._buf[i]
             if self._sub:
                 if b == 0xFF:
-                    if i + 1 >= n:  # неполно: ждём продолжения
+                    if i + 1 >= n:  # incomplete: wait for the rest
                         break
-                    if self._buf[i + 1] == 0xF0:  # IAC SE — конец поднеготиации
+                    if self._buf[i + 1] == 0xF0:  # IAC SE - end of subnegotiation
                         self._sub = False
-                    i += 2  # IAC SE, экранированный 0xFF или мусор внутри SB
+                    i += 2  # IAC SE, an escaped 0xFF, or junk inside SB
                 else:
                     i += 1
             elif self._iac:
-                if b in (0xFB, 0xFC, 0xFD, 0xFE):  # WILL/WONT/DO/DONT + байт-опция
-                    if i + 1 >= n:  # опции ещё нет — ждём продолжения
+                if b in (0xFB, 0xFC, 0xFD, 0xFE):  # WILL/WONT/DO/DONT + option byte
+                    if i + 1 >= n:  # option byte not there yet - wait for the rest
                         break
                     i += 2
                     self._iac = False
-                elif b == 0xFA:  # SB: поднеготиация до IAC SE
+                elif b == 0xFA:  # SB: subnegotiation until IAC SE
                     self._sub = True
                     i += 1
                     self._iac = False
-                elif b == 0xFF:  # экранированный литеральный 0xFF
+                elif b == 0xFF:  # escaped literal 0xFF
                     out.append(0xFF)
                     i += 1
                     self._iac = False
-                else:  # NOP/GA и прочие без аргументов
+                else:  # NOP/GA and other argument-less commands
                     i += 1
                     self._iac = False
             elif b == 0xFF:
@@ -598,8 +597,8 @@ def _recv_until(
     deadline: float,
     tel: _TelnetFilter,
 ) -> tuple[str, bool]:
-    """Читает сокет (срезая telnet-IAC), пока не встретится один из needles
-    или не истечёт deadline."""
+    """Reads the socket (stripping telnet IAC) until one of the needles
+    appears or the deadline expires."""
     buf = ""
     while time.monotonic() < deadline:
         sock.settimeout(max(0.05, min(0.2, deadline - time.monotonic())))
@@ -618,35 +617,34 @@ def _recv_until(
 
 
 def _paste_code(code: str) -> str:
-    """Убирает полные строковые комментарии: paste-mode шлёт исходник целиком,
-    а UART-FIFO эмуляции конечен — каждый лишний байт повышает риск обрыва.
-    Строки кода не трогаем (комментарии в хвостах строк остаются)."""
+    """Drops whole-line comments: paste mode sends the source as-is and the
+    emulator's UART FIFO is finite - every extra byte raises the risk of a
+    truncated paste. Code lines stay untouched (trailing comments remain)."""
     return "\n".join(line for line in code.splitlines() if not line.lstrip().startswith("#"))
-
-
 def _send_chunked(sock: socket.socket, data: bytes, chunk: int = 32, pause: float = 0.05) -> None:
-    """Паста порциями: у легаси paste-mode нет flow control, FIFO emулятора
-    переполняется при заливке одним куском."""
+    """Pasting in chunks: legacy paste mode has no flow control, the emulator
+    FIFO overflows when poured in a single piece."""
     for i in range(0, len(data), chunk):
         sock.sendall(data[i : i + chunk])
         time.sleep(pause)
 
 
 def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[str, str | None]:
-    """Говорит с MicroPython REPL по сокету: paste кода entry, stimulus, сбор serial.
+    """Talks to the MicroPython REPL over the socket: paste the entry code, run
+    the stimulus, collect the serial output.
 
-    Возвращает (serial-текст, ошибка|None). Протокол повторяет paste-сценарий
-    wokwi, но raw-paste прошивкой litex не поддержан — используется legacy
-    paste mode (Ctrl+E, ответ 'paste mode; Ctrl-C to cancel...').
+    Returns (serial text, error|None). The protocol mirrors the wokwi paste
+    scenario, but raw-paste is not supported by the litex firmware - legacy
+    paste mode is used (Ctrl+E, the answer 'paste mode; Ctrl-C to cancel...').
     """
     parts: list[str] = []
     tel = _TelnetFilter()
-    # будим REPL пустой строкой: приглашение печатается раз, легко пропустить его при коннекте
+    # nudge the REPL with an empty line: the prompt prints once and is easy to miss on connect
     sock.sendall(b"\n")
     buf, ok = _recv_until(sock, (REPL_PROMPT,), wall_deadline, tel)
     parts.append(buf)
     if not ok:
-        return "".join(parts), "REPL не отвечает (нет приглашения '>>>')"
+        return "".join(parts), "REPL is not responding (no '>>>' prompt)"
 
     sock.sendall(b"\x05")
     buf, ok = _recv_until(
@@ -654,17 +652,17 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
     )
     parts.append(buf)
     if not ok:
-        return "".join(parts), "paste mode недоступен (прошивка без Ctrl+E)"
+        return "".join(parts), "paste mode unavailable (firmware without Ctrl+E)"
 
     code = (task.directory / task.entry).read_text(encoding="utf-8")
     _send_chunked(sock, _paste_code(code).encode("utf-8") + b"\n\x04")
 
-    # шаги stimulus; set-control (кнопки Wokwi) под renode не воспроизводим
+    # stimulus steps; set-control (Wokwi buttons) cannot be reproduced under renode
     for step in task.stimulus:
         if time.monotonic() > wall_deadline:
             break
         if "set-control" in step:
-            return "".join(parts), f"шаг set-control не поддержан мишенью renode: {step}"
+            return "".join(parts), f"set-control step not supported by the renode target: {step}"
         if "delay" in step:
             time.sleep(min(_parse_delay(step["delay"]), max(0.0, wall_deadline - time.monotonic())))
         elif "write-serial" in step:
@@ -673,9 +671,9 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
             buf, _ = _recv_until(sock, (str(step["wait-serial"]),), wall_deadline, tel)
             parts.append(buf)
 
-    # дочитываем вывод: до полного набора литеральных expect (досрочный выход,
-    # как wait-serial в wokwi-сценарии), до возврата приглашения (конечная
-    # программа завершилась) или до дедлайна (бесконечный цикл прошивки)
+    # keep reading: until the full set of literal expects is collected (early
+    # exit, like wait-serial in the wokwi scenario), until the prompt returns
+    # (a finite program finished), or until the deadline (infinite firmware loop)
     plain = tuple(p for p in task.expect if _plain_text(p))
     buf = ""
     while time.monotonic() < wall_deadline:
@@ -696,10 +694,10 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
 
 
 def _read_marker_line(stream, marker: str, timeout: float) -> str:
-    """Читает stdout конвейера до строки '<marker>=<значение>' (в отдельном
-    потоке: readline блокирует, а конвейер может умереть до эха). Строки до
-    маркера (например, служебные сообщения wsl.exe в stderr, который мержится
-    в stdout) пропускаются. Возвращает значение после '='."""
+    """Reads the pipeline stdout until a '<marker>=<value>' line (in a separate
+    thread: readline blocks, and the pipeline may die before echoing). Lines
+    before the marker (e.g. wsl.exe service messages in stderr, merged into
+    stdout) are skipped. Returns the value after '='."""
     box: dict[str, str] = {}
 
     def reader():
@@ -707,7 +705,7 @@ def _read_marker_line(stream, marker: str, timeout: float) -> str:
             for line in iter(stream.readline, b""):
                 if line.startswith(marker.encode() + b"="):
                     raw = line.decode("utf-8", "replace").strip().split("=", 1)[1]
-                    if raw:  # мусор после '=' — читаем дальше
+                    if raw:  # junk after '=' - keep reading
                         box["value"] = raw
                         return
         except (OSError, ValueError):
@@ -717,15 +715,15 @@ def _read_marker_line(stream, marker: str, timeout: float) -> str:
     thread.start()
     thread.join(timeout)
     if "value" not in box:
-        raise ConnectionError(f"WSL-конвейер не сообщил {marker}=...")
+        raise ConnectionError(f"WSL pipeline did not report {marker}=...")
     return box["value"]
 
 
 def _read_port_line(stream, timeout: float) -> int:
-    """Порт socket-терминала Renode из stdout WSL-конвейера."""
+    """Renode socket-terminal port from the WSL pipeline stdout."""
     raw = _read_marker_line(stream, "RENODE_PORT", timeout)
-    if not raw.isdigit():  # мусор после '=' — читаем дальше не выйдет, честный отказ
-        raise ConnectionError(f"WSL-конвейер сообщил нечисловой порт: {raw!r}")
+    if not raw.isdigit():  # junk after '=' - nothing more to read, fail honestly
+        raise ConnectionError(f"WSL pipeline reported a non-numeric port: {raw!r}")
     return int(raw)
 
 
@@ -736,11 +734,11 @@ def _run_renode(
     renode_cmd: str | list | None = None,
     journal=None,
 ) -> TaskResult:
-    """Запускает задачу в Renode и возвращает результат (pass/fail + причина).
+    """Runs the task in Renode and returns the result (pass/fail + reason).
 
-    renode_cmd=None → стандартный WSL-путь (прошивка и стейдж уходят tar-блобами
-    через communicate, затем запускается wsl-run.sh и сообщает порт);
-    инъекция команды (тесты) запускает «Renode» локально, без WSL.
+    renode_cmd=None -> the standard WSL path (firmware and stage go as tar
+    blobs via communicate, then wsl-run.sh starts and reports the port);
+    command injection (tests) runs the fake "Renode" locally, without WSL.
     """
     if "set-control" in {k for step in task.stimulus for k in step}:
         result = TaskResult(
@@ -750,7 +748,7 @@ def _run_renode(
             duration_sec=0.0,
             serial_log=None,
             missed=tuple(task.expect),
-            error="мишень renode не поддерживает set-control (кнопки Wokwi)",
+            error="set-control is not supported by the renode target (Wokwi buttons)",
         )
         _journal_result(journal, result)
         return result
@@ -783,9 +781,9 @@ def _run_renode(
             stderr=subprocess.STDOUT,
         )
         if renode_cmd is None:
-            # wsl-run.sh сам выбирает свободный порт и сообщает его
+            # wsl-run.sh picks a free port itself and reports it
             port = _read_port_line(proc.stdout, timeout=RENODE_CONNECT_SEC)
-        # ждем TCP-терминал: старт Renode+Mono в WSL занимает секунды
+        # wait for the TCP terminal: Renode+Mono startup in WSL takes seconds
         sock = None
         connect_deadline = time.monotonic() + RENODE_CONNECT_SEC
         while sock is None:
@@ -794,20 +792,20 @@ def _run_renode(
             except OSError:
                 if proc.poll() is not None or time.monotonic() > connect_deadline:
                     raise ConnectionError(
-                        f"socket-терминал Renode на :{port} недоступен"
+                        f"Renode socket terminal on :{port} is unreachable"
                     ) from None
                 time.sleep(0.2)
         with sock:
             serial_text, error = _drive_repl(sock, task, time.monotonic() + wall_timeout)
         exit_code = 0 if error is None else None
     except ValueError as e:
-        error = f"не удалось подготовить задачу: {e}"
+        error = f"failed to prepare task: {e}"
     except ConnectionError as e:
-        error = f"не удалось подключиться: {e}"
+        error = f"failed to connect: {e}"
     except FileNotFoundError as e:
-        error = f"не найден: {e.filename or e}"
+        error = f"not found: {e.filename or e}"
     except OSError as e:
-        error = f"ошибка ввода-вывода при запуске Renode: {e}"
+        error = f"I/O error while starting Renode: {e}"
     finally:
         if proc is not None:
             _reap(proc)
@@ -833,7 +831,7 @@ def _run_renode(
 
 
 def _tar_of_files(stage: Path) -> bytes:
-    """Все файлы стейджа одним tar.gz-блобом (крошечный: resc + wsl-run.sh)."""
+    """All stage files as one tar.gz blob (tiny: resc + wsl-run.sh)."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for item in sorted(stage.iterdir()):
@@ -841,11 +839,11 @@ def _tar_of_files(stage: Path) -> bytes:
     return buf.getvalue()
 
 
-# --- мишень unix: MicroPython unix-port в WSL2 (бесплатные локальные прогоны) ---
+# --- unix target: MicroPython unix port in WSL2 (free local runs) ---
 
 
 def _unix_cmd(remote_entry: str, env_prefix: str = "") -> list[str]:
-    """micropython исполняет entry напрямую: stdin = stimulus, stdout = serial-лог."""
+    """micropython executes the entry directly: stdin = stimulus, stdout = serial log."""
     upy_bin = os.environ.get("IRONBENCH_UNIX_BIN", "~/bin/micropython")
     return [
         "wsl",
@@ -859,7 +857,8 @@ def _unix_cmd(remote_entry: str, env_prefix: str = "") -> list[str]:
 
 
 class _StdinWriter:
-    """Адаптер stdin-процесса под протокол Transport.write — цель FaultyTransport."""
+    """Adapts the process stdin to the Transport.write protocol - the
+    FaultyTransport target."""
 
     def __init__(self, stdin) -> None:
         self._stdin = stdin
@@ -870,7 +869,7 @@ class _StdinWriter:
         self._stdin.flush()
 
 
-# --- MQTT у мишени unix: брокер mqtt_sim рядом с прошивкой (см. io_core/mqtt_sim.py) ---
+# --- MQTT on the unix target: mqtt_sim broker next to the firmware (see io_core/mqtt_sim.py) ---
 
 MQTT_SIM_PATH = Path(__file__).resolve().parents[1] / "io_core" / "mqtt_sim.py"
 
@@ -884,12 +883,13 @@ def _free_tcp_port() -> int:
 
 
 def _start_wsl_mqtt_broker(task: Task, port: int) -> tuple[subprocess.Popen, int | None]:
-    """Поднимает mqtt_sim в WSL2 (тот же localhost, что у прошивки); Windows-сторона
-    ходит в него через localhost-forwarding, поэтому бинд на 0.0.0.0.
+    """Starts mqtt_sim in WSL2 (same localhost as the firmware); the Windows
+    side reaches it via localhost-forwarding, hence the bind on 0.0.0.0.
 
-    terminate() убивает только wsl.exe — линукс-процесс переживает его (зомби с
-    занятым портом, см. zombie-слушатель в wsl-run.sh), поэтому брокер печатает
-    свой PID, и cleanup добивает его kill'ом по PID внутри дистрибутива."""
+    terminate() kills only wsl.exe - the linux process survives it (a zombie
+    holding the port, see the zombie listener note in wsl-run.sh), so the
+    broker prints its PID and cleanup finishes it with a kill by PID inside
+    the distro."""
     remote_dir = f"{RENODE_REMOTE_ROOT}/{task.name}-mqtt"
     _push_to_wsl(_tar_of(MQTT_SIM_PATH, "mqtt_sim.py"), remote_dir, "BROKER-PUSHED")
     proc = subprocess.Popen(
@@ -918,17 +918,17 @@ def _start_wsl_mqtt_broker(task: Task, port: int) -> tuple[subprocess.Popen, int
         except OSError:
             if proc.poll() is not None or time.monotonic() > deadline:
                 _stop_broker_proc(proc, None)
-                raise ConnectionError(f"брокер mqtt_sim на :{port} не поднялся") from None
+                raise ConnectionError(f"mqtt_sim broker on :{port} did not come up") from None
             time.sleep(0.2)
     try:
         wsl_pid = int(_read_marker_line(proc.stdout, "BROKER_PID", 5))
     except (ConnectionError, ValueError):
-        wsl_pid = None  # без PID cleanup сведётся к terminate wsl.exe
+        wsl_pid = None  # without a PID, cleanup degrades to terminating wsl.exe
     return proc, wsl_pid
 
 
 def _reap(proc: subprocess.Popen) -> None:
-    """Гасит локальный wsl.exe/воркер; второй wait после kill — не исключение."""
+    """Shuts down the local wsl.exe/worker; a second wait after kill raises no exception."""
     proc.terminate()
     try:
         proc.wait(timeout=5)
@@ -966,16 +966,17 @@ def _run_unix(
     mqtt_broker=None,
     journal=None,
 ) -> TaskResult:
-    """Запускает entry MicroPython-ом unix-port и оценивает вывод.
+    """Runs the entry with the unix-port micropython and scores the output.
 
-    Без REPL и paste: скрипт исполняется файлом, input() читает наш stdin —
-    значит годятся только чисто-serial задачи (machine/dht недоступны).
-    Enter в unix — \\n, поэтому \\r из wokwi-стимула переводится в \\n.
-    Секция mqtt: брокер mqtt_sim поднимается рядом с прошивкой, харнесс ходит
-    в него клиентом (шаги mqtt-publish/mqtt-collect), каждый принятый publish
-    дописывается в serial-лог строкой "mqtt: <topic> <payload>".
-    unix_cmd=None → WSL-путь (entry уезжает tar-блобом); инъекция команды —
-    локальный фейк для тестов. mqtt_broker — уже запущенный брокер (тесты).
+    No REPL, no paste: the script executes as a file and input() reads our
+    stdin - so only pure-serial tasks qualify (machine/dht unavailable).
+    Enter on unix is \\n, so \\r from the wokwi-style stimulus is translated
+    to \\n. The mqtt section: an mqtt_sim broker starts next to the firmware,
+    the harness talks to it as a client (mqtt-publish/mqtt-collect steps), and
+    every received publish is appended to the serial log as
+    "mqtt: <topic> <payload>". unix_cmd=None -> the WSL path (the entry
+    travels as a tar blob); command injection is a local fake for tests.
+    mqtt_broker - an already-running broker (tests).
     """
     if "set-control" in {k for step in task.stimulus for k in step}:
         result = TaskResult(
@@ -985,7 +986,7 @@ def _run_unix(
             duration_sec=0.0,
             serial_log=None,
             missed=tuple(task.expect),
-            error="мишень unix не поддерживает set-control (кнопки/датчики Wokwi)",
+            error="set-control is not supported by the unix target (Wokwi buttons/sensors)",
         )
         _journal_result(journal, result)
         return result
@@ -1007,7 +1008,7 @@ def _run_unix(
         if task.mqtt:
             mqtt_port = _free_tcp_port()
             if mqtt_broker is not None:
-                mqtt_port = mqtt_broker.port  # тестовый брокер уже запущен
+                mqtt_port = mqtt_broker.port  # test broker is already running
             else:
                 broker_proc, broker_pid = _start_wsl_mqtt_broker(task, mqtt_port)
             mqtt_client = MqttTransport(
@@ -1018,9 +1019,9 @@ def _run_unix(
             mqtt_client.open()
             if journal:
                 journal("mqtt_broker_ready", {"task": task.name, "port": mqtt_port})
-            # подписки заранее, до спавна прошивки: первая публикация (QoS0, не
-            # retained) уходит сразу после старта — подписка на шаге collect
-            # могла бы её не поймать
+            # subscribe up front, before the firmware spawns: the first publish
+            # (QoS0, not retained) goes out right after startup - subscribing at
+            # the collect step could miss it
             for step in task.stimulus:
                 if "mqtt-collect" in step:
                     topic = str(step["mqtt-collect"]["topic"])
@@ -1046,7 +1047,7 @@ def _run_unix(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # traceback'и unix-port пишет в stderr
+            stderr=subprocess.STDOUT,  # the unix port writes tracebacks to stderr
         )
         box = {"text": "", "eof": False}
 
@@ -1063,11 +1064,11 @@ def _run_unix(
         reader_thread.start()
         deadline = time.monotonic() + wall_timeout
         plain = tuple(p for p in task.expect if _plain_text(p))
-        # шумная линия: записи стимула идут через FaultyTransport (drop/corrupt
-        # по сценарию из task.yaml); seed фиксирует сценарий — воспроизводимость
-        # прогона и есть цель, это не криптография (см. io_core/faults.py).
-        # op счётчика = один write-serial шаг стимула. Выход прошивки (stdout)
-        # не шумим: оценка по паттернам остаётся честной.
+        # noisy line: stimulus writes go through FaultyTransport (drop/corrupt
+        # per the scenario from task.yaml); the seed pins the scenario - run
+        # reproducibility is the point, this is not cryptography (see
+        # io_core/faults.py). One op of the counter = one write-serial stimulus
+        # step. Firmware output (stdout) is not noised: pattern scoring stays fair.
         writer = _StdinWriter(proc.stdin)
         if task.noise:
             writer = FaultyTransport(
@@ -1093,8 +1094,8 @@ def _run_unix(
                     raw = str(step["write-serial"]).replace("\r\n", "\n").replace("\r", "\n")
                     raw = raw.encode("utf-8")
                     if task.noise and raw.endswith(b"\n"):
-                        # терминатор не шумим: порча \n склеивает кадры в поток,
-                        # из которого input() не выйдет ни при каком ретрае
+                        # the terminator is not noised: corrupting \n would glue
+                        # frames into a stream input() can never recover from, retry or not
                         writer.write(raw[:-1])
                         proc.stdin.write(b"\n")
                         proc.stdin.flush()
@@ -1112,7 +1113,7 @@ def _run_unix(
                     col = step["mqtt-collect"]
                     topic = str(col["topic"])
                     if topic not in mqtt_subscribed:
-                        # брокер дублирует доставку при повторной подписке — подписываем один раз
+                        # the broker duplicates delivery on re-subscribe - subscribe once
                         mqtt_client.subscribe(topic)
                         mqtt_subscribed.add(topic)
                     need = int(col["count"])
@@ -1129,10 +1130,10 @@ def _run_unix(
                             box["text"] += f"mqtt: {msg['topic']} {msg['payload']}\n"
                     if got < need:
                         box["text"] += (
-                            f"mqtt: collect {col['topic']}: получено {got} из {need}\n"
+                            f"mqtt: collect {col['topic']}: received {got} of {need}\n"
                         )
-            # дочитываем: до всех литеральных expect, EOF или дедлайна
-            # (бесконечный цикл прошивки — норма, как --timeout в wokwi)
+            # keep reading: until all literal expects are collected, EOF, or the
+            # deadline (an infinite firmware loop is normal, like --timeout in wokwi)
             while time.monotonic() < deadline and not box["eof"]:
                 if plain and all(p in box["text"] for p in plain):
                     break
@@ -1142,23 +1143,23 @@ def _run_unix(
                 exit_code = proc.wait(timeout=5)
             elif matched or time.monotonic() >= deadline:
                 try:
-                    # конечная программа могла уже завершиться сама — забираем код
+                    # a finite program may have exited on its own - reap the code
                     exit_code = proc.wait(timeout=0.5)
                 except subprocess.TimeoutExpired:
-                    # бесконечная: гасим, НЕ закрывая stdin — EOF у input()
-                    # печатал бы Traceback в serial-лог (fail-паттерн)
+                    # infinite: kill it WITHOUT closing stdin - EOF at input()
+                    # would print a Traceback into the serial log (a fail pattern)
                     proc.kill()
                     proc.wait(timeout=5)
                     exit_code = None
             else:
                 try:
-                    exit_code = proc.wait(timeout=3)  # конечная программа сама выйдет
+                    exit_code = proc.wait(timeout=3)  # a finite program exits on its own
                 except subprocess.TimeoutExpired:
                     exit_code = None
-            reader_thread.join(timeout=2)  # снимок лога — после дочитывания потока
+            reader_thread.join(timeout=2)  # snapshot the log after the reader finishes
             serial_text = box["text"]
             if exit_code not in (0, None):
-                error = f"micropython завершился с кодом {exit_code}"
+                error = f"micropython exited with code {exit_code}"
         finally:
             if proc.stdin is not None:
                 try:
@@ -1166,13 +1167,13 @@ def _run_unix(
                 except OSError:
                     pass
     except ValueError as e:
-        error = f"не удалось подготовить задачу: {e}"
+        error = f"failed to prepare task: {e}"
     except ConnectionError as e:
-        error = f"не удалось подключиться: {e}"
+        error = f"failed to connect: {e}"
     except FileNotFoundError as e:
-        error = f"не найден: {e.filename or e}"
+        error = f"not found: {e.filename or e}"
     except OSError as e:
-        error = f"ошибка ввода-вывода при запуске micropython: {e}"
+        error = f"I/O error while starting micropython: {e}"
     finally:
         if proc is not None:
             _reap(proc)
@@ -1211,14 +1212,16 @@ def _run_real(
     port: str | None = None,
     journal=None,
 ) -> TaskResult:
-    """Живая плата: MicroPython REPL поверх SerialTransport (см. ironbench/realhw.py).
+    """Live board: MicroPython REPL over SerialTransport (see ironbench/realhw.py).
 
-    На ESP32 с USB-UART мостом REPL и application UART — одна линия, поэтому
-    семантика unix-мишени: entry вставляется в REPL raw-paste'ом (Ctrl+E/Ctrl+D),
-    стимул гоняет delay/write-serial/wait-serial, expect/fail — по накопленному
-    выводу. Порт: real_transport (тесты) → real_port → env IRONBENCH_REAL_PORT;
-    без порта — infra-ошибка (живое железо — opt-in по конвенции sim-before-real).
-    set-control/mqtt/noise не поддержаны (честная ошибка).
+    On an ESP32 with a USB-UART bridge the REPL and the application UART share
+    one line, so semantics follow the unix target: the entry is pasted into
+    the REPL in raw-paste mode (Ctrl+E/Ctrl+D), the stimulus drives
+    delay/write-serial/wait-serial, and expect/fail score the accumulated
+    output. Port: real_transport (tests) -> real_port -> env
+    IRONBENCH_REAL_PORT; without a port - an infra error (live hardware is
+    opt-in per the sim-before-real convention). set-control/mqtt/noise are
+    unsupported (honest error).
     """
     unsupported = None
     if "set-control" in {k for step in task.stimulus for k in step}:
@@ -1264,7 +1267,7 @@ def _run_real(
             return t
     else:
         def transport_factory():
-            return transport  # тестовая инъекция фейка
+            return transport  # test injection of a fake
 
     out_dir.mkdir(parents=True, exist_ok=True)
     serial_log = out_dir / f"{task.name}.serial.log"
@@ -1289,11 +1292,12 @@ def _run_real(
             elif "wait-serial" in step:
                 repl.wait_for(str(step["wait-serial"]), deadline)
             elif "write-serial" in step:
-                # REPL line editor завершает input() по \r (\n молчит) —
-                # нормализуем к \r, зеркально unix-мишени, где нужен \n
+                # the REPL line editor ends input() on \r (\n is silent) -
+                # normalize to \r, mirroring the unix target where \n is needed
                 raw = str(step["write-serial"]).replace("\r\n", "\r").replace("\n", "\r")
                 repl.write(raw.encode("utf-8"))
-        # дочитываем: до всех литеральных expect или дедлайна (бесконечный цикл — норма)
+        # keep reading: until all literal expects are collected or the deadline
+        # (an infinite firmware loop is normal)
         while time.monotonic() < deadline:
             if plain and all(p in repl.output() for p in plain):
                 break
@@ -1323,7 +1327,7 @@ def _run_real(
     return result
 
 
-# --- мишень plant: закрытая петля «объект + регулятор» (см. ironbench/plant.py) ---
+# --- plant target: a closed plant + controller loop (see ironbench/plant.py) ---
 
 
 def _run_plant(
@@ -1333,11 +1337,11 @@ def _run_plant(
     plant_cmd: str | list | None = None,
     journal=None,
 ) -> TaskResult:
-    """Прогон через воркер `python -m ironbench.plant`: он исполняет контроллер
-    (entry) в отдельном процессе и пишет лог + result.json. Зависание/падение
-    контроллера — результат прогона (фидбек агенту), а не крах раннера.
-    plant_cmd — точка инъекции для тестов. Мишень локальная: WSL/симуляторы
-    и их квоты не нужны."""
+    """A run through the `python -m ironbench.plant` worker: it executes the
+    controller (entry) in a separate process and writes the log + result.json.
+    A hung/crashed controller is a run result (feedback to the agent), not a
+    runner crash. plant_cmd is the injection point for tests. The target is
+    local: no WSL, simulators, or their quotas needed."""
     out_dir.mkdir(parents=True, exist_ok=True)
     serial_log = out_dir / f"{task.name}.serial.log"
     result_file = out_dir / f"{task.name}.plant-result.json"
@@ -1349,7 +1353,7 @@ def _run_plant(
     try:
         entry = task.directory / task.entry
         if not entry.is_file():
-            raise FileNotFoundError(f"entry-файл не найден: {entry}")
+            raise FileNotFoundError(f"entry file not found: {entry}")
         spec_file = out_dir / f"{task.name}.plant.json"
         spec_file.write_text(json.dumps(task.plant, ensure_ascii=False), encoding="utf-8")
         if plant_cmd is None:
@@ -1381,28 +1385,29 @@ def _run_plant(
         )
         exit_code = proc.returncode
         if proc.returncode != 0:
-            # воркер возвращает 0 даже при упавшем контроллере — ненулевой код
-            # означает проблему самого воркера/спецификации (не вина агента)
+            # the worker returns 0 even when the controller crashed - a non-zero
+            # code means a problem in the worker/spec itself (not the agent's fault)
             error = (
-                f"воркер plant завершился с кодом {proc.returncode}: "
+                f"plant worker exited with code {proc.returncode}: "
                 + (proc.stderr or proc.stdout or "").strip()[-300:]
             )
     except subprocess.TimeoutExpired:
-        error = f"прогон plant превысил wall-лимит ({wall_timeout} c) — контроллер зациклился?"
+        error = f"the plant run exceeded the wall limit ({wall_timeout} s) - controller stuck in a loop?"
     except FileNotFoundError as e:
-        error = f"не найден: {e.filename or e}"
+        error = f"not found: {e.filename or e}"
 
     if error is None:
         if result_file.is_file():
             try:
                 report = json.loads(result_file.read_text(encoding="utf-8"))
             except (OSError, ValueError) as e:
-                error = f"не удалось разобрать result.json воркера plant: {e}"
+                error = f"failed to parse the plant worker result.json: {e}"
         else:
-            error = "воркер plant не оставил result.json"
+            error = "the plant worker left no result.json"
     if report and report.get("error"):
-        # в error — только заголовок: полный traceback остаётся в логе (фидбек
-        # агенту), а текст исключения агента не должен попадать в is_infra_error
+        # error carries only the headline: the full traceback stays in the log
+        # (feedback to the agent), and the agent's exception text must not leak
+        # into is_infra_error
         error = report["error"].splitlines()[0]
 
     serial_text = (

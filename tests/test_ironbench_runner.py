@@ -1,4 +1,4 @@
-"""Тесты раннера ironbench на фейковом CLI (без сети и Wokwi)."""
+"""ironbench runner tests on a fake CLI (no network, no Wokwi)."""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ from ironbench.runner import (
 )
 from ironbench.tasks import load_task, load_tasks
 
-# Фейковый CLI: пишет FAKE_SERIAL в --serial-log-file и выходит с кодом FAKE_EXIT
-# (опционально спит FAKE_SLEEP секунд) — эмулирует контракт wokwi-cli.
+# Fake CLI: writes FAKE_SERIAL into --serial-log-file and exits with code FAKE_EXIT
+# (optionally sleeps FAKE_SLEEP seconds) - emulates the wokwi-cli contract.
 FAKE_CLI = textwrap.dedent(
     """
     import os, sys, time
@@ -49,7 +49,7 @@ def make_task(tmp_path, expect=("blink 0: on",), fail=(), write_entry=True, stim
     if stimulus:
         text += "stimulus:\n" + "\n".join(f"  - {s}" for s in stimulus) + "\n"
     (d / "task.yaml").write_text(text, encoding="utf-8")
-    # entry-файл нужен генератору paste-сценария
+    # the entry file is needed by the paste-scenario generator
     if write_entry:
         (d / "main.py").write_text("print('hi')\n", encoding="utf-8")
     return load_task(d)
@@ -100,8 +100,8 @@ def test_fail_on_cli_error_exit(tmp_path):
 
 
 def test_timeout_exit_with_full_patterns_passes(tmp_path):
-    # Бесконечный цикл прошивки: wokwi-cli выходит по --timeout (42),
-    # но все expect-паттерны в serial найдены → задача пройдена
+    # An infinite firmware loop: wokwi-cli exits on --timeout (42),
+    # but all expect patterns are found in serial -> the task passes
     task = make_task(tmp_path)
     res = run_fake(tmp_path, task, {"FAKE_EXIT": "42"})
     assert res.passed
@@ -122,14 +122,14 @@ def test_wall_clock_timeout_kills_run(tmp_path, monkeypatch):
     res = run_fake(tmp_path, task, {"FAKE_SLEEP": "10"})
     assert not res.passed
     assert res.exit_code is None
-    assert "таймаут" in (res.error or "")
+    assert "timeout" in (res.error or "")
 
 
 def test_missing_cli_reports_error(tmp_path):
     task = make_task(tmp_path)
     res = run_task(task, out_dir=tmp_path / "out", cli_path="no-such-cli-xyz")
     assert not res.passed
-    assert "не найден" in (res.error or "")
+    assert "not found" in (res.error or "")
 
 
 def test_missing_entry_file_is_clean_fail(tmp_path, monkeypatch):
@@ -137,7 +137,7 @@ def test_missing_entry_file_is_clean_fail(tmp_path, monkeypatch):
     task = make_task(tmp_path, write_entry=False)
     res = run_fake(tmp_path, task, {})
     assert not res.passed
-    assert "подготовить задачу" in (res.error or "")
+    assert "prepare task" in (res.error or "")
 
 
 def test_check_patterns_regex():
@@ -151,13 +151,13 @@ def test_stage_task_pulls_shared_firmware(tmp_path):
 
     task = make_task(tmp_path)
     bin_name = "ESP32_GENERIC-20251209-v1.27.0.bin"
-    assert (FIRMWARE_DIR / bin_name).is_file(), "общая прошивка должна быть в tasks/_firmware"
+    assert (FIRMWARE_DIR / bin_name).is_file(), "shared firmware must live in tasks/_firmware"
     (task.directory / "wokwi.toml").write_text(
         f'[wokwi]\nversion = 1\nelf = "{bin_name}"\nfirmware = "{bin_name}"\n',
         encoding="utf-8",
     )
     stage, _scenario = _stage_task(task, tmp_path / "out")
-    assert (stage / bin_name).is_file(), "стейдж должен подтянуть бин из FIRMWARE_DIR"
+    assert (stage / bin_name).is_file(), "the stage must pull the bin from FIRMWARE_DIR"
 
 
 def test_journal_records_start_and_result(tmp_path):
@@ -177,7 +177,7 @@ def test_journal_records_start_and_result(tmp_path):
 def test_load_env_file_formats(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "# комментарий\n"
+        "# a comment\n"
         "PLAIN=value1\n"
         'QUOTED="value 2"\n'
         "export EXPORTED=value3\n"
@@ -206,14 +206,14 @@ def test_task_yaml_loads_from_packaged_blink():
     assert task.name == "blink"
     assert task.timeout_sec == 20
     assert any("blink 0: on" == p for p in task.expect)
-    assert task.scenario is None  # используется генерация REPL-paste сценария
+    assert task.scenario is None  # the REPL-paste scenario is generated
     assert task.entry == "solution.py"
 
 
 def test_all_golden_tasks_have_required_files():
     tasks_dir = runner_module.Path(__file__).parents[1] / "src" / "ironbench" / "tasks"
     tasks = load_tasks(tasks_dir)
-    assert len(tasks) >= 6  # blink + золотые задачи этапов 2.3 и 2.6
+    assert len(tasks) >= 6  # blink + the golden tasks of stages 2.3 and 2.6
     for task in tasks:
         assert (task.directory / "task.yaml").is_file(), task.name
         assert (task.directory / task.entry).is_file(), task.name
@@ -232,10 +232,10 @@ def test_generate_paste_scenario(tmp_path):
     steps = doc["steps"]
     assert steps[0] == {"wait-serial": ">>>"}
     writes = [s.get("write-serial", "") for s in steps]
-    assert any("\x05" in w for w in writes)  # Ctrl+E — вход в raw-paste
+    assert any("\x05" in w for w in writes)  # Ctrl+E enters raw-paste
     assert any("print('hi')" in w for w in writes)
-    assert any("\x04" in w for w in writes)  # Ctrl+D — выполнить
-    # литеральный expect превращается в wait-serial, regex-паттерн — нет
+    assert any("\x04" in w for w in writes)  # Ctrl+D executes
+    # a literal expect becomes wait-serial, a regex pattern does not
     wait_serials = [s["wait-serial"] for s in steps if "wait-serial" in s]
     assert "blink 0: on" in wait_serials
     assert r"blink \d+: off" not in wait_serials
@@ -244,7 +244,7 @@ def test_generate_paste_scenario(tmp_path):
 def test_generate_paste_scenario_with_stimulus(tmp_path):
     task = make_task(tmp_path, expect=("echo: hi",), stimulus=['write-serial: "hi\\r"'])
     steps = yaml.safe_load(generate_paste_scenario(task))["steps"]
-    # stimulus идёт после Ctrl+D (\x04) и до последнего wait-serial (литеральный expect)
+    # the stimulus goes after Ctrl+D (\x04) and before the last wait-serial (the literal expect)
     stim_idx = steps.index({"write-serial": "hi\r"})
     ctrl_d_idx = steps.index({"write-serial": "\x04"})
     last_wait_idx = max(i for i, s in enumerate(steps) if "wait-serial" in s)
@@ -252,12 +252,12 @@ def test_generate_paste_scenario_with_stimulus(tmp_path):
 
 
 def test_paste_scenario_reads_entry_not_main(tmp_path):
-    # entry-файл (solution.py у золотых задач), а не main.py — маршрутизация по task.entry
+    # the entry file (solution.py for golden tasks), not main.py - routing by task.entry
     tasks_dir = runner_module.Path(__file__).parents[1] / "src" / "ironbench" / "tasks"
     task = load_task(tasks_dir / "blink")
     steps = yaml.safe_load(generate_paste_scenario(task))["steps"]
     code = next(s["write-serial"] for s in steps if "while True" in s.get("write-serial", ""))
-    assert "machine import Pin" in code  # это содержимое solution.py
+    assert "machine import Pin" in code  # this is solution.py content
 
 
 def test_malformed_wokwi_toml_is_clean_fail(tmp_path):
@@ -265,7 +265,7 @@ def test_malformed_wokwi_toml_is_clean_fail(tmp_path):
     (task.directory / "wokwi.toml").write_text("[wokwi\nbroken ===", encoding="utf-8")
     res = run_fake(tmp_path, task, {})
     assert not res.passed
-    assert "подготовить задачу" in (res.error or "")
+    assert "prepare task" in (res.error or "")
 
 
 def test_missing_firmware_is_clean_fail(tmp_path):
@@ -279,14 +279,14 @@ def test_missing_firmware_is_clean_fail(tmp_path):
     assert "no-such.bin" in (res.error or "")
 
 
-# --- мишени (план 3.2): диспетчер run_task ---
+# --- targets (plan 3.2): the run_task dispatcher ---
 
 
 def test_unknown_target_rejected(tmp_path):
     d = tmp_path / "t"
     d.mkdir()
     (d / "task.yaml").write_text("name: fake\ntarget: qemu\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="неизвестная мишень"):
+    with pytest.raises(ValueError, match="unknown target"):
         load_task(d)
 
 
@@ -301,9 +301,9 @@ def test_real_target_without_port_is_infra_fail(tmp_path, monkeypatch):
     task = dataclasses.replace(make_task(tmp_path), target="real")
     monkeypatch.delenv("IRONBENCH_REAL_PORT", raising=False)
 
-    # бэкенды реализованных мишеней не должны зваться для real
+    # the backends of implemented targets must not be called for real
     def forbidden_backend(*a, **k):
-        raise AssertionError("чужой бэкенд вызван для мишени real")
+        raise AssertionError("a foreign backend was called for the real target")
 
     monkeypatch.setattr(runner_module, "_run_wokwi", forbidden_backend)
     monkeypatch.setattr(runner_module, "_run_renode", forbidden_backend)
@@ -311,21 +311,21 @@ def test_real_target_without_port_is_infra_fail(tmp_path, monkeypatch):
     assert not res.passed
     assert res.exit_code is None
     assert "IRONBENCH_REAL_PORT" in (res.error or "")
-    assert res.missed == task.expect  # проверки не выполнялись
+    assert res.missed == task.expect  # the checks never ran
 
 
 def test_renode_target_without_section_is_clean_fail(tmp_path, monkeypatch):
-    # renode-задача без секции renode — чистый инфраструктурный FAIL без запуска
+    # a renode task without a renode section - a clean infrastructure FAIL without a run
     task = dataclasses.replace(make_task(tmp_path), target="renode")
 
     def forbidden_wokwi(*a, **k):
-        raise AssertionError("wokwi-бэкенд вызван для мишени renode")
+        raise AssertionError("the wokwi backend was called for the renode target")
 
     monkeypatch.setattr(runner_module, "_run_wokwi", forbidden_wokwi)
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert "не удалось подготовить задачу" in (res.error or "")
-    assert "platform и firmware" in (res.error or "")
+    assert "failed to prepare task" in (res.error or "")
+    assert "platform and firmware" in (res.error or "")
 
 
 def test_renode_target_dispatches_to_renode_backend(tmp_path, monkeypatch):
@@ -350,4 +350,4 @@ def test_unready_target_journaled(tmp_path):
     with JsonlJournal(jpath, actor="test") as jr:
         run_task(task, out_dir=tmp_path / "out", cli_path=["never"], journal=jr)
     kinds = [json.loads(line)["kind"] for line in jpath.read_text(encoding="utf-8").splitlines()]
-    assert kinds == ["task_result"]  # task_start нет — запуска не было
+    assert kinds == ["task_result"]  # no task_start - there was no run

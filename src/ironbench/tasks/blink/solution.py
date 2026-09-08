@@ -2,8 +2,8 @@ import time
 
 from machine import Pin
 
-# Задача blink: светодиод на GPIO2 мигает (0.5 с вкл / 0.5 с выкл),
-# каждый ход печатается в serial — по нему раннер и сценарий проверяют прошивку.
+# The blink task: the LED on GPIO2 blinks (0.5 s on / 0.5 s off);
+# every turn is printed to serial - the runner and the scenario score the firmware by it.
 led = Pin(2, Pin.OUT)
 n = 0
 while True:

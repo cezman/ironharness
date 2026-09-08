@@ -1,10 +1,10 @@
-"""Интеграционный тест: все золотые задачи в реальной облачной симуляции Wokwi.
+"""Integration test: all golden tasks in a real Wokwi cloud simulation.
 
-Тратит минуты бесплатной квоты Wokwi (50 мин/мес), поэтому запускается ТОЛЬКО
-осознанно: WOKWI_CLI_TOKEN (окружение или .env) + IRONBENCH_REAL_WOKWI=1.
-Голый токен недостаточен — полный `uv run pytest` не должен жечь квоту
-(урок 2026-09-07: квота кончилась посреди сессии от обычных прогонов).
-На CI обоих нет → скип. Контрольный прогон:
+It spends minutes of the free Wokwi quota (50 min/month), so it runs ONLY
+deliberately: WOKWI_CLI_TOKEN (environment or .env) + IRONBENCH_REAL_WOKWI=1.
+A bare token is not enough - a full `uv run pytest` must not burn the quota
+(the 2026-09-07 lesson: the quota ran out mid-session from ordinary runs).
+Neither exists on CI -> skip. A controlled run:
 IRONBENCH_REAL_WOKWI=1 uv run pytest tests/test_ironbench_wokwi_integration.py
 """
 
@@ -23,7 +23,7 @@ TASKS = load_tasks(TASKS_DIR)
 
 pytestmark = pytest.mark.skipif(
     not (resolve_token() and os.environ.get("IRONBENCH_REAL_WOKWI") == "1"),
-    reason="реальный Wokwi жжёт квоту: нужны WOKWI_CLI_TOKEN и IRONBENCH_REAL_WOKWI=1",
+    reason="real Wokwi burns the quota: WOKWI_CLI_TOKEN and IRONBENCH_REAL_WOKWI=1 are required",
 )
 
 

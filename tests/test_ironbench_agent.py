@@ -1,4 +1,4 @@
-"""Тесты агентского цикла ironbench — фейковый LLM и фейковый раннер, без сети."""
+"""Tests of the ironbench agent loop - a fake LLM and a fake runner, no network."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def make_task():
 
 
 def fake_runner(passed: bool, serial_tail: str = "Traceback ..."):
-    """Раннер-стаб с контрактом run_task: TaskResult + serial-лог на диске."""
+    """A runner stub with the run_task contract: TaskResult + a serial log on disk."""
 
     def run(task, *, out_dir, journal=None):
         log_dir = Path(out_dir)
@@ -49,15 +49,15 @@ def fake_runner(passed: bool, serial_tail: str = "Traceback ..."):
 
 def test_extract_code():
     assert extract_code(GOOD_RESPONSE) == GOOD_CODE
-    assert extract_code("пояснение без кода") is None
-    two = "```python\na = 1\n```\nтекст\n```python\nb = 2\n```"
+    assert extract_code("prose without code") is None
+    two = "```python\na = 1\n```\ntext\n```python\nb = 2\n```"
     assert extract_code(two) == "b = 2\n"
     assert extract_code("```micropython\nx=1\n```") == "x=1\n"
 
 
 def test_resolve_llm_config_defaults_and_env(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    # изолируемся и от репозиторного .env: тест проверяет только дефолты/окружение
+    # isolate from the repository .env too: the test only checks defaults/environment
     monkeypatch.setattr(agent_module, "find_env_file", lambda: None)
     cfg = resolve_llm_config()
     assert cfg.base_url == "http://localhost:1234/v1"
@@ -68,19 +68,19 @@ def test_resolve_llm_config_defaults_and_env(tmp_path, monkeypatch):
     cfg = resolve_llm_config()
     assert cfg.model == "test-model"
     assert cfg.allow_local is False
-    # явный аргумент сильнее окружения
+    # an explicit argument beats the environment
     assert resolve_llm_config(model="explicit").model == "explicit"
 
 
 def test_validate_endpoint_rules():
     validate_endpoint("http://localhost:1234/v1", allow_local=True)
-    # публичный IP-литерал: без зависимости от внешнего DNS
+    # a public IP literal: no dependency on external DNS
     validate_endpoint("https://8.8.8.8/v1", allow_local=False)
     with pytest.raises(ValueError, match="http/https"):
         validate_endpoint("ftp://example.com", allow_local=True)
     with pytest.raises(ValueError, match="metadata"):
         validate_endpoint("http://metadata.google.internal/v1", allow_local=True)
-    with pytest.raises(ValueError, match="приватн"):
+    with pytest.raises(ValueError, match="private"):
         validate_endpoint("http://192.168.1.10:1234/v1", allow_local=False)
 
 
@@ -106,9 +106,9 @@ def test_solve_attempt_solves_first_iteration(tmp_path):
     assert res.solved and res.iterations == 1
     assert seen["entry"] == "main.py"
     assert (seen["dir"] / "main.py").read_text(encoding="utf-8") == GOOD_CODE
-    # solution.py не должен утечь в рабочий каталог агента
+    # solution.py must not leak into the agent's working directory
     assert not (seen["dir"] / "solution.py").exists()
-    assert (seen["dir"] / "wokwi.toml").exists()  # остальная обвязка задачи копируется
+    assert (seen["dir"] / "wokwi.toml").exists()  # the rest of the task scaffolding is copied
 
 
 def test_solve_attempt_hits_iteration_limit(tmp_path):
@@ -123,12 +123,12 @@ def test_solve_attempt_hits_iteration_limit(tmp_path):
     )
     assert not res.solved
     assert res.iterations == 3
-    assert "лимит итераций" in (res.error or "")
+    assert "iteration limit" in (res.error or "")
 
 
 def test_solve_attempt_stops_on_infra_error(tmp_path):
-    # сломанная среда (нет Renode/CLI/прошивки) не чинится LLM-итерациями —
-    # цикл должен выйти сразу, а не жечь попытки до лимита
+    # a broken environment (no Renode/CLI/firmware) is not fixed by LLM iterations -
+    # the loop must exit immediately instead of burning attempts up to the limit
     task = make_task()
     cfg = SolveConfig(base_url="http://x", api_key="k", model="m", max_iterations=3)
 
@@ -139,7 +139,7 @@ def test_solve_attempt_stops_on_infra_error(tmp_path):
             exit_code=None,
             duration_sec=0.1,
             serial_log=None,
-            error="не найден: Renode-сокет :3456",
+            error="not found: Renode socket :3456",
         )
 
     res = solve_attempt(
@@ -147,16 +147,16 @@ def test_solve_attempt_stops_on_infra_error(tmp_path):
     )
     assert not res.solved
     assert res.iterations == 1
-    assert "среда не готова" in (res.error or "")
+    assert "environment not ready" in (res.error or "")
 
 
 def test_solve_attempt_asks_again_without_code_block(tmp_path):
     task = make_task()
     cfg = SolveConfig(base_url="http://x", api_key="k", model="m")
-    responses = iter(["ответ без кода", GOOD_RESPONSE])
+    responses = iter(["an answer without code", GOOD_RESPONSE])
 
     def llm(cfg, msgs):
-        # после первого «без кода» должен прийти feedback-ход от пользователя
+        # after the first "no code" answer a user feedback turn must arrive
         assert len(msgs) >= 2
         return next(responses)
 
@@ -173,7 +173,7 @@ def test_solve_attempt_llm_error_is_clean_fail(tmp_path):
 
     res = solve_attempt(task, cfg, out_dir=tmp_path, llm=boom, runner=fake_runner(True))
     assert not res.solved
-    assert "ошибка LLM" in (res.error or "")
+    assert "LLM error" in (res.error or "")
 
 
 def test_solve_writes_journal_and_counts_attempts(tmp_path):
@@ -200,4 +200,4 @@ def test_solve_writes_journal_and_counts_attempts(tmp_path):
     assert "attempt_result" in kinds
     attempt_events = [d for k, d in events if k == "attempt_result"]
     assert attempt_events[0]["model"] == "test-model"
-    assert jpath.exists() is False  # Journal-стаб не пишет файл — пишет реальный JsonlJournal
+    assert jpath.exists() is False  # the J stub writes no file - the real JsonlJournal does

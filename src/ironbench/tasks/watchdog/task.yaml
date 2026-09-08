@@ -1,15 +1,15 @@
-# Устойчивость к патологическому вводу: неисправимая строка (длиннее 32 символов)
-# трактуется как повод для «сторожевого сброса» — состояние в ноль, отчёт и
-# продолжение работы. Дискриминатор: после сброса get обязан вернуть val 0.
+# Resilience to pathological input: an incurable line (longer than 32 characters)
+# is treated as a reason for a "watchdog reset" - state to zero, a report, and
+# continued operation. Discriminator: after the reset get must return val 0.
 name: watchdog
 description: >-
-  Прошивка при старте печатает "wd ready" и в бесконечном цикле обслуживает
-  команды построчно: "ping" → ответ "pong"; "set <целое>" → запоминает целое и
-  отвечает "ok <целое>"; "get" → отвечает "val <запомненное целое>" (до первого
-  set — 0). Патологический ввод — строка длиннее 32 символов: прошивка обязана
-  трактовать его как неисправимую ошибку ввода: сбросить состояние в начальное
-  (забыть запомненное целое), напечатать "wd: reset" и продолжать обслуживать
-  команды как ни в чём не бывало (падать нельзя).
+  On startup the firmware prints "wd ready" and in an infinite loop serves
+  commands line by line: "ping" -> answers "pong"; "set <integer>" -> stores the
+  integer and answers "ok <integer>"; "get" -> answers "val <stored integer>"
+  (0 before the first set). Pathological input - a line longer than 32 characters:
+  the firmware must treat it as an unrecoverable input error: reset the state to
+  the initial one (forget the stored integer), print "wd: reset" and keep serving
+  commands as if nothing happened (crashing is not allowed).
 entry: solution.py
 target: unix
 timeout_sec: 15
@@ -34,7 +34,7 @@ stimulus:
   - wait-serial: "ok 5"
   - write-serial: "get\r"
   - wait-serial: "val 5"
-  # патологический ввод (40 символов) → сброс состояния
+  # pathological input (40 characters) -> a state reset
   - write-serial: "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ\r"
   - wait-serial: "wd: reset"
   - write-serial: "get\r"

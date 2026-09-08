@@ -1,12 +1,12 @@
-# Пилотная задача мишени renode (этап 2.6): MicroPython в Renode под WSL2.
-# Прошивка: LITEX_VEXRISCV-micropython-v1.11.0.elf в tasks/_firmware — артефакт
-# Renode (dl.antmicro.com/projects/renode/litex_vexriscv--micropython.elf-s_2713384-
+# The pilot task of the renode target (stage 2.6): MicroPython in Renode under WSL2.
+# Firmware: LITEX_VEXRISCV-micropython-v1.11.0.elf in tasks/_firmware - an artifact
+# from Renode (dl.antmicro.com/projects/renode/litex_vexriscv--micropython.elf-s_2713384-
 # e2d6be24b6a0de3d1bcf3161e38191b0e4489010), litex_vexriscv_micropython.repl.
-# У билда нет machine/time/input — задачи с GPIO остаются на мишени wokwi.
+# The build has no machine/time/input - GPIO tasks stay on the wokwi target.
 name: renode-hello
 description: >-
-  Программа печатает в serial три строки: "renode alive", затем "no gpio here",
-  затем "bye now", после чего завершается. Ввода и таймингов нет — только печать.
+  The program prints three lines to serial: "renode alive", then "no gpio here",
+  then "bye now", and then exits. There is no input or timing - printing only.
 entry: solution.py
 target: renode
 timeout_sec: 20

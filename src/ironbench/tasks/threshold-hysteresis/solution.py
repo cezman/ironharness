@@ -1,5 +1,5 @@
-# Тревога с гистерезисом 30/28: включение при t >= 30, выключение при t <= 28,
-# внутри полосы состояние держится; печать на каждом измерении.
+# An alarm with 30/28 hysteresis: on at t >= 30, off at t <= 28;
+# inside the band the state holds; print on every reading.
 import time
 
 import dht
@@ -16,6 +16,6 @@ while True:
         elif alarm and t <= 28:
             alarm = False
     except OSError:
-        pass  # одиночный сбой чтения не фатален
+        pass  # a single read failure is not fatal
     print("alarm:", "on" if alarm else "off")
     time.sleep(2.5)

@@ -48,7 +48,7 @@ class RealRepl:
         self.interrupt()
 
     def _pump(self) -> None:
-        """Забирает из транспорта всё, что пришло (без блокировки на холостом ходу)."""
+        """Drains everything that arrived from the transport (without blocking when idle)."""
         while True:
             in_waiting = getattr(self._t, "in_waiting", None)
             if in_waiting:
@@ -56,7 +56,7 @@ class RealRepl:
             elif in_waiting == 0:
                 return
             else:
-                data = self._t.read(256)  # фейки без in_waiting: read неблокирующий
+                data = self._t.read(256)  # fakes without in_waiting: read is non-blocking
             if not data:
                 return
             self._text += data.decode("utf-8", "replace")
@@ -71,7 +71,7 @@ class RealRepl:
             time.sleep(_WRITE_CHUNK_DELAY)
 
     def interrupt(self) -> None:
-        """Ctrl+C x2: прервать работающий скрипт и оказаться на приглашении REPL."""
+        """Ctrl+C x2: abort a running script and land on the REPL prompt."""
         self.write(CTRL_C + CTRL_C)
         time.sleep(0.4)
         self._drain()
@@ -85,17 +85,17 @@ class RealRepl:
             time.sleep(0.05)
 
     def boot(self, code: str) -> None:
-        """Гигиена + запуск entry: снести чужой main.py, soft reset, залить код.
+        """Hygiene + entry run: remove a foreign main.py, soft reset, paste the code.
 
-        После staging буфер вывода очищается — в оценку попадает только сам
-        прогон (Traceback от прерывания чужой прошивки или boot-мусор не
-        считается за провал задачи).
+        After staging the output buffer is cleared - only the run itself counts for
+        scoring (a Traceback from interrupting foreign firmware or boot noise does
+        not fail the task).
         """
         self.interrupt()
         self.write(REMOVE_MAIN)
         time.sleep(0.6)
         self._drain()
-        self.write(CTRL_D)  # soft reset: чистое состояние без main.py
+        self.write(CTRL_D)  # soft reset: a clean state without main.py
         time.sleep(_SOFT_RESET_SEC)
         self._drain()
         self._text = ""
@@ -108,10 +108,10 @@ class RealRepl:
             self.wait_for(PASTE_BANNER, time.monotonic() + 2.0)
         for line in code.splitlines(keepends=True):
             self.write(line.encode("utf-8"))
-        self.write(CTRL_D)  # выполнить; вывод читается в wait_for/дочитывании
+        self.write(CTRL_D)  # execute; the output is read in wait_for/keep-reading
 
     def wait_for(self, needle: str, deadline: float) -> bool:
-        """Ждёт подстроку в накопленном выводе до дедлайна; False — время вышло."""
+        """Waits for a substring in the accumulated output until the deadline; False - time is up."""
         while time.monotonic() < deadline:
             if needle in self.output():
                 return True

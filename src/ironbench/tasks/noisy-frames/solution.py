@@ -1,6 +1,6 @@
-# Кадры "<id>:<payload>:<xor2>\n": xor2 — XOR байтов payload, hex из 2 знаков.
-# Битая сумма или битый формат → "nak", иначе "ack <id>". Переприём — забота
-# отправителя, прошивка только честно отвечает.
+# Frames "<id>:<payload>:<xor2>\n": xor2 is the XOR of the payload bytes, 2 hex digits.
+# A bad checksum or a bad format -> "nak", otherwise "ack <id>". Retransmission is
+# the sender's concern, the firmware just answers honestly.
 while True:
     line = input()
     parts = line.split(":")

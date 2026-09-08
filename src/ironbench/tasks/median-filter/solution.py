@@ -1,5 +1,5 @@
-# Медиана окна 5 гасит одиночные выбросы DHT22; печать — только по заполненному
-# окну (на прогреве медиана неполного окна дала бы ложный выброс).
+# The median of a window of 5 suppresses single DHT22 spikes; printing happens
+# only for a full window (during warm-up a partial-window median would give a false spike).
 import time
 
 import dht
@@ -13,7 +13,7 @@ while True:
     try:
         window.append(sensor.temperature())
     except OSError:
-        pass  # одиночный сбой чтения не фатален
+        pass  # a single read failure is not fatal
     if len(window) > 5:
         window.pop(0)
     if len(window) == 5:

@@ -1,8 +1,9 @@
-# Описание задачи для ironbench: см. AGENTS.md / skills ironbench-task.
+# Task description for ironbench: see AGENTS.md / ironbench-task skill.
 name: uart-echo
 description: >-
-  Прошивка при старте печатает "echo ready", затем в бесконечном цикле читает строки
-  из serial-консоли и на каждую отвечает "echo: <строка>" (без завершения программы).
+  On startup the firmware prints "echo ready", then in an infinite loop reads lines
+  from the serial console and answers each one with "echo: <line>" (the program
+  never exits).
 entry: solution.py
 timeout_sec: 20
 tags: [io]
@@ -14,8 +15,8 @@ expect:
 fail:
   - 'Traceback'
 stimulus:
-  # первый delay — прогрев: прошивка должна дойти до input(), иначе ввод теряется.
-  # Enter в write-serial — только \r: wokwi-cli съедает \n.
+  # the first delay is a warm-up: the firmware must reach input(), otherwise the
+  # input is lost. In write-serial Enter is \r only: wokwi-cli swallows \n.
   - delay: 1500ms
   - write-serial: "hello\r"
   - delay: 400ms

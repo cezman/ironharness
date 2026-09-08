@@ -1,16 +1,16 @@
-# Кооперативная многозадачность: два периода (A 0.5 c, B 1.2 c) без sleep в лоб,
-# выбор ближайшего дедлайна; конечный горизонт 6 c и итоговая строка. Допуски в
-# expect щедрые (±2 срабатывания) — WSL-тайминги неидеальны. Живой прогон
-# сверяет фактические числа с допусками.
+# Cooperative multitasking: two periods (A 0.5 s, B 1.2 s) without a blunt sleep,
+# picking the nearest deadline; a finite 6 s horizon and a summary line. The
+# tolerances in expect are generous (+-2 firings) - WSL timings are not perfect.
+# The live run cross-checks the actual numbers against the tolerances.
 name: coop-scheduler
 description: >-
-  Прошивка — кооперативный планировщик двух периодических задач: задача A с
-  периодом 0.5 секунды печатает "A", задача B с периодом 1.2 секунды печатает
-  "B". Планирование по дедлайнам: в каждый момент исполняется та задача, чей
-  срок наступил раньше (блокирующий sleep на полный период ломает расписание —
-  так нельзя). Через 6 секунд от старта прошивка печатает итог строкой
-  "A=<count> B=<count> ok" и завершается; count — сколько раз успела сработать
-  каждая задача (ожидаемо A около 11, B около 4 при горизонте 6 c).
+  The firmware is a cooperative scheduler of two periodic tasks: task A with a
+  period of 0.5 seconds prints "A", task B with a period of 1.2 seconds prints
+  "B". Deadline-driven scheduling: at every moment the task whose deadline came
+  first is the one that runs (a blocking sleep for the whole period breaks the
+  schedule - that is not allowed). After 6 seconds from start the firmware prints
+  the summary "A=<count> B=<count> ok" and exits; count is how many times each
+  task managed to fire (expect A about 11 and B about 4 over the 6 s horizon).
 entry: solution.py
 target: unix
 timeout_sec: 15

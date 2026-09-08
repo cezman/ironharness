@@ -1,9 +1,9 @@
-"""Тесты real-мишени: живая плата эмулируется фейковым REPL-транспортом.
+"""Tests of the real target: the live board is emulated by a fake REPL transport.
 
-FakeBoard повторяет семантику MicroPython-REPL на ESP32: raw-paste (Ctrl+E код
-Ctrl+D) запускает «прошивку» uart-echo; каждая строка ввода после старта
-отвечает "echo: <строка>". read() с пустым буфером возвращает b"" — как
-SerialTransport по таймауту. Железо в тестах не участвует (sim-before-real).
+FakeBoard mirrors the MicroPython-REPL semantics on an ESP32: raw-paste (Ctrl+E,
+code, Ctrl+D) runs the uart-echo "firmware"; every input line after startup is
+answered with "echo: <line>". read() with an empty buffer returns b"" - like
+SerialTransport on timeout. No hardware participates in the tests (sim-before-real).
 """
 
 import threading
@@ -45,9 +45,9 @@ class FakeBoard:
     def write(self, data: bytes) -> int:
         text = data.decode("utf-8", "replace")
         if "\x03" in text:
-            return len(data)  # прерывание — ничего не печатаем
+            return len(data)  # an interrupt - print nothing
         if "main.py" in text and "os.remove" in text:
-            self._started = False  # гигиена: прошивка прошлой задачи снесена
+            self._started = False  # hygiene: the previous task's firmware is gone
             return len(data)
         if "\x05" in text:
             self._paste_mode = True
@@ -56,13 +56,13 @@ class FakeBoard:
             return len(data)
         if "\x04" in text:
             self._paste_mode = False
-            if self._paste_buf:  # прогон свежезалитого кода
+            if self._paste_buf:  # a run of the freshly staged code
                 self._started = True
                 self._emit("echo ready\r\n")
                 self._paste_buf = ""
             return len(data)
         if self._paste_mode:
-            self._paste_buf += text  # raw-paste не эхолит исходник
+            self._paste_buf += text  # raw-paste does not echo the source
             return len(data)
         if self._started:
             for line in text.splitlines():
@@ -119,7 +119,7 @@ def test_real_target_happy_path(tmp_path):
     )
     res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeBoard())
     assert res.passed, res.missed or res.error
-    assert res.exit_code is None  # живой платы как процесса нет
+    assert res.exit_code is None  # there is no process behind a live board
     assert (tmp_path / "out" / "fake.serial.log").is_file()
 
 
@@ -159,6 +159,6 @@ def test_real_target_transport_exception_is_infra(tmp_path):
 
 
 def test_task_yaml_roundtrip():
-    # stimulus с write-serial из yaml доходит до раннера как словарь
+    # a write-serial stimulus from yaml reaches the runner as a dict
     raw = yaml.safe_load('stimulus:\n  - write-serial: "hi\\n"')
     assert raw["stimulus"][0] == {"write-serial": "hi\n"}

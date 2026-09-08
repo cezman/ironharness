@@ -1,5 +1,5 @@
-# Мини-MQTT клиент (подмножество 3.1.1, QoS0) на голом сокете. Брокеру всё
-# равно, что длина тела кодируется varint'ом 7-битными группами.
+# A mini-MQTT client (a 3.1.1 subset, QoS0) on a bare socket. The broker does not
+# care that the body length is encoded as a varint in 7-bit groups.
 import os
 import socket
 import struct
@@ -32,7 +32,7 @@ def mq_str(s):
 
 
 def read_packet(timeout_ms):
-    """Целый MQTT-пакет из потока; None по таймауту."""
+    """One whole MQTT packet from the stream; None on timeout."""
     global _buf
     deadline = time.ticks_add(time.ticks_ms(), timeout_ms)
     while True:

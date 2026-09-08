@@ -1,7 +1,7 @@
 import time
 
-# Конечный автомат светофора: red(3с) → green(3с) → yellow(1с) → red ... по кругу.
-# Каждый вход в состояние печатается как "state: <имя>", каждый новый цикл — "cycle: N".
+# A traffic-light FSM: red(3s) -> green(3s) -> yellow(1s) -> red ... in a circle.
+# Every state entry prints as "state: <name>", every new cycle - "cycle: N".
 lights = (("red", 3), ("green", 3), ("yellow", 1))
 i = 0
 while True:
