@@ -1,36 +1,38 @@
 # Sim-vs-real smoke: uart-echo (2026-09-08)
 
-Первый прогон одной и той же золотой задачи на симуляторе и на живой плате
-(этап 3, IH-2/IH-3). Это smoke харнесса: эталонное решение, без LLM-агента —
-кампания pass@k sim-vs-real ждёт локальный LLM-эндпоинт.
+First run of the same golden task on a simulator and on live hardware
+(stage 3, IH-2/IH-3). This is a harness smoke with the reference solution —
+no LLM agent yet; the pass@k sim-vs-real campaign waits for a local LLM
+endpoint.
 
-| target | команда | результат | время |
-|--------|---------|-----------|-------|
+| target | command | result | time |
+|--------|---------|--------|------|
 | unix (MicroPython unix-port, WSL2) | `ironbench run --task uart-echo --target unix` | **PASS** | 7.9 s |
 | real (ESP32 Wroom-32 + CH340, COM4, MicroPython v1.27) | `IRONBENCH_REAL_PORT=COM4 ironbench run --task uart-echo --target real` | **PASS** | 20.9 s |
 
-## Что подтверждено
+## What this confirms
 
-- Один и тот же entry (`uart-echo/solution.py`: баннер + бесконечный input()-эхо)
-  проходит критерии `task.yaml` на обеих мишенях без изменений кода.
-- Накладные расходы real: ~13 s сверх симуляции — staging построчным paste,
-  boot-паузы после сброса порта, soft reset (гигиена main.py).
+- The same entry (`uart-echo/solution.py`: banner + infinite input()-echo
+  loop) passes the `task.yaml` criteria on both targets with zero code
+  changes.
+- Real-target overhead: ~13 s over the simulator — line-by-line staging,
+  boot pauses after the port-open reset, soft reset (main.py hygiene).
 
-## Грабли CH340/REPL, закрытые в realhw.py (важно для будущих real-мишеней)
+## CH340/REPL gotchas closed in realhw.py (matters for future real targets)
 
-1. Конкурентные read+write из разных потоков кладут драйвер CH340 (segfault) —
-   линк однопоточный: pump-чтение только между шагами, записи дозированы
-   (24 байта / 40 мс).
-2. Заливка кода одной пачкой бьётся (на плату приходят NUL) — построчно,
-   chunk 24 B + 40 мс.
-3. `input()` терминируется только `\r` (`\n` молчит) — стимулы нормализуются
-   к `\r` (зеркально unix-мишени, где нужен `\n`).
-4. Paste mode подтверждается баннером; перед прогоном сносится чужой `main.py`
-   + soft reset; буфер вывода чистится после staging — в оценку идёт только
-   сам прогон (boot-мусор и чужие traceback'ы не фейлят задачу).
+1. Concurrent read+write from two threads crashes the CH340 driver
+   (segfault) — the link is single-threaded: pump-reads only between steps,
+   writes rate-limited (24 bytes / 40 ms).
+2. Staging the script in one burst corrupts it (the board receives NUL
+   bytes) — send line-by-line, 24 B chunks with delays.
+3. `input()` terminates on `\r` only (`\n` is silent) — stimulus writes are
+   normalized to `\r` (mirroring the unix target, which needs `\n`).
+4. Paste mode is confirmed by its banner; before a run, a foreign `main.py`
+   is removed and a soft reset is performed; the output buffer is cleared
+   after staging — pattern scoring only sees the run itself.
 
-## Следующий шаг
+## Next step
 
-`ironbench solve --task uart-echo --target {unix,real} --attempts N` на
-локальном LLM (LLM_BASE_URL/LLM_MODEL) → pass@k сим против железа — это и есть
-кампания sim-vs-real для анонса.
+`ironbench solve --task uart-echo --target {unix,real} --attempts N` against
+a local LLM (`LLM_BASE_URL`/`LLM_MODEL`) → pass@k on simulator vs hardware —
+the sim-vs-real campaign for the announcement.
