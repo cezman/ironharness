@@ -9,7 +9,6 @@ license-files = ["LICENSE"]
 authors = [{ name = "Tsyren Balmaev (cezman)" }]
 keywords = ["mcp", "agents", "hardware", "serial", "modbus", "mqtt", "esp32", "firmware", "benchmark"]
 classifiers = [
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Embedded Systems",
@@ -40,7 +39,7 @@ ironbench = "ironbench.cli:main"
 ironharness-mcp = "io_core.mcp_server:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
