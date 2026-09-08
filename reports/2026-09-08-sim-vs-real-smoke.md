@@ -36,3 +36,25 @@ endpoint.
 `ironbench solve --task uart-echo --target {unix,real} --attempts N` against
 a local LLM (`LLM_BASE_URL`/`LLM_MODEL`) → pass@k on simulator vs hardware —
 the sim-vs-real campaign for the announcement.
+
+## First LLM datapoint (2026-09-09)
+
+Model: `qwen2.5-7b-instruct` (LM Studio, local, 4.7 GB, fully in VRAM).
+Task: uart-echo, 2 attempts, iteration limit 5 (harness defaults).
+
+| target | attempts | solved | wall time |
+|--------|----------|--------|-----------|
+| unix (sim) | 2 | **0/2** | 58.8 s |
+| real (ESP32, COM4) | 2 | **0/2** | 648.9 s |
+
+Failure mode (both targets): the model fixates on hardware-UART solutions
+(`machine.UART(0/1)` + blocking reads), while the harness channel is
+stdin/stdout — `input()`, which the reference solution uses. On unix,
+`machine.UART` does not exist (AttributeError on every iteration); on real,
+UART1 has no physical peer, so the echoed lines never come back.
+
+Caveats: task descriptions are still Russian (IH-9 translation pending);
+5 iterations is the harness default, not a tuned budget.
+
+Next: rerun with `qwen3.5-9b` (reasoning model, slower — the first try hit a
+300 s per-call timeout; needs `LLM_TIMEOUT=900+`), then extend to more tasks.
