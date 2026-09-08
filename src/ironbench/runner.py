@@ -1,5 +1,6 @@
-"""Раннер задач ironbench: мишени wokwi (облако) и renode (локально в WSL2);
-real (этап 3) даёт честный FAIL. serial-лог → оценка по паттернам.
+"""Раннер задач ironbench: мишени wokwi (облако), renode (WSL2), unix (локально),
+plant (Python-петля) и real (живая плата, REPL поверх SerialTransport — см. realhw.py).
+serial-лог → оценка по паттернам.
 
 Оценка принадлежит раннеру (не сценарию Wokwi): после каждого запуска serial-лог
 перепроверяется на expect/fail-паттерны из task.yaml.
@@ -54,6 +55,8 @@ import yaml
 
 from io_core.faults import FaultyTransport
 from io_core.mqtt_transport import MqttTransport
+from io_core.serial_transport import SerialTransport
+from ironbench.realhw import RealRepl
 from ironbench.tasks import Task
 
 # Коды возврата wokwi-cli: сработавший --timeout (42) для бесконечных прошивок — норма
@@ -251,13 +254,16 @@ def run_task(
     plant_cmd: str | list | None = None,
     mqtt_broker=None,
     journal=None,
+    real_transport=None,
+    real_port: str | None = None,
 ) -> TaskResult:
-    """Диспетчер мишеней: wokwi/renode/unix/plant реализованы, real — честный FAIL.
+    """Диспетчер мишеней: wokwi/renode/unix/plant/real реализованы.
 
     cli_path/token/renode_cmd/unix_cmd/plant_cmd — точки инъекции для тестов (фейковые
     CLI вместо реальных). mqtt_broker — уже запущенный MqttSimBroker для тестов
     (по умолчанию брокер задачи поднимается в WSL2). journal — io_core.JsonlJournal:
-    пишем task_start/task_result.
+    пишем task_start/task_result. real: real_transport — готовый транспорт (тесты,
+    обычно loop://), real_port — COM-порт живой платы (иначе env IRONBENCH_REAL_PORT).
     """
     if task.target == "wokwi":
         return _run_wokwi(task, out_dir=out_dir, cli_path=cli_path, token=token, journal=journal)
@@ -269,6 +275,10 @@ def run_task(
         )
     if task.target == "plant":
         return _run_plant(task, out_dir=out_dir, plant_cmd=plant_cmd, journal=journal)
+    if task.target == "real":
+        return _run_real(
+            task, out_dir=out_dir, transport=real_transport, port=real_port, journal=journal
+        )
     result = TaskResult(
         task=task.name,
         passed=False,
@@ -276,10 +286,7 @@ def run_task(
         duration_sec=0.0,
         serial_log=None,
         missed=tuple(task.expect),
-        error=(
-            "мишень 'real' не реализована (этап 3: нужны живая плата (usbipd) и бэкенд real); "
-            "проверки не выполнялись"
-        ),
+        error=f"unknown target {task.target!r}; checks were not run",
     )
     _journal_result(journal, result)
     return result
@@ -1186,6 +1193,126 @@ def _run_unix(
         task=task.name,
         passed=passed,
         exit_code=exit_code,
+        duration_sec=duration,
+        serial_log=serial_log if serial_text else None,
+        missed=missed,
+        hit_fail=hit_fail,
+        error=error,
+    )
+    _journal_result(journal, result)
+    return result
+
+
+def _run_real(
+    task: Task,
+    *,
+    out_dir: Path,
+    transport=None,
+    port: str | None = None,
+    journal=None,
+) -> TaskResult:
+    """Живая плата: MicroPython REPL поверх SerialTransport (см. ironbench/realhw.py).
+
+    На ESP32 с USB-UART мостом REPL и application UART — одна линия, поэтому
+    семантика unix-мишени: entry вставляется в REPL raw-paste'ом (Ctrl+E/Ctrl+D),
+    стимул гоняет delay/write-serial/wait-serial, expect/fail — по накопленному
+    выводу. Порт: real_transport (тесты) → real_port → env IRONBENCH_REAL_PORT;
+    без порта — infra-ошибка (живое железо — opt-in по конвенции sim-before-real).
+    set-control/mqtt/noise не поддержаны (честная ошибка).
+    """
+    unsupported = None
+    if "set-control" in {k for step in task.stimulus for k in step}:
+        unsupported = "real target does not support set-control (Wokwi buttons/sensors)"
+    elif task.mqtt:
+        unsupported = "real target does not support the mqtt section yet"
+    elif task.noise:
+        unsupported = "real target does not support noise injection (the link is physical)"
+    if unsupported:
+        result = TaskResult(
+            task=task.name,
+            passed=False,
+            exit_code=None,
+            duration_sec=0.0,
+            serial_log=None,
+            missed=tuple(task.expect),
+            error=unsupported,
+        )
+        _journal_result(journal, result)
+        return result
+
+    if transport is None:
+        port = port or os.environ.get("IRONBENCH_REAL_PORT")
+        if not port:
+            result = TaskResult(
+                task=task.name,
+                passed=False,
+                exit_code=None,
+                duration_sec=0.0,
+                serial_log=None,
+                missed=tuple(task.expect),
+                error=(
+                    "IRONBENCH_REAL_PORT is not set — live-hardware runs are opt-in "
+                    "(set the env var to the board's COM/tty port)"
+                ),
+            )
+            _journal_result(journal, result)
+            return result
+
+        def transport_factory():
+            t = SerialTransport(port, baudrate=115200, timeout=0.5)
+            t.open()
+            return t
+    else:
+        def transport_factory():
+            return transport  # тестовая инъекция фейка
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    serial_log = out_dir / f"{task.name}.serial.log"
+    wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
+    start = time.monotonic()
+    error: str | None = None
+    serial_text = ""
+    repl: RealRepl | None = None
+    try:
+        code = (task.directory / task.entry).read_text(encoding="utf-8")
+        if journal:
+            journal("task_start", {"task": task.name})
+        repl = RealRepl(transport_factory())
+        deadline = time.monotonic() + wall_timeout
+        repl.boot(code)
+        plain = tuple(p for p in task.expect if _plain_text(p))
+        for step in task.stimulus:
+            if time.monotonic() > deadline:
+                break
+            if "delay" in step:
+                time.sleep(min(_parse_delay(step["delay"]), max(0.0, deadline - time.monotonic())))
+            elif "wait-serial" in step:
+                repl.wait_for(str(step["wait-serial"]), deadline)
+            elif "write-serial" in step:
+                # REPL line editor завершает input() по \r (\n молчит) —
+                # нормализуем к \r, зеркально unix-мишени, где нужен \n
+                raw = str(step["write-serial"]).replace("\r\n", "\r").replace("\n", "\r")
+                repl.write(raw.encode("utf-8"))
+        # дочитываем: до всех литеральных expect или дедлайна (бесконечный цикл — норма)
+        while time.monotonic() < deadline:
+            if plain and all(p in repl.output() for p in plain):
+                break
+            time.sleep(0.05)
+        serial_text = repl.output()
+    except (OSError, ConnectionError, ValueError, AssertionError) as e:
+        error = f"failed to talk to the board: {e}"
+    finally:
+        if repl is not None:
+            repl.close()
+
+    serial_log.write_text(serial_text, encoding="utf-8")
+    duration = round(time.monotonic() - start, 2)
+    missed, hit_fail = _check_patterns(serial_text, task.expect, task.fail)
+    passed = not missed and not hit_fail and error is None
+    result = TaskResult(
+        task=task.name,
+        passed=passed,
+        exit_code=None,
         duration_sec=duration,
         serial_log=serial_log if serial_text else None,
         missed=missed,
