@@ -9,7 +9,7 @@
 - **io-core** — безопасный I/O-слой для агентов: транспорты (serial, Modbus TCP, MQTT,
   файловая песочница), симулятор Modbus, инструменты прошивки ESP32 (esptool: разбор образа
   офлайн, flash/erase на живой плате), JSONL-журнал всех операций, реплеер, лимиты
-  (rate-limit, дедлайны), верификация эффектов (`expect_read`), MCP-сервер (19 инструментов).
+  (rate-limit, дедлайны), верификация эффектов (`expect_read`), MCP-сервер (22 инструмента).
 - **ironbench** — бенчмарк для firmware-агентов: золотые задачи в симуляторах
   (Wokwi ESP32/MicroPython, плюс Renode), агентский цикл поверх LLM API, отчёты pass@k.
 
@@ -31,8 +31,8 @@ uv run ironharness-mcp               # MCP-сервер (stdio; или: python -
 
 ## Инструменты агента (MCP)
 
-`echo` · `serial_open/write/read/read_line` · `modbus_open/read/write` ·
-`mqtt_open/publish/subscribe/read` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
+`echo` · `serial_open/write/read/read_line/close` · `modbus_open/read/write/close` ·
+`mqtt_open/publish/subscribe/read/close` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
 
 Все операции автоматически пишутся в JSONL-журнал (`$IRONHARNESS_HOME/journal.jsonl`,
 по умолчанию `~/.ironharness/`); файловые операции изолированы песочницей

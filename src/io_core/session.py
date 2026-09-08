@@ -150,6 +150,22 @@ class Session:
 
     # --- жизненный цикл ---
 
+    def _close_typed(self, name: str, cls: type, kind: str) -> None:
+        t = self._get(name)
+        if not isinstance(t, cls):
+            raise KeyError(f"transport {name!r} is not a {kind} transport")
+        t.close()
+        del self._transports[name]
+
+    def serial_close(self, name: str) -> None:
+        self._close_typed(name, SerialTransport, "serial")
+
+    def modbus_close(self, name: str) -> None:
+        self._close_typed(name, ModbusTransport, "modbus")
+
+    def mqtt_close(self, name: str) -> None:
+        self._close_typed(name, MqttTransport, "mqtt")
+
     def close_transport(self, name: str) -> None:
         self._get(name).close()
         del self._transports[name]
