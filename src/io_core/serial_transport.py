@@ -43,6 +43,10 @@ class SerialTransport:
             timeout=self._timeout,
             write_timeout=self._write_timeout,
         )
+        # Реальное железо: pyserial взводит DTR/RTS при открытии, у CH340-плат
+        # это импульс сброса. Явные idle-линии делают поведение детерминированным.
+        self._serial.dtr = False
+        self._serial.rts = False
         self._emit("open", {"port": self._port, "baudrate": self._baudrate})
 
     def close(self) -> None:

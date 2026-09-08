@@ -45,6 +45,14 @@ def test_version_export():
     assert io_core.__version__
 
 
+def test_open_deasserts_dtr_rts():
+    # сим-vs-реал: при открытии линии сразу в idle, чтобы живая CH340-плата
+    # не ловила импульс сброса от дефолтных DTR/RTS pyserial
+    with SerialTransport(LOOP, timeout=0.2) as t:
+        assert t._serial.dtr is False
+        assert t._serial.rts is False
+
+
 @pytest.mark.skipif(os.name != "posix", reason="pty-пары доступны только на Linux/macOS")
 def test_pty_pair_device_side():
     import pty
