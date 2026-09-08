@@ -1,5 +1,7 @@
 """io-core: безопасный I/O-слой для агентов (транспорты, журнал, политики, MCP)."""
 
+from importlib.metadata import PackageNotFoundError, version
+
 from io_core.errors import (
     OperationTimeout,
     QuotaExceeded,
@@ -19,7 +21,10 @@ from io_core.serial_transport import SerialTransport
 from io_core.session import Session
 from io_core.verify import expect_read, write_and_expect
 
-__version__ = "0.1.0"
+try:
+    __version__ = version("ironharness")  # единый источник версии — метаданные пакета
+except PackageNotFoundError:  # запущен из исходников без установки
+    __version__ = "0.3.0"
 
 __all__ = [
     "DeadlineTransport",
