@@ -25,3 +25,7 @@ class VerificationError(Exception):
 
 class ConnectionLost(Exception):
     """Соединение с устройством потеряно (в том числе по сценарию сбоев)."""
+
+
+class PolicyViolation(PermissionError):
+    """Operation denied by the access policy (host allowlist or enabled kinds)."""

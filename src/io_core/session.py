@@ -14,6 +14,7 @@ from io_core.file_sandbox import FileSandbox
 from io_core.journal import JsonlJournal
 from io_core.modbus_transport import ModbusTransport
 from io_core.mqtt_transport import MqttTransport
+from io_core.policy import AccessPolicy
 from io_core.serial_transport import SerialTransport
 
 DEFAULT_BOOTLOADER_OFFSET = 0x1000  # classic ESP32 (canonical value lives in esp_flash)
@@ -35,6 +36,9 @@ class Session:
         if name in self._transports:
             raise KeyError(f"transport {name!r} is already open")
 
+    def _check_kind(self, kind: str) -> None:
+        AccessPolicy.from_env(on_event=self.journal).check_kind(kind)
+
     def _get(self, name: str) -> Any:
         try:
             return self._transports[name]
@@ -46,6 +50,7 @@ class Session:
     def serial_open(
         self, name: str, port: str, *, baudrate: int = 115200, timeout: float = 1.0
     ) -> None:
+        self._check_kind("serial")
         self._check_free(name)
         t = SerialTransport(port, baudrate=baudrate, timeout=timeout, on_event=self.journal)
         t.open()
@@ -71,6 +76,7 @@ class Session:
         device_id: int = 1,
         timeout: float = 3.0,
     ) -> None:
+        self._check_kind("modbus")
         self._check_free(name)
         t = ModbusTransport(
             host, port=port, device_id=device_id, timeout=timeout, on_event=self.journal
@@ -99,6 +105,7 @@ class Session:
         client_id: str = "",
         timeout: float = 3.0,
     ) -> None:
+        self._check_kind("mqtt")
         self._check_free(name)
         t = MqttTransport(
             host, port=port, client_id=client_id, timeout=timeout, on_event=self.journal
@@ -118,6 +125,7 @@ class Session:
     # --- esp (flashing via esptool; needs the [flash] extra) ---
 
     def esp_image_info(self, firmware_path: str, chip: str = "esp32") -> dict[str, Any]:
+        self._check_kind("esp")
         from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
 
         return EspFlasher(chip=chip, on_event=self.journal).image_info(firmware_path)
@@ -125,11 +133,13 @@ class Session:
     def esp_flash(
         self, port: str, firmware_path: str, *, addr: int = DEFAULT_BOOTLOADER_OFFSET, baud: int = 921600
     ) -> str:
+        self._check_kind("esp")
         from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
 
         return EspFlasher(on_event=self.journal).flash(port, firmware_path, addr=addr, baud=baud)
 
     def esp_erase(self, port: str, *, baud: int = 921600) -> str:
+        self._check_kind("esp")
         from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
 
         return EspFlasher(on_event=self.journal).erase(port, baud=baud)
@@ -137,15 +147,19 @@ class Session:
     # --- файлы (песочница) ---
 
     def file_write(self, path: str, content: str) -> int:
+        self._check_kind("file")
         return self.sandbox.write_file(path, content.encode("utf-8"), overwrite=True)
 
     def file_read(self, path: str) -> str:
+        self._check_kind("file")
         return self.sandbox.read_file(path).decode("utf-8", errors="replace")
 
     def file_list(self, path: str = ".") -> list[str]:
+        self._check_kind("file")
         return self.sandbox.list_dir(path)
 
     def file_delete(self, path: str) -> None:
+        self._check_kind("file")
         self.sandbox.delete_file(path)
 
     # --- жизненный цикл ---
