@@ -91,6 +91,13 @@ classes, not a single number. LLM config — environment variables: `LLM_BASE_UR
   `IRONHARNESS_ALLOW_REAL_FLASH=1` (opt-in). erasing flash is irreversible
   (ESP32 recovers by reflashing, but data is gone). esptool is an optional
   dependency: `pip install 'ironharness[flash]'`.
+- **Task code runs unsandboxed**: firmware pasted into REPL targets and plant
+  controllers (`python -m ironbench.plant`) execute as local processes with your
+  user's rights. A process boundary bounds hangs and crashes only - it is not a
+  filesystem or network sandbox. Plant controllers get a throwaway working
+  directory (relative writes stay inside the run artifacts), but they can read
+  or write anything the user can. Only run tasks from authors you trust; for
+  hostile code use a VM or a container.
 - Transports are not restricted to specific hosts/ports by default — the operator
   (you) decides what the agent may reach, optionally via the access policy below;
   every operation is journaled for audit. Flash/erase failures are journaled with

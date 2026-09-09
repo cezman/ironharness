@@ -17,6 +17,15 @@ block). The log is the plant target's "serial": the agent sees its tail as
 feedback, so metrics and errors are written at the end. The plant parameters
 K/T never appear in the log: in system-id style tasks the agent must estimate
 them itself.
+
+Threat model (IH-13): the controller is untrusted code running with the full
+rights of the worker process. The process boundary bounds hangs and crashes
+only - it is NOT a filesystem/network sandbox. The runner gives the worker a
+throwaway working directory (relative writes stay inside the run dir), but the
+controller can still touch anything the user can - including reading the spec
+with K/T via sys.argv, so hiding parameters from the controller within one
+process is impossible. Only run controllers you trust; for hostile code use a
+VM/container (a strong two-process split is a separate decision).
 """
 
 from __future__ import annotations
