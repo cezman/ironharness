@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import textwrap
+
 import pytest
 
 from ironbench.tasks import load_task, load_tasks
@@ -190,3 +192,30 @@ def test_frame_corrupt_stimulus_checksums_are_honest():
         assert f"{x:02x}" == x2, f"bad checksum in the stimulus: {raw!r}"
         checked += 1
     assert checked >= 4
+
+
+def test_wait_serial_requires_preceding_trigger(tmp_path):
+    # IH-14: a wait-serial answer is anchored to the stimulus that asked for it;
+    # a wait without a preceding write-serial/mqtt-publish would false-flag
+    # honest boot output as pre-printed cheating - rejected at load time.
+    d = tmp_path / "t"
+    d.mkdir()
+    (d / "task.yaml").write_text(
+        textwrap.dedent(
+            """
+        name: bad-order
+        description: fake
+        entry: solution.py
+        target: unix
+        timeout_sec: 5
+        expect:
+          - 'boot'
+        stimulus:
+          - wait-serial: "boot"
+        """
+        ),
+        encoding="utf-8",
+    )
+    (d / "solution.py").write_text("print('boot')\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="wait-serial must be preceded"):
+        load_task(d)

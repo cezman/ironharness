@@ -286,7 +286,9 @@ def solve_attempt(
         messages.append(
             {
                 "role": "user",
-                "content": "The check failed. Run output:\n\n"
+                "content": "The check failed."
+                + (f" Reason: {result.error}" if result.error else "")
+                + "\n\nRun output:\n\n"
                 f"{_serial_feedback(result.serial_log)}\n\n"
                 "Fix the code and again send exactly one ```python block with the full main.py.",
             }

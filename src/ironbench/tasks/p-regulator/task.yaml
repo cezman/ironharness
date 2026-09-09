@@ -6,14 +6,16 @@ name: p-regulator
 description: >-
   The plant is a heater: a first-order lag. The steady-state temperature is
   y_oo = ambient + K*u, where ambient = 20 deg C, K = 60 (deg C at u=1), the time
-  constant T = 30 s. Write a P-controller: main.py must define the function
-  control(t, y, setpoint) -> float. It is called every 0.5 s of simulation time:
-  t - seconds since start, y - the measured temperature, setpoint - the setpoint
-  of 74 deg C. The return value is clamped to [0, 1] (the heater power). The
-  controller has the form u = Kp*(setpoint - y). Pick Kp so that: y enters the
-  +-2 deg C band around the setpoint and stays there no later than 100 s (the
-  settling time), the steady-state error is at most 2 deg C, and the overshoot
-  is at most 15%.
+  constant T = 30 s. At t = 90 s the ambient temperature steps up to 26 deg C
+  (a disturbance): an open-loop constant power cannot hold the setpoint after
+  that, the controller must react to y. Write a P-controller: main.py must
+  define the function control(t, y, setpoint) -> float. It is called every
+  0.5 s of simulation time: t - seconds since start, y - the measured
+  temperature, setpoint - the setpoint of 74 deg C. The return value is clamped
+  to [0, 1] (the heater power). The controller has the form u = Kp*(setpoint -
+  y). Pick Kp so that: y enters the +-2 deg C band around the setpoint and
+  stays there no later than 100 s (the settling time), the steady-state error
+  is at most 2 deg C, and the overshoot is at most 15%.
 entry: solution.py
 target: plant
 timeout_sec: 30
@@ -29,6 +31,8 @@ plant:
   dt: 0.5
   u_min: 0.0
   u_max: 1.0
+  disturbances:
+    - {at: 90, ambient: 26}
   requirements:
     steady_error: 2.0
     settle_time: 100.0
