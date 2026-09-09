@@ -15,7 +15,7 @@ from ironbench.agent import resolve_llm_config
 from ironbench.agent import solve as agent_solve
 from ironbench.publish import PublishError, publish_report
 from ironbench.report import render_leaderboard, write_report
-from ironbench.runner import run_task
+from ironbench.runner import clean_runs, run_task
 from ironbench.tasks import TASK_TARGETS, load_tasks
 
 DEFAULT_TASKS_DIR = Path(__file__).resolve().parent / "tasks"
@@ -89,6 +89,15 @@ def main(argv=None) -> int:
 
     sub.add_parser("list", parents=[common], help="list available tasks")
 
+    clean = sub.add_parser(
+        "clean",
+        parents=[common],
+        help="remove old per-run artifact dirs (only in ironbench-marked out dirs)",
+    )
+    clean.add_argument(
+        "--keep", type=int, default=1, help="run dirs to keep per task (default 1)"
+    )
+
     args = parser.parse_args(argv)
     tasks = load_tasks(args.tasks_dir)
 
@@ -148,6 +157,18 @@ def main(argv=None) -> int:
         results = agent_solve_results(task, cfg, attempts=args.attempts, solve_dir=solve_dir)
         # pass@k semantics: the campaign succeeds if the task was solved by at least one attempt
         return 0 if any(r.solved for r in results) else 1
+
+    if args.command == "clean":
+        if args.keep < 0:
+            print("--keep must be >= 0")
+            return 2
+        try:
+            removed = clean_runs(args.out, keep=args.keep)
+        except ValueError as exc:
+            print(f"clean refused: {exc}")
+            return 2
+        print(f"removed {removed} run dir(s) under {args.out} (kept {args.keep} per task)")
+        return 0
 
     # run
     if args.task:

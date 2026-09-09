@@ -203,6 +203,11 @@ def _check_patterns(
     return missed, hit_fail
 
 
+# Per-run artifacts land under out_dir/<task>/run-<id>/; the out dir carries
+# this marker so cleanup tooling only ever removes ironbench's own files.
+OUT_MARKER = ".ironbench-out"
+
+
 def _new_run_dir(out_dir: Path, task: Task) -> tuple[Path, str]:
     """A fresh per-run artifact directory (serial log, plant spec/result, stage).
 
@@ -222,10 +227,35 @@ def _new_run_dir(out_dir: Path, task: Task) -> tuple[Path, str]:
         run_dir = out_dir / task.name / f"run-{run_id}"
         try:
             run_dir.mkdir(parents=True, exist_ok=False)
-            return run_dir, run_id
         except FileExistsError:  # astronomically unlikely - just draw again
             continue
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / OUT_MARKER).write_text("ironbench run artifacts\n", encoding="utf-8")
+        return run_dir, run_id
     raise OSError(f"cannot create a unique run directory under {out_dir}")
+
+
+def clean_runs(out_dir: Path, *, keep: int = 1) -> int:
+    """Removes old per-run artifact directories, keeping the newest `keep` per
+    task ("newest" = the largest directory mtime, i.e. the most recently
+    touched). Only run-* dirs under an ironbench-marked out root are removed -
+    the marker certifies the root, so keep foreign data out of the out dir -
+    and a root without the marker is refused entirely. Do not run clean while
+    a run is in progress: a long-running run's dir may look stale by mtime and
+    get removed under it (the run then fails, it does not corrupt anything)."""
+    if keep < 0:
+        raise ValueError(f"keep must be >= 0, got {keep}")
+    if not (out_dir / OUT_MARKER).is_file():
+        raise ValueError(
+            f"{out_dir} has no {OUT_MARKER} marker - not an ironbench out dir, refusing to clean"
+        )
+    removed = 0
+    for task_dir in sorted(p for p in out_dir.iterdir() if p.is_dir()):
+        runs = sorted(task_dir.glob("run-*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for stale in runs[keep:]:
+            shutil.rmtree(stale, ignore_errors=False)
+            removed += 1
+    return removed
 
 
 def _stage_task(task: Task, out_dir: Path) -> tuple[Path, str]:
@@ -1380,6 +1410,8 @@ def _run_plant(
     run_dir, run_id = _new_run_dir(out_dir, task)
     serial_log = run_dir / f"{task.name}.serial.log"
     result_file = run_dir / f"{task.name}.plant-result.json"
+    controller_cwd = run_dir / "controller-cwd"
+    controller_cwd.mkdir(exist_ok=True)  # tolerate a reused run dir (run_id check still guards scoring)
     wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
     start = time.monotonic()
     exit_code: int | None = None
@@ -1419,6 +1451,7 @@ def _run_plant(
             errors="replace",
             timeout=wall_timeout,
             check=False,
+            cwd=controller_cwd,
         )
         exit_code = proc.returncode
         if proc.returncode != 0:
