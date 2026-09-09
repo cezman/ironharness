@@ -281,6 +281,49 @@ def test_plant_result_with_foreign_run_id_is_rejected(tmp_path, monkeypatch):
     assert "not from this run" in (res2.error or "")
 
 
+def test_plant_non_dict_result_json_is_rejected(tmp_path, monkeypatch):
+    # A result file holding a valid JSON that is not an object (e.g. a list)
+    # is hostile garbage: honest error, never a crash, never a PASS.
+    task = make_plant_task(tmp_path, PASSING_CONTROLLER)
+    out = tmp_path / "out"
+    fixed = out / "fake-plant" / "run-fixed"
+
+    def reuse_run_dir(base, t):
+        fixed.mkdir(parents=True, exist_ok=True)
+        return fixed, "fixed"
+
+    monkeypatch.setattr(runner_module, "_new_run_dir", reuse_run_dir)
+    result_file = fixed / "fake-plant.plant-result.json"
+    writer = f"import pathlib; pathlib.Path(r'{result_file}').write_text('[]')"
+    res = run_task(task, out_dir=out, plant_cmd=[sys.executable, "-c", writer])
+    assert not res.passed
+    assert res.exit_code == 0
+    assert "not a JSON object" in (res.error or "")
+
+
+def test_worker_stamps_run_id_on_unreadable_spec(tmp_path):
+    # Even the early-error report carries run_id: every file the worker writes
+    # at the result path is attributable to a run.
+    entry = tmp_path / "c.py"
+    entry.write_text("def control(t, y, sp):\n    return 0.0\n", encoding="utf-8")
+    spec = tmp_path / "s.json"
+    spec.write_text("not json at all", encoding="utf-8")
+    log, result = tmp_path / "log.txt", tmp_path / "r.json"
+    rc = worker_main(
+        [
+            "--entry", str(entry),
+            "--spec", str(spec),
+            "--log", str(log),
+            "--result", str(result),
+            "--run-id", "xyz",
+        ]
+    )
+    assert rc == 0
+    report = json.loads(result.read_text("utf-8"))
+    assert report["run_id"] == "xyz"
+    assert "unreadable" in report["error"]
+
+
 def test_plant_run_dirs_are_unique_per_run(tmp_path):
     task = make_plant_task(tmp_path, PASSING_CONTROLLER)
     out = tmp_path / "out"

@@ -271,10 +271,14 @@ def load_control(entry):
 
 
 def worker_main(argv=None) -> int:
-    """Worker entry point: always writes result.json; the return code is 0 even
-    when the controller crashed (a controller error is a run result, not a worker crash).
-    result.json is stamped with --run-id: the runner scores only a report it
-    itself requested, so a stale file at the result path is rejected, not used."""
+    """Worker entry point: the run report goes to result.json, the trajectory to
+    the log; the return code is 0 even when the controller crashed (a controller
+    error is a run result, not a worker crash). The one thing the worker cannot
+    do is write anything when the controller kills the process outright
+    (os._exit during import): a missing result.json is a failure by contract,
+    enforced by the runner. result.json is stamped with --run-id: the runner
+    scores only a report it itself requested, so a stale file at the result
+    path is rejected, not used."""
     import argparse
     from pathlib import Path
 

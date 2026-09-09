@@ -213,11 +213,19 @@ def _new_run_dir(out_dir: Path, task: Task) -> tuple[Path, str]:
     plant worker additionally stamps result.json with run_id and the runner
     verifies it - a second line of defense against a stale/hostile file that
     still lands at the exact result path.
+    An uuid collision is retried; any other OSError (broken volume) propagates
+    loudly - without an artifact directory there is nothing to score, so a
+    fabricated FAIL would be no more honest than a crash.
     """
-    run_id = uuid.uuid4().hex[:12]
-    run_dir = out_dir / task.name / f"run-{run_id}"
-    run_dir.mkdir(parents=True, exist_ok=False)
-    return run_dir, run_id
+    for _ in range(3):
+        run_id = uuid.uuid4().hex[:12]
+        run_dir = out_dir / task.name / f"run-{run_id}"
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+            return run_dir, run_id
+        except FileExistsError:  # astronomically unlikely - just draw again
+            continue
+    raise OSError(f"cannot create a unique run directory under {out_dir}")
 
 
 def _stage_task(task: Task, out_dir: Path) -> tuple[Path, str]:
@@ -1433,6 +1441,9 @@ def _run_plant(
                 error = f"failed to parse the plant worker result.json: {e}"
         else:
             error = "the plant worker left no result.json"
+    if report is not None and not isinstance(report, dict):
+        error = "plant worker result.json is not a JSON object"
+        report = None
     if report is not None and report.get("run_id") != run_id:
         # A file at the result path that this run did not request is hostile
         # input, not data: its metrics must never be scored.
