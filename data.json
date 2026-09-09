@@ -1,0 +1,501 @@
+{
+  "campaign": "2026-09-09",
+  "models": [
+    "qwen2.5-7b-instruct",
+    "qwen2.5-coder-14b-instruct"
+  ],
+  "tasks": [
+    "coop-scheduler",
+    "frame-corrupt",
+    "mqtt-device",
+    "noisy-frames",
+    "p-regulator",
+    "pid-antiwindup",
+    "protocol",
+    "protocol-retry",
+    "system-id",
+    "traffic-light",
+    "uart-echo",
+    "uart-menu",
+    "watchdog"
+  ],
+  "pass_at_k": 0.31,
+  "groups": [
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "coop-scheduler",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 452.87,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 226.4,
+      "passed": false,
+      "tags": [
+        "control"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "frame-corrupt",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 326.78,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 163.4,
+      "passed": false,
+      "tags": [
+        "resilience"
+      ],
+      "level": 4
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "mqtt-device",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 148.44,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 74.2,
+      "passed": false,
+      "tags": [
+        "protocol"
+      ],
+      "level": 5
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "noisy-frames",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 214.97,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 107.5,
+      "passed": false,
+      "tags": [
+        "resilience",
+        "protocol"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "p-regulator",
+      "attempts": 2,
+      "solved": 2,
+      "total_iterations": 2,
+      "total_duration": 6.54,
+      "success_rate": 1.0,
+      "avg_iterations": 1.0,
+      "avg_duration": 3.3,
+      "passed": true,
+      "tags": [
+        "control"
+      ],
+      "level": 2
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "pid-antiwindup",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 53.099999999999994,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 26.5,
+      "passed": false,
+      "tags": [
+        "control"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "protocol",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 53.83,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 26.9,
+      "passed": false,
+      "tags": [
+        "protocol"
+      ],
+      "level": 2
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "protocol-retry",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 59.17,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 29.6,
+      "passed": false,
+      "tags": [
+        "protocol",
+        "resilience"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "system-id",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 52.72,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 26.4,
+      "passed": false,
+      "tags": [
+        "control"
+      ],
+      "level": 4
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "traffic-light",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 40.980000000000004,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 20.5,
+      "passed": false,
+      "tags": [
+        "fsm"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "uart-echo",
+      "attempts": 2,
+      "solved": 2,
+      "total_iterations": 3,
+      "total_duration": 22.55,
+      "success_rate": 1.0,
+      "avg_iterations": 1.5,
+      "avg_duration": 11.3,
+      "passed": true,
+      "tags": [
+        "io"
+      ],
+      "level": 1
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "uart-menu",
+      "attempts": 2,
+      "solved": 2,
+      "total_iterations": 5,
+      "total_duration": 188.84,
+      "success_rate": 1.0,
+      "avg_iterations": 2.5,
+      "avg_duration": 94.4,
+      "passed": true,
+      "tags": [
+        "fsm"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-7b-instruct",
+      "task": "watchdog",
+      "attempts": 2,
+      "solved": 2,
+      "total_iterations": 2,
+      "total_duration": 9.65,
+      "success_rate": 1.0,
+      "avg_iterations": 1.0,
+      "avg_duration": 4.8,
+      "passed": true,
+      "tags": [
+        "resilience"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "coop-scheduler",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 950.96,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 475.5,
+      "passed": false,
+      "tags": [
+        "control"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "frame-corrupt",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 840.1700000000001,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 420.1,
+      "passed": false,
+      "tags": [
+        "resilience"
+      ],
+      "level": 4
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "mqtt-device",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 2042.6,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 1021.3,
+      "passed": false,
+      "tags": [
+        "protocol"
+      ],
+      "level": 5
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "noisy-frames",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 701.05,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 350.5,
+      "passed": false,
+      "tags": [
+        "resilience",
+        "protocol"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "p-regulator",
+      "attempts": 2,
+      "solved": 1,
+      "total_iterations": 6,
+      "total_duration": 137.53,
+      "success_rate": 0.5,
+      "avg_iterations": 3.0,
+      "avg_duration": 68.8,
+      "passed": true,
+      "tags": [
+        "control"
+      ],
+      "level": 2
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "pid-antiwindup",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 448.35,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 224.2,
+      "passed": false,
+      "tags": [
+        "control"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "protocol",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 367.95000000000005,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 184.0,
+      "passed": false,
+      "tags": [
+        "protocol"
+      ],
+      "level": 2
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "protocol-retry",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 584.33,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 292.2,
+      "passed": false,
+      "tags": [
+        "protocol",
+        "resilience"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "system-id",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 958.26,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 479.1,
+      "passed": false,
+      "tags": [
+        "control"
+      ],
+      "level": 4
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "traffic-light",
+      "attempts": 2,
+      "solved": 0,
+      "total_iterations": 10,
+      "total_duration": 694.41,
+      "success_rate": 0.0,
+      "avg_iterations": 5.0,
+      "avg_duration": 347.2,
+      "passed": false,
+      "tags": [
+        "fsm"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "uart-echo",
+      "attempts": 2,
+      "solved": 2,
+      "total_iterations": 2,
+      "total_duration": 25.25,
+      "success_rate": 1.0,
+      "avg_iterations": 1.0,
+      "avg_duration": 12.6,
+      "passed": true,
+      "tags": [
+        "io"
+      ],
+      "level": 1
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "uart-menu",
+      "attempts": 2,
+      "solved": 2,
+      "total_iterations": 2,
+      "total_duration": 85.59,
+      "success_rate": 1.0,
+      "avg_iterations": 1.0,
+      "avg_duration": 42.8,
+      "passed": true,
+      "tags": [
+        "fsm"
+      ],
+      "level": 3
+    },
+    {
+      "model": "qwen2.5-coder-14b-instruct",
+      "task": "watchdog",
+      "attempts": 2,
+      "solved": 2,
+      "total_iterations": 5,
+      "total_duration": 362.90000000000003,
+      "success_rate": 1.0,
+      "avg_iterations": 2.5,
+      "avg_duration": 181.5,
+      "passed": true,
+      "tags": [
+        "resilience"
+      ],
+      "level": 3
+    }
+  ],
+  "class_profile": {
+    "qwen2.5-7b-instruct": {
+      "control": {
+        "attempts": 8,
+        "solved": 2,
+        "success_rate": 0.25
+      },
+      "fsm": {
+        "attempts": 4,
+        "solved": 2,
+        "success_rate": 0.5
+      },
+      "io": {
+        "attempts": 2,
+        "solved": 2,
+        "success_rate": 1.0
+      },
+      "protocol": {
+        "attempts": 8,
+        "solved": 0,
+        "success_rate": 0.0
+      },
+      "resilience": {
+        "attempts": 8,
+        "solved": 2,
+        "success_rate": 0.25
+      }
+    },
+    "qwen2.5-coder-14b-instruct": {
+      "control": {
+        "attempts": 8,
+        "solved": 1,
+        "success_rate": 0.12
+      },
+      "fsm": {
+        "attempts": 4,
+        "solved": 2,
+        "success_rate": 0.5
+      },
+      "io": {
+        "attempts": 2,
+        "solved": 2,
+        "success_rate": 1.0
+      },
+      "protocol": {
+        "attempts": 8,
+        "solved": 0,
+        "success_rate": 0.0
+      },
+      "resilience": {
+        "attempts": 8,
+        "solved": 2,
+        "success_rate": 0.25
+      }
+    }
+  }
+}
