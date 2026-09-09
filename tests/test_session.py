@@ -2,7 +2,14 @@
 
 import pytest
 
-from io_core import ModbusSimServer, SandboxViolation, Session, read_events
+from io_core import (
+    ModbusSimServer,
+    ReplayMismatch,
+    ReplaySession,
+    SandboxViolation,
+    Session,
+    read_events,
+)
 
 
 @pytest.fixture()
@@ -90,3 +97,40 @@ def test_close_transport_removes_name(session):
     with pytest.raises(KeyError):
         session.serial_read("s", 1)
     session.serial_open("s", "loop://", timeout=0.5)  # имя освободилось
+
+
+# --- IH-11: журнал атрибутирует операции соединениям, реплей по-соединений ---
+
+
+def test_journal_events_carry_connection_name(session, tmp_path):
+    session.serial_open("a", "loop://", timeout=0.5)
+    session.serial_open("b", "loop://", timeout=0.5)
+    session.serial_write("a", "01")
+    session.serial_write("b", "02")
+    session.serial_read("a", 1)
+    events = read_events(tmp_path / "journal.jsonl")
+    ops = [(e["kind"], e["conn"]) for e in events if e["kind"] in ("write", "read")]
+    assert ops == [("write", "a"), ("write", "b"), ("read", "a")]
+
+
+def test_replay_per_connection(session, tmp_path):
+    session.serial_open("a", "loop://", timeout=0.5)
+    session.serial_open("b", "loop://", timeout=0.5)
+    session.serial_write("a", b"ping-a".hex())
+    assert session.serial_read("a", 6) == b"ping-a".hex()
+    session.serial_write("b", b"ping-b".hex())
+    assert session.serial_read("b", 6) == b"ping-b".hex()
+
+    rs = ReplaySession.from_file(tmp_path / "journal.jsonl")
+    assert rs.order == ("a", "b")
+    ra, rb = rs["a"], rs["b"]
+    with ra, rb:
+        ra.write(b"ping-a")
+        assert ra.read(6) == b"ping-a"
+        rb.write(b"ping-b")
+        assert rb.read(6) == b"ping-b"
+        # ответы «b» не утекают в поток «a»
+        assert ra.read(6) == b""
+        # strict-сверка записей — на соединение: команда «b» в «a» не проходит
+        with pytest.raises(ReplayMismatch):
+            ra.write(b"ping-b")

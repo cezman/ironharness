@@ -18,7 +18,7 @@ from io_core.modbus_sim import ModbusSimServer
 from io_core.modbus_transport import ModbusTransport
 from io_core.mqtt_transport import MqttTransport
 from io_core.policy import AccessPolicy
-from io_core.replay import ReplayMismatch, ReplayTransport
+from io_core.replay import ReplayMismatch, ReplaySession, ReplayTransport
 from io_core.serial_transport import SerialTransport
 from io_core.session import Session
 from io_core.verify import expect_read, write_and_expect
@@ -44,6 +44,7 @@ __all__ = [
     "RateLimitedTransport",
     "RateLimiter",
     "ReplayMismatch",
+    "ReplaySession",
     "ReplayTransport",
     "SandboxViolation",
     "SerialTransport",

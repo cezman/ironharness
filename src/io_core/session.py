@@ -7,6 +7,7 @@ convention).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,8 @@ from io_core.policy import AccessPolicy
 from io_core.serial_transport import SerialTransport
 
 DEFAULT_BOOTLOADER_OFFSET = 0x1000  # classic ESP32 (canonical value lives in esp_flash)
+
+EventHook = Callable[[str, dict[str, Any]], None]
 
 
 class Session:
@@ -45,6 +48,18 @@ class Session:
         except KeyError:
             raise KeyError(f"transport {name!r} is not open") from None
 
+    def _journal_for(self, name: str) -> EventHook:
+        """Per-connection journal hook: stamps every transport event with the
+        connection name, so a session with two devices stays attributable -
+        without it a read/write event carries only data and the journal cannot
+        say whose bytes they are. The transport keeps owning its own fields
+        (open/close events already carry port/host); conn is filled first and
+        never shadows them."""
+        def hook(kind: str, data: dict[str, Any]) -> None:
+            self.journal(kind, {"conn": name, **data})
+
+        return hook
+
     # --- serial ---
 
     def serial_open(
@@ -52,7 +67,9 @@ class Session:
     ) -> None:
         self._check_kind("serial")
         self._check_free(name)
-        t = SerialTransport(port, baudrate=baudrate, timeout=timeout, on_event=self.journal)
+        t = SerialTransport(
+            port, baudrate=baudrate, timeout=timeout, on_event=self._journal_for(name)
+        )
         t.open()
         self._transports[name] = t
 
@@ -79,7 +96,11 @@ class Session:
         self._check_kind("modbus")
         self._check_free(name)
         t = ModbusTransport(
-            host, port=port, device_id=device_id, timeout=timeout, on_event=self.journal
+            host,
+            port=port,
+            device_id=device_id,
+            timeout=timeout,
+            on_event=self._journal_for(name),
         )
         t.open()
         self._transports[name] = t
@@ -108,7 +129,11 @@ class Session:
         self._check_kind("mqtt")
         self._check_free(name)
         t = MqttTransport(
-            host, port=port, client_id=client_id, timeout=timeout, on_event=self.journal
+            host,
+            port=port,
+            client_id=client_id,
+            timeout=timeout,
+            on_event=self._journal_for(name),
         )
         t.open()
         self._transports[name] = t
