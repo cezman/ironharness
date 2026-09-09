@@ -164,9 +164,9 @@ def test_journal_conn_covers_modbus_and_mqtt(session, tmp_path):
 
 
 def test_duplicate_open_race_is_atomic(session, monkeypatch):
-    # Два потока открывают одно имя: даже при медленном open() ровно один
-    # успешен, второй получает KeyError (раньше оба проходили check_free,
-    # открывались дважды и один транспорт терялся навсегда).
+    # Two threads opening one name: even with a slow open() exactly one wins,
+    # the other gets KeyError. Before IH-12 both passed the free-check, opened
+    # twice and one transport was lost forever (leaked past session.close()).
     import io_core.session as session_module
 
     real_cls = session_module.SerialTransport
@@ -211,24 +211,30 @@ def test_connection_limit_rejects_garbage(session, monkeypatch):
         session.serial_open("a", "loop://", timeout=0.5)
 
 
+def test_connection_limit_zero_denies_all_opens(session, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_MAX_CONNECTIONS", "0")
+    with pytest.raises(PolicyViolation):
+        session.serial_open("a", "loop://", timeout=0.5)
+
+
 def test_typed_close_frees_name_even_when_close_fails(session, monkeypatch):
     session.serial_open("s", "loop://", timeout=0.5)
     t = session._transports["s"]
     monkeypatch.setattr(t, "close", lambda: (_ for _ in ()).throw(OSError("port stuck")))
     with pytest.raises(OSError):
         session.serial_close("s")
-    session.serial_open("s", "loop://", timeout=0.5)  # имя освободилось
+    session.serial_open("s", "loop://", timeout=0.5)  # the name is free again
 
 
 def test_session_close_survives_a_bad_port(session, monkeypatch):
-    # Один зависший порт не должен оставить открытыми остальные и журнал:
-    # close() собирает первую ошибку и перевыбрасывает её после зачистки.
+    # One stuck port must not leak the rest: close() clears the registry, shuts
+    # the journal down and only then re-raises the first collected error.
     session.serial_open("bad", "loop://", timeout=0.5)
     session.serial_open("good", "loop://", timeout=0.5)
     bad = session._transports["bad"]
     monkeypatch.setattr(bad, "close", lambda: (_ for _ in ()).throw(OSError("stuck")))
     with pytest.raises(OSError):
         session.close()
-    assert session._transports == {}  # реестр очищен, «good» не брошен
+    assert session._transports == {}  # registry cleared, "good" not abandoned
     with pytest.raises(ValueError):
-        session.journal("late", {})  # журнал тоже закрыт
+        session.journal("late", {})  # the journal is closed too

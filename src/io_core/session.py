@@ -34,6 +34,10 @@ class Session:
     paho network thread). The transport registry is guarded by an internal
     lock, and open is check-and-insert under the same lock - a duplicate or
     over-the-limit open can never slip through a check-then-act window.
+    The lock covers the registry and open/close paths, not per-transport
+    operations: two threads driving one connection are not serialized
+    (transports are not per-operation thread-safe; such misuse fails loudly
+    on the transport level, it does not corrupt the registry).
     """
 
     def __init__(
@@ -247,7 +251,8 @@ class Session:
 
     def close_transport(self, name: str) -> None:
         with self._lock:
-            t = self._transports.pop(name)
+            t = self._get(name)  # a friendly "not open" error, not a bare KeyError
+            del self._transports[name]
         t.close()
 
     def close(self) -> None:

@@ -11,6 +11,9 @@ Configuration via environment:
                          modbus/mqtt (unset = allow all; denials -> PolicyViolation)
     IRONHARNESS_ENABLED_KINDS — comma list of serial,modbus,mqtt,esp,file to enable
                          (unset = all enabled)
+    IRONHARNESS_MAX_CONNECTIONS — ceiling on simultaneously open transports per
+                         session (unset = unlimited; denial = PolicyViolation,
+                         journaled)
 """
 
 from __future__ import annotations
