@@ -13,7 +13,8 @@ from io_core.journal import JsonlJournal
 from ironbench import __version__
 from ironbench.agent import resolve_llm_config
 from ironbench.agent import solve as agent_solve
-from ironbench.report import write_report
+from ironbench.publish import PublishError, publish_report
+from ironbench.report import render_leaderboard, write_report
 from ironbench.runner import run_task
 from ironbench.tasks import TASK_TARGETS, load_tasks
 
@@ -74,6 +75,17 @@ def main(argv=None) -> int:
     rep.add_argument(
         "--solve-dir", type=Path, default=None, help="campaigns directory (default <out>/solve)"
     )
+    rep.add_argument(
+        "--publish",
+        action="store_true",
+        help="also push the leaderboard (index.html + data.json) to the pages branch",
+    )
+    rep.add_argument(
+        "--remote", default="origin", help="git remote for --publish (default origin)"
+    )
+    rep.add_argument(
+        "--pages-branch", default="gh-pages", help="branch for --publish (default gh-pages)"
+    )
 
     sub.add_parser("list", parents=[common], help="list available tasks")
 
@@ -104,6 +116,19 @@ def main(argv=None) -> int:
             print(f"profile {model}: " + (", ".join(parts) if parts else "-"))
         print(f"pass@k: {report['pass_at_k']:.0%}")
         print(f"reports: {json_path} and {html_path}")
+        if args.publish:
+            try:
+                sha = publish_report(
+                    report,
+                    render_leaderboard(report),
+                    repo=Path.cwd(),
+                    remote=args.remote,
+                    branch=args.pages_branch,
+                )
+            except (PublishError, OSError) as exc:
+                print(f"publish failed: {exc}")
+                return 1
+            print(f"published: {args.remote}/{args.pages_branch} @ {sha[:12]}")
         return 0
 
     if args.command == "solve":
