@@ -6,7 +6,14 @@
 
 import pytest
 
-from io_core import JsonlJournal, ReplayMismatch, ReplayTransport, SerialTransport, read_events
+from io_core import (
+    JsonlJournal,
+    ReplayMismatch,
+    ReplaySession,
+    ReplayTransport,
+    SerialTransport,
+    read_events,
+)
 
 
 def record(tmp_path, script):
@@ -69,4 +76,34 @@ def test_replay_lenient_ignores_writes(tmp_path):
     jpath = record(tmp_path, lambda t: (t.write(b"ping"), t.read(4)))
     with ReplayTransport.from_file(jpath, strict=False) as rp:
         rp.write(b"XXXX")
+        assert rp.read(4) == b"ping"
+
+
+# --- IH-11: несколько писателей журнала и по-соединений реплей ---
+
+
+def test_journal_two_writers_same_file(tmp_path):
+    # Обещание «несколько сессий могут дописывать один файл»: каждая строка
+    # доходит целой, порядок внутри каждого писателя сохранён по seq.
+    # Межписательский порядок задаёт ts (seq у каждого писателя свой).
+    jpath = tmp_path / "shared.jsonl"
+    with JsonlJournal(jpath, actor="a") as ja, JsonlJournal(jpath, actor="b") as jb:
+        for i in range(50):
+            ja("ping", {"n": i, "payload": "x" * 120})
+            jb("pong", {"n": i, "payload": "y" * 120})
+    events = read_events(jpath)
+    assert len(events) == 100
+    for actor in ("a", "b"):
+        seqs = [e["seq"] for e in events if e["actor"] == actor]
+        assert len(seqs) == 50 and seqs == sorted(seqs)
+
+
+def test_replay_session_legacy_journal_without_conn(tmp_path):
+    # Журналы без conn (транспорты напрямую, записи до IH-11) реплеятся как
+    # одно безымянное соединение — старое поведение целиком.
+    jpath = record(tmp_path, lambda t: (t.write(b"ping"), t.read(4)))
+    rs = ReplaySession.from_file(jpath)
+    assert rs.order == ("",)
+    with rs[""] as rp:
+        rp.write(b"ping")
         assert rp.read(4) == b"ping"
