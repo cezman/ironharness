@@ -256,3 +256,16 @@ def test_kinds_denials_are_journaled(session, monkeypatch, tmp_path):
     assert [e["kind"] for e in events] == ["policy_violation"]
     assert events[0]["rule"] == "enabled_kinds"
     assert events[0]["transport"] == "serial"
+
+
+def test_parse_max_connections():
+    from io_core.policy import parse_max_connections
+
+    assert parse_max_connections(None) is None
+    assert parse_max_connections("") is None
+    assert parse_max_connections(" 3 ") == 3
+    assert parse_max_connections("0") == 0
+    with pytest.raises(ValueError):
+        parse_max_connections("two")
+    with pytest.raises(ValueError):
+        parse_max_connections("-1")

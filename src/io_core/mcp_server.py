@@ -11,11 +11,15 @@ Configuration via environment:
                          modbus/mqtt (unset = allow all; denials -> PolicyViolation)
     IRONHARNESS_ENABLED_KINDS — comma list of serial,modbus,mqtt,esp,file to enable
                          (unset = all enabled)
+    IRONHARNESS_MAX_CONNECTIONS — ceiling on simultaneously open transports per
+                         session (unset = unlimited; denial = PolicyViolation,
+                         journaled)
 """
 
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 from mcp.server import MCPServer
@@ -25,26 +29,33 @@ from io_core.session import Session
 mcp = MCPServer("ironharness")
 
 _session: Session | None = None
+_session_lock = threading.Lock()
 
 
 def get_session() -> Session:
     global _session
+    # double-checked locking: MCP may dispatch tool calls concurrently, and two
+    # racing first calls used to build two Sessions (one journal handle leaked,
+    # events split across two files)
     if _session is None:
-        home = Path(os.environ.get("IRONHARNESS_HOME", Path.home() / ".ironharness"))
-        _session = Session(
-            journal_path=home / "journal.jsonl",
-            sandbox_root=os.environ.get("IRONHARNESS_SANDBOX", home / "sandbox"),
-            actor="mcp",
-        )
+        with _session_lock:
+            if _session is None:
+                home = Path(os.environ.get("IRONHARNESS_HOME", Path.home() / ".ironharness"))
+                _session = Session(
+                    journal_path=home / "journal.jsonl",
+                    sandbox_root=os.environ.get("IRONHARNESS_SANDBOX", home / "sandbox"),
+                    actor="mcp",
+                )
     return _session
 
 
 def reset_session() -> None:
     """Resets the session (for tests and environment switches)."""
     global _session
-    if _session is not None:
-        _session.close()
-    _session = None
+    with _session_lock:
+        if _session is not None:
+            _session.close()
+        _session = None
 
 
 @mcp.tool()

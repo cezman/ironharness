@@ -130,3 +130,39 @@ def test_esp_image_info_offline(mcp_env):
     info = esp_image_info(str(FIRMWARE))
     assert info["chip"] == "esp32"
     assert len(info["segments"]) >= 3
+
+
+def test_get_session_race_creates_one_session(monkeypatch, tmp_path):
+    # IH-12: два конкурентных первых вызова get_session() создают ровно одну
+    # Session (раньше обе проходили проверку на None и одна Session с журналом
+    # терялась — файл оставался открытым, события расходились по двум файлам).
+    import threading
+    import time as time_module
+
+    import io_core.mcp_server as mcp_module
+
+    real_session = mcp_module.Session
+
+    class SlowSession(real_session):
+        def __init__(self, *args, **kwargs):
+            time_module.sleep(0.2)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(mcp_module, "Session", SlowSession)
+    monkeypatch.setenv("IRONHARNESS_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("IRONHARNESS_SANDBOX", str(tmp_path / "sandbox"))
+    mcp_module.reset_session()
+    try:
+        results: list = []
+
+        def worker():
+            results.append(mcp_module.get_session())
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(results) == 2 and results[0] is results[1]
+    finally:
+        mcp_module.reset_session()

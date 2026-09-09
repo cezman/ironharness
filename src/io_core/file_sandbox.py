@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,13 @@ EventHook = Callable[[str, dict[str, Any]], None]
 
 
 class FileSandbox:
+    """File access confined to a root with byte/file-count quotas.
+
+    Quota atomicity (IH-12): usage check + write happen under one lock, so
+    parallel writers cannot both pass a quota check computed before either of
+    them wrote (two 600 KB writes used to slip past a 1 MB limit together).
+    """
+
     def __init__(
         self,
         root: str | Path,
@@ -29,6 +37,7 @@ class FileSandbox:
         self._max_bytes = max_bytes
         self._max_files = max_files
         self._on_event = on_event
+        self._lock = threading.Lock()
 
     def _emit(self, event: str, data: dict[str, Any]) -> None:
         if self._on_event is not None:
@@ -62,13 +71,16 @@ class FileSandbox:
             )
 
     def write_file(self, rel_path: str, data: bytes, *, overwrite: bool = False) -> int:
-        target = self.resolve(rel_path)
-        if target.exists() and not overwrite:
-            raise FileExistsError(rel_path)
-        adding = len(data) - (target.stat().st_size if target.exists() else 0)
-        self._check_quota(max(adding, 0), 0 if target.exists() else 1)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+        # check + write under one lock: the quota scan is only meaningful if no
+        # other write can land between it and our own write
+        with self._lock:
+            target = self.resolve(rel_path)
+            if target.exists() and not overwrite:
+                raise FileExistsError(rel_path)
+            adding = len(data) - (target.stat().st_size if target.exists() else 0)
+            self._check_quota(max(adding, 0), 0 if target.exists() else 1)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
         self._emit("file_write", {"path": rel_path, "bytes": len(data)})
         return len(data)
 
@@ -84,6 +96,7 @@ class FileSandbox:
         return sorted(p.relative_to(self._root).as_posix() for p in target.rglob("*"))
 
     def delete_file(self, rel_path: str) -> None:
-        target = self.resolve(rel_path)
-        target.unlink()
+        with self._lock:
+            target = self.resolve(rel_path)
+            target.unlink()
         self._emit("file_delete", {"path": rel_path})

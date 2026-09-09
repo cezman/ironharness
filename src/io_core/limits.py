@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from typing import Any, Self
@@ -17,7 +18,11 @@ Clock = Callable[[], float]
 
 
 class RateLimiter:
-    """Фиксированное окно: не более max_calls за per_seconds, иначе исключение."""
+    """Фиксированное окно: не более max_calls за per_seconds, иначе исключение.
+
+    Потокобезопасен (IH-12): окно и счётчик меняются под локом, иначе
+    параллельные acquire() проходят проверку-затем-инкремент одновременно.
+    """
 
     def __init__(self, max_calls: int, per_seconds: float, clock: Clock = time.monotonic) -> None:
         self._max_calls = max_calls
@@ -25,17 +30,19 @@ class RateLimiter:
         self._clock = clock
         self._window_start: float | None = None
         self._used = 0
+        self._lock = threading.Lock()
 
     def acquire(self) -> None:
-        now = self._clock()
-        if self._window_start is None or now - self._window_start >= self._per:
-            self._window_start = now
-            self._used = 0
-        self._used += 1
-        if self._used > self._max_calls:
-            raise RateLimitExceeded(
-                f"операция #{self._used} за окно {self._per}s (лимит {self._max_calls})"
-            )
+        with self._lock:
+            now = self._clock()
+            if self._window_start is None or now - self._window_start >= self._per:
+                self._window_start = now
+                self._used = 0
+            self._used += 1
+            if self._used > self._max_calls:
+                raise RateLimitExceeded(
+                    f"операция #{self._used} за окно {self._per}s (лимит {self._max_calls})"
+                )
 
 
 class RateLimitedTransport:

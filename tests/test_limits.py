@@ -79,3 +79,31 @@ def test_expect_read_timeout():
 def test_write_and_expect_default_echo():
     with SerialTransport("loop://", timeout=0.5) as t:
         assert write_and_expect(t, b"abc", timeout=2) == b"abc"
+
+
+def test_rate_limiter_is_thread_safe():
+    # IH-12: N threads race acquire() against a limit of N-1 - exactly N-1
+    # pass; without the lock the check-then-increment window lets all N through.
+    import threading
+
+    from io_core import RateLimiter
+    from io_core.errors import RateLimitExceeded
+
+    limiter = RateLimiter(max_calls=3, per_seconds=60)
+    barrier = threading.Barrier(4)
+    outcomes: list[str] = []
+
+    def worker() -> None:
+        barrier.wait()
+        try:
+            limiter.acquire()
+            outcomes.append("ok")
+        except RateLimitExceeded:
+            outcomes.append("limited")
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(outcomes) == ["limited", "ok", "ok", "ok"]
