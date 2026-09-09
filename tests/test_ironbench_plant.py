@@ -4,7 +4,9 @@ process, no WSL or simulators)."""
 
 from __future__ import annotations
 
+import json
 import math
+import sys
 import textwrap
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from ironbench.plant import (
     check_requirements,
     compute_metrics,
     run_closed_loop,
+    worker_main,
 )
 from ironbench.runner import run_task
 from ironbench.tasks import load_task
@@ -222,11 +225,136 @@ def test_plant_journal_records_start_and_result(tmp_path):
     with JsonlJournal(jpath, actor="test") as jr:
         run_task(task, out_dir=tmp_path / "out", journal=jr)
     lines = [ln for ln in jpath.read_text("utf-8").splitlines() if ln.strip()]
-    import json
-
     events = [json.loads(ln) for ln in lines]
     kinds = [e["kind"] for e in events]
     assert "task_start" in kinds and "task_result" in kinds
+
+
+# --- IH-10: a re-run into a dirty out_dir must not score stale artifacts ---
+
+
+PASSING_CONTROLLER = "GAIN = 0.5\ndef control(t, y, setpoint):\n    return GAIN * (setpoint - y)\n"
+
+
+def test_plant_rerun_with_dead_worker_fails_not_passes(tmp_path):
+    # The audit scenario: after a passing run the controller is replaced with
+    # os._exit(0) - the worker dies with exit code 0 before writing anything.
+    # The runner must FAIL on the missing result of THIS run, never rescore
+    # the previous run's result.json (it used to leak through a fixed path).
+    task = make_plant_task(tmp_path, PASSING_CONTROLLER)
+    out = tmp_path / "out"
+    res1 = run_task(task, out_dir=out)
+    assert res1.passed, (res1.error, res1.missed)
+    (task.directory / "solution.py").write_text(
+        "import os\nos._exit(0)\n", encoding="utf-8"
+    )
+    res2 = run_task(task, out_dir=out)
+    assert not res2.passed
+    assert res2.exit_code == 0  # the worker "succeeded" - the FAIL comes from the result check
+    assert "no result.json" in (res2.error or "")
+
+
+def test_plant_result_with_foreign_run_id_is_rejected(tmp_path, monkeypatch):
+    # Second line of defense: even when a result.json from another run sits at
+    # the exact result path (simulated by reusing one run dir), the run_id
+    # mismatch must reject it instead of scoring its metrics.
+    task = make_plant_task(tmp_path, PASSING_CONTROLLER)
+    out = tmp_path / "out"
+    fixed = out / "fake-plant" / "run-fixed"
+
+    def reuse_run_dir(base, t):
+        fixed.mkdir(parents=True, exist_ok=True)
+        return fixed, "fixed"
+
+    monkeypatch.setattr(runner_module, "_new_run_dir", reuse_run_dir)
+    res1 = run_task(task, out_dir=out)
+    assert res1.passed, (res1.error, res1.missed)
+    result_file = fixed / "fake-plant.plant-result.json"
+    report = json.loads(result_file.read_text("utf-8"))
+    report["run_id"] = "some-other-run"
+    result_file.write_text(json.dumps(report), encoding="utf-8")
+    # a worker that exits 0 without writing anything (injection point): the
+    # tampered file is all that remains at the result path
+    res2 = run_task(task, out_dir=out, plant_cmd=[sys.executable, "-c", "pass"])
+    assert not res2.passed
+    assert res2.exit_code == 0
+    assert "not from this run" in (res2.error or "")
+
+
+def test_plant_non_dict_result_json_is_rejected(tmp_path, monkeypatch):
+    # A result file holding a valid JSON that is not an object (e.g. a list)
+    # is hostile garbage: honest error, never a crash, never a PASS.
+    task = make_plant_task(tmp_path, PASSING_CONTROLLER)
+    out = tmp_path / "out"
+    fixed = out / "fake-plant" / "run-fixed"
+
+    def reuse_run_dir(base, t):
+        fixed.mkdir(parents=True, exist_ok=True)
+        return fixed, "fixed"
+
+    monkeypatch.setattr(runner_module, "_new_run_dir", reuse_run_dir)
+    result_file = fixed / "fake-plant.plant-result.json"
+    writer = f"import pathlib; pathlib.Path(r'{result_file}').write_text('[]')"
+    res = run_task(task, out_dir=out, plant_cmd=[sys.executable, "-c", writer])
+    assert not res.passed
+    assert res.exit_code == 0
+    assert "not a JSON object" in (res.error or "")
+
+
+def test_worker_stamps_run_id_on_unreadable_spec(tmp_path):
+    # Even the early-error report carries run_id: every file the worker writes
+    # at the result path is attributable to a run.
+    entry = tmp_path / "c.py"
+    entry.write_text("def control(t, y, sp):\n    return 0.0\n", encoding="utf-8")
+    spec = tmp_path / "s.json"
+    spec.write_text("not json at all", encoding="utf-8")
+    log, result = tmp_path / "log.txt", tmp_path / "r.json"
+    rc = worker_main(
+        [
+            "--entry", str(entry),
+            "--spec", str(spec),
+            "--log", str(log),
+            "--result", str(result),
+            "--run-id", "xyz",
+        ]
+    )
+    assert rc == 0
+    report = json.loads(result.read_text("utf-8"))
+    assert report["run_id"] == "xyz"
+    assert "unreadable" in report["error"]
+
+
+def test_plant_run_dirs_are_unique_per_run(tmp_path):
+    task = make_plant_task(tmp_path, PASSING_CONTROLLER)
+    out = tmp_path / "out"
+    res1 = run_task(task, out_dir=out)
+    res2 = run_task(task, out_dir=out)
+    assert res1.passed and res2.passed
+    assert res1.serial_log != res2.serial_log
+    assert res1.serial_log.is_file() and res2.serial_log.is_file()
+    assert res1.serial_log.parent.parent == out / "fake-plant"
+
+
+def test_worker_echoes_run_id(tmp_path):
+    entry = tmp_path / "c.py"
+    entry.write_text("def control(t, y, sp):\n    return 0.5 * (sp - y)\n", encoding="utf-8")
+    spec = tmp_path / "s.json"
+    spec.write_text(
+        json.dumps({"K": 60.0, "T": 10.0, "setpoint": 50.0, "duration": 20, "requirements": {}}),
+        encoding="utf-8",
+    )
+    log, result = tmp_path / "log.txt", tmp_path / "r.json"
+    rc = worker_main(
+        [
+            "--entry", str(entry),
+            "--spec", str(spec),
+            "--log", str(log),
+            "--result", str(result),
+            "--run-id", "abc123",
+        ]
+    )
+    assert rc == 0
+    assert json.loads(result.read_text("utf-8"))["run_id"] == "abc123"
 
 
 # --- golden plant tasks: local, free and deterministic ---

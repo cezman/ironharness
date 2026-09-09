@@ -271,8 +271,14 @@ def load_control(entry):
 
 
 def worker_main(argv=None) -> int:
-    """Worker entry point: always writes result.json; the return code is 0 even
-    when the controller crashed (a controller error is a run result, not a worker crash)."""
+    """Worker entry point: the run report goes to result.json, the trajectory to
+    the log; the return code is 0 even when the controller crashed (a controller
+    error is a run result, not a worker crash). The one thing the worker cannot
+    do is write anything when the controller kills the process outright
+    (os._exit during import): a missing result.json is a failure by contract,
+    enforced by the runner. result.json is stamped with --run-id: the runner
+    scores only a report it itself requested, so a stale file at the result
+    path is rejected, not used."""
     import argparse
     from pathlib import Path
 
@@ -283,6 +289,11 @@ def worker_main(argv=None) -> int:
     ap.add_argument("--spec", required=True, type=Path)
     ap.add_argument("--log", required=True, type=Path)
     ap.add_argument("--result", required=True, type=Path)
+    ap.add_argument(
+        "--run-id",
+        default="",
+        help="opaque id of this run; the runner rejects a result.json with a foreign run_id",
+    )
     args = ap.parse_args(argv)
 
     try:
@@ -291,7 +302,16 @@ def worker_main(argv=None) -> int:
         error = "failed to prepare task: plant spec is unreadable"
         args.log.write_text(f"# error: {error}\n", encoding="utf-8")
         args.result.write_text(
-            json.dumps({"error": error, "metrics": None, "missed": [], "steps": 0}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "error": error,
+                    "metrics": None,
+                    "missed": [],
+                    "steps": 0,
+                    "run_id": args.run_id,
+                },
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
         return 0
@@ -312,7 +332,13 @@ def worker_main(argv=None) -> int:
         render_log(spec, rows, metrics, missed, error, stdout_capture.getvalue()),
         encoding="utf-8",
     )
-    report = {"error": error, "metrics": metrics, "missed": missed, "steps": len(rows)}
+    report = {
+        "error": error,
+        "metrics": metrics,
+        "missed": missed,
+        "steps": len(rows),
+        "run_id": args.run_id,
+    }
     args.result.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     return 0
 
