@@ -310,6 +310,7 @@ def is_infra_error(error: str | None) -> bool:
         "failed to connect",
         "not responding",
         "paste mode",
+        "IRONBENCH_REAL_PORT is not set",
     )
     return any(m in error for m in marks)
 
