@@ -7,7 +7,9 @@ description: >-
   The plant is a heater: a first-order lag, y_oo = ambient + K*u. ambient = 20 deg C
   is known, but the gain K and the time constant T are UNKNOWN - estimate them
   yourself from the step response. Control u in [0, 1] (the heater power), sensor
-  noise +-0.3 deg C, setpoint 60 deg C. main.py must define the function
+  noise +-0.3 deg C, setpoint 60 deg C. At t = 300 s the ambient temperature
+  steps up to 24 deg C (a disturbance): a power constant computed once cannot
+  hold the setpoint through it. main.py must define the function
   control(t, y, setpoint) -> float; it is called every 0.5 s of simulation time
   (t - seconds since start, y - the measured temperature). Plan: the identification
   phase - hold u=1 long enough (several T), estimate K from the steady-state rise
@@ -15,7 +17,8 @@ description: >-
   phase - bring y to the setpoint, for example with feedforward compensation plus
   a P-feedback: u = (setpoint - ambient)/K_est + Kp*(setpoint - y). Requirements:
   y enters the +-2 deg C band around the setpoint and stays there no later than
-  300 s, the steady-state error is at most 2 deg C, the overshoot is at most 20%.
+  365 s (the initial settling plus the recovery from the disturbance), the
+  steady-state error is at most 2 deg C, the overshoot is at most 20%.
 entry: solution.py
 target: plant
 timeout_sec: 30
@@ -31,9 +34,11 @@ plant:
   dt: 0.5
   noise_std: 0.3
   seed: 11
+  disturbances:
+    - {at: 300, ambient: 24}
   requirements:
     steady_error: 2.0
-    settle_time: 300.0
+    settle_time: 365.0
     overshoot: 20.0
 expect: []
 fail:

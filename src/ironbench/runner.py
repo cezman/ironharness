@@ -731,7 +731,14 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
         elif "write-serial" in step:
             sock.sendall(str(step["write-serial"]).encode("utf-8"))
         elif "wait-serial" in step:
-            buf, _ = _recv_until(sock, (str(step["wait-serial"]),), wall_deadline, tel)
+            needle = str(step["wait-serial"])
+            # anti-cheat (IH-14), same rule as unix/real: pre-printed answers fail
+            if needle in "".join(parts):
+                return "".join(parts), (
+                    f"anti-cheat: {needle!r} was printed before the stimulus asked "
+                    "for it (pre-printed output)"
+                )
+            buf, _ = _recv_until(sock, (needle,), wall_deadline, tel)
             parts.append(buf)
 
     # keep reading: until the full set of literal expects is collected (early
@@ -1137,22 +1144,53 @@ def _run_unix(
             writer = FaultyTransport(
                 writer, task.noise.get("faults", []), rng=random.Random(task.noise.get("seed", 0))
             )
+        waits_done = 0
         try:
             for step in task.stimulus:
-                if time.monotonic() > deadline or box["eof"]:
+                if time.monotonic() > deadline:
                     break
-                if "delay" in step:
-                    time.sleep(
-                        min(_parse_delay(step["delay"]), max(0.0, deadline - time.monotonic()))
-                    )
-                elif "wait-serial" in step:
+                if "wait-serial" in step:
                     needle = str(step["wait-serial"])
+                    # anti-cheat (IH-14): a program may dump the expected answers
+                    # up front and exit. Before waiting, let earlier output
+                    # settle and fix a baseline: an answer found at or before
+                    # the baseline was printed without the stimulus asking for
+                    # it - a failed run, not a match. After EOF the reader has
+                    # ingested everything, so the check is deterministic.
+                    settle = time.monotonic() + 0.15
+                    while not box["eof"] and time.monotonic() < settle:
+                        before = len(box["text"])
+                        time.sleep(0.05)
+                        if len(box["text"]) == before:
+                            break
+                    baseline = len(box["text"])
+                    if needle in box["text"][:baseline]:
+                        error = (
+                            f"anti-cheat: {needle!r} was printed before the stimulus "
+                            "asked for it (pre-printed output)"
+                        )
+                        break
                     while (
-                        needle not in box["text"]
+                        needle not in box["text"][baseline:]
                         and time.monotonic() < deadline
                         and not box["eof"]
                     ):
                         time.sleep(0.05)
+                    if needle not in box["text"][baseline:]:
+                        if needle in box["text"]:
+                            error = (
+                                f"anti-cheat: {needle!r} was printed before the stimulus "
+                                "asked for it (pre-printed output)"
+                            )
+                        break  # no answer in this segment - the rest is pointless
+                    waits_done += 1
+                    continue
+                if box["eof"]:
+                    break  # the firmware is gone - no point driving further stimulus
+                if "delay" in step:
+                    time.sleep(
+                        min(_parse_delay(step["delay"]), max(0.0, deadline - time.monotonic()))
+                    )
                 elif "write-serial" in step:
                     raw = str(step["write-serial"]).replace("\r\n", "\n").replace("\r", "\n")
                     raw = raw.encode("utf-8")
@@ -1195,6 +1233,21 @@ def _run_unix(
                         box["text"] += (
                             f"mqtt: collect {col['topic']}: received {got} of {need}\n"
                         )
+            # anti-cheat (IH-14): the firmware exited before answering a single
+            # stimulus step, yet its output is about to be scored - expected
+            # strings must be produced in response to the stimulus, not dumped
+            # up front by a program that never reads input.
+            if (
+                error is None
+                and box["eof"]
+                and waits_done == 0
+                and any("wait-serial" in s for s in task.stimulus)
+            ):
+                error = (
+                    "anti-cheat: the firmware exited before the first wait-serial "
+                    "step - expected output must be produced in response to the "
+                    "stimulus"
+                )
             # keep reading: until all literal expects are collected, EOF, or the
             # deadline (an infinite firmware loop is normal, like --timeout in wokwi)
             while time.monotonic() < deadline and not box["eof"]:
@@ -1353,7 +1406,15 @@ def _run_real(
             if "delay" in step:
                 time.sleep(min(_parse_delay(step["delay"]), max(0.0, deadline - time.monotonic())))
             elif "wait-serial" in step:
-                repl.wait_for(str(step["wait-serial"]), deadline)
+                needle = str(step["wait-serial"])
+                # anti-cheat (IH-14), same rule as unix/renode: pre-printed answers fail
+                if needle in repl.output():
+                    error = (
+                        f"anti-cheat: {needle!r} was printed before the stimulus "
+                        "asked for it (pre-printed output)"
+                    )
+                    break
+                repl.wait_for(needle, deadline)
             elif "write-serial" in step:
                 # the REPL line editor ends input() on \r (\n is silent) -
                 # normalize to \r, mirroring the unix target where \n is needed

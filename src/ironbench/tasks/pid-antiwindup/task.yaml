@@ -7,13 +7,16 @@ name: pid-antiwindup
 description: >-
   The plant is a heater: a first-order lag. The steady-state temperature is
   y_oo = ambient + K*u, where ambient = 20 deg C, K = 60 (deg C at u=1), the time
-  constant T = 30 s. Write a PI-controller with anti-windup protection: main.py
-  must define the function control(t, y, setpoint) -> float. It is called every
-  0.5 s of simulation time: t - seconds since start, y - the measured
-  temperature, setpoint - the setpoint of 74 deg C. The return value is clamped
-  to [0, 1] (the heater power); accumulate the integral term on every call as
-  integ += Ki*(setpoint - y)*0.5. Requirements: y enters the +-1 deg C band
-  around the setpoint and stays there no later than 140 s, the steady-state
+  constant T = 30 s. At t = 160 s the ambient temperature steps up to 25 deg C
+  (a disturbance): the controller must track the setpoint through it, an
+  open-loop constant power cannot. Write a PI-controller with anti-windup
+  protection: main.py must define the function control(t, y, setpoint) ->
+  float. It is called every 0.5 s of simulation time: t - seconds since start,
+  y - the measured temperature, setpoint - the setpoint of 74 deg C. The return
+  value is clamped to [0, 1] (the heater power); accumulate the integral term
+  on every call as integ += Ki*(setpoint - y)*0.5. Requirements: y enters the
+  +-1 deg C band around the setpoint and stays there no later than 215 s (an
+  initial settling plus the recovery from the disturbance), the steady-state
   error is at most 1 deg C, the overshoot is at most 5% (so the integrator must
   not "swing" while the actuator is saturated).
 entry: solution.py
@@ -31,9 +34,11 @@ plant:
   dt: 0.5
   u_min: 0.0
   u_max: 1.0
+  disturbances:
+    - {at: 160, ambient: 25}
   requirements:
     steady_error: 1.0
-    settle_time: 140.0
+    settle_time: 215.0
     overshoot: 5.0
 expect: []
 fail:
