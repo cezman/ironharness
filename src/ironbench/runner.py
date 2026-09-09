@@ -237,8 +237,12 @@ def _new_run_dir(out_dir: Path, task: Task) -> tuple[Path, str]:
 
 def clean_runs(out_dir: Path, *, keep: int = 1) -> int:
     """Removes old per-run artifact directories, keeping the newest `keep` per
-    task. Refuses to touch an out dir without the ironbench marker: it may be
-    someone else's data - `clean` only ever deletes what ironbench created."""
+    task ("newest" = the largest directory mtime, i.e. the most recently
+    touched). Only run-* dirs under an ironbench-marked out root are removed -
+    the marker certifies the root, so keep foreign data out of the out dir -
+    and a root without the marker is refused entirely. Do not run clean while
+    a run is in progress: a long-running run's dir may look stale by mtime and
+    get removed under it (the run then fails, it does not corrupt anything)."""
     if keep < 0:
         raise ValueError(f"keep must be >= 0, got {keep}")
     if not (out_dir / OUT_MARKER).is_file():

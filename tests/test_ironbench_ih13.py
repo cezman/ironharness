@@ -57,6 +57,9 @@ def test_plant_controller_cwd_is_the_run_dir(tmp_path):
     )
     res = run_task(task, out_dir=tmp_path / "out")
     assert res.passed, (res.error, res.missed)
+    # end-to-end: a run marks the out dir, so the dir clean_runs accepts is
+    # exactly the dir ironbench runs created
+    assert (tmp_path / "out" / OUT_MARKER).is_file()
     logged = [
         ln for ln in res.serial_log.read_text("utf-8").splitlines() if ln.startswith("CWD=")
     ]

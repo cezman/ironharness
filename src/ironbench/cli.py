@@ -127,7 +127,8 @@ def main(argv=None) -> int:
         print(f"reports: {json_path} and {html_path}")
         if args.publish:
             try:
-                sha = publish_report(                    report,
+                sha = publish_report(
+                    report,
                     render_leaderboard(report),
                     repo=Path.cwd(),
                     remote=args.remote,
