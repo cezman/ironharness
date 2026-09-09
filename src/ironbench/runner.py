@@ -33,6 +33,12 @@ Plant target (see ironbench/plant.py): a closed "first-order plant +
 controller" loop entirely in Python, no simulators or WSL. The worker runs the
 controller (entry) in a separate process; scoring uses the step-response
 metrics from task.yaml (missed = unmet requirements as human-readable strings).
+
+Artifacts: every run writes into a fresh out_dir/<task>/run-<id>/ directory
+(serial log, stage, plant spec/result). A re-run into the same out_dir
+therefore scores only its own output; the plant worker additionally stamps
+result.json with run_id and the runner rejects a foreign one, so a stale file
+can never turn into a false PASS.
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ import tarfile
 import threading
 import time
 import tomllib
+import uuid
 from pathlib import Path
 
 import yaml
@@ -196,6 +203,23 @@ def _check_patterns(
     return missed, hit_fail
 
 
+def _new_run_dir(out_dir: Path, task: Task) -> tuple[Path, str]:
+    """A fresh per-run artifact directory (serial log, plant spec/result, stage).
+
+    A run writes only into its own run-<id> directory, so a re-run into the same
+    out_dir scores its own output: fixed per-task paths used to leak a stale
+    plant result.json (or serial log) from a previous run into a false PASS -
+    a worker killed before writing (os._exit) even returned exit code 0. The
+    plant worker additionally stamps result.json with run_id and the runner
+    verifies it - a second line of defense against a stale/hostile file that
+    still lands at the exact result path.
+    """
+    run_id = uuid.uuid4().hex[:12]
+    run_dir = out_dir / task.name / f"run-{run_id}"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir, run_id
+
+
 def _stage_task(task: Task, out_dir: Path) -> tuple[Path, str]:
     """Copies the task directory into a clean stage; returns (path, scenario name)."""
     stage = out_dir / task.name
@@ -326,8 +350,8 @@ def _run_wokwi(
     """Runs the task in Wokwi and returns the result (pass/fail + reason)."""
     cli = cli_path or default_cli()
     cli_cmd = [cli] if isinstance(cli, str) else list(cli)  # tests pass a command list
-    out_dir.mkdir(parents=True, exist_ok=True)
-    serial_log = out_dir / f"{task.name}.serial.log"
+    run_dir, _ = _new_run_dir(out_dir, task)
+    serial_log = run_dir / f"{task.name}.serial.log"
     wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
 
     token = resolve_token(token)
@@ -340,7 +364,7 @@ def _run_wokwi(
     error: str | None = None
     stage = scenario_name = None
     try:
-        stage, scenario_name = _stage_task(task, out_dir)
+        stage, scenario_name = _stage_task(task, run_dir)
     except (OSError, ValueError) as e:
         # missing entry/firmware, broken wokwi.toml - a clean FAIL instead of a crash
         error = f"failed to prepare task: {e}"
@@ -754,8 +778,8 @@ def _run_renode(
         _journal_result(journal, result)
         return result
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    serial_log = out_dir / f"{task.name}.serial.log"
+    run_dir, _ = _new_run_dir(out_dir, task)
+    serial_log = run_dir / f"{task.name}.serial.log"
     port = int(os.environ.get("IRONBENCH_RENODE_PORT", RENODE_PORT))
     wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
     start = time.monotonic()
@@ -764,7 +788,7 @@ def _run_renode(
     serial_text = ""
     proc = None
     try:
-        stage = _stage_renode_task(task, out_dir, port)
+        stage = _stage_renode_task(task, run_dir, port)
         if renode_cmd is None:
             _push_firmware(task)
             _push_to_wsl(
@@ -992,8 +1016,8 @@ def _run_unix(
         _journal_result(journal, result)
         return result
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    serial_log = out_dir / f"{task.name}.serial.log"
+    run_dir, _ = _new_run_dir(out_dir, task)
+    serial_log = run_dir / f"{task.name}.serial.log"
     wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
     start = time.monotonic()
     exit_code: int | None = None
@@ -1270,8 +1294,8 @@ def _run_real(
         def transport_factory():
             return transport  # test injection of a fake
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    serial_log = out_dir / f"{task.name}.serial.log"
+    run_dir, _ = _new_run_dir(out_dir, task)
+    serial_log = run_dir / f"{task.name}.serial.log"
     wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
     start = time.monotonic()
     error: str | None = None
@@ -1342,10 +1366,12 @@ def _run_plant(
     controller (entry) in a separate process and writes the log + result.json.
     A hung/crashed controller is a run result (feedback to the agent), not a
     runner crash. plant_cmd is the injection point for tests. The target is
-    local: no WSL, simulators, or their quotas needed."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    serial_log = out_dir / f"{task.name}.serial.log"
-    result_file = out_dir / f"{task.name}.plant-result.json"
+    local: no WSL, simulators, or their quotas needed. Artifacts land in a
+    fresh per-run directory and result.json is stamped with run_id: a stale
+    file from a previous run in the same out_dir is rejected, not scored."""
+    run_dir, run_id = _new_run_dir(out_dir, task)
+    serial_log = run_dir / f"{task.name}.serial.log"
+    result_file = run_dir / f"{task.name}.plant-result.json"
     wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
     start = time.monotonic()
     exit_code: int | None = None
@@ -1355,7 +1381,7 @@ def _run_plant(
         entry = task.directory / task.entry
         if not entry.is_file():
             raise FileNotFoundError(f"entry file not found: {entry}")
-        spec_file = out_dir / f"{task.name}.plant.json"
+        spec_file = run_dir / f"{task.name}.plant.json"
         spec_file.write_text(json.dumps(task.plant, ensure_ascii=False), encoding="utf-8")
         if plant_cmd is None:
             cmd = [
@@ -1370,6 +1396,8 @@ def _run_plant(
                 str(serial_log),
                 "--result",
                 str(result_file),
+                "--run-id",
+                run_id,
             ]
         else:
             cmd = [plant_cmd] if isinstance(plant_cmd, str) else list(plant_cmd)
@@ -1405,6 +1433,14 @@ def _run_plant(
                 error = f"failed to parse the plant worker result.json: {e}"
         else:
             error = "the plant worker left no result.json"
+    if report is not None and report.get("run_id") != run_id:
+        # A file at the result path that this run did not request is hostile
+        # input, not data: its metrics must never be scored.
+        error = (
+            f"plant result.json is not from this run "
+            f"(run_id {report.get('run_id')!r} != {run_id!r})"
+        )
+        report = None
     if report and report.get("error"):
         # error carries only the headline: the full traceback stays in the log
         # (feedback to the agent), and the agent's exception text must not leak

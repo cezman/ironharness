@@ -120,7 +120,7 @@ def test_real_target_happy_path(tmp_path):
     res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeBoard())
     assert res.passed, res.missed or res.error
     assert res.exit_code is None  # живой платы как процесса нет
-    assert (tmp_path / "out" / "fake.serial.log").is_file()
+    assert res.serial_log is not None and res.serial_log.is_file()
 
 
 def test_real_target_missed_expect_fails(tmp_path):
