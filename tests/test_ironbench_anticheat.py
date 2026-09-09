@@ -4,19 +4,23 @@ on every plant task (the tasks carry mid-run disturbances for exactly this).
 
 The verbatim cheater models an adversary with full knowledge of task.yaml: it
 prints the literal expect patterns up front. It is defeated by the runner's
-wait-serial anchor (an answer printed before the stimulus asked for it is a
-failed run) and by regex expectations that do not match their own source.
+wait-serial anchor (an answer stamped before the stimulus write is a failed
+run) and by regex expectations that do not match their own source. A legal
+fast responder must keep passing - the anchor must not punish quick answers.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import shutil
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
 
 from ironbench.runner import run_task
-from ironbench.tasks import load_tasks
+from ironbench.tasks import load_task, load_tasks
 
 TASKS_DIR = Path(__file__).parents[1] / "src" / "ironbench" / "tasks"
 
@@ -61,3 +65,101 @@ def test_plant_open_loop_constant_fails(task, tmp_path):
         f"{task.name} is open-loop-cheatable (constant u={u:.3f} passed): "
         f"error={res.error!r}"
     )
+
+
+# --- mechanism-level tests on a synthetic interactive task (local python) ---
+
+
+SYNTH_STIMULUS = (
+    "  - delay: 100ms\n"
+    "  - write-serial: \"hi\\r\"\n"
+    "  - wait-serial: \"echo: hi\"\n"
+    "  - write-serial: \"again\\r\"\n"
+    "  - wait-serial: \"echo: again\"\n"
+)
+
+
+def make_synthetic_echo_task(tmp_path, entry_code: str):
+    """A minimal interactive unix task: echo lines, driven by wait-serial steps."""
+    d = tmp_path / "t"
+    d.mkdir()
+    text = textwrap.dedent(
+        """
+    name: synth-echo
+    description: fake
+    entry: solution.py
+    target: unix
+    timeout_sec: 5
+    expect:
+      - 'boot ok'
+      - 'echo: hi'
+      - 'echo: again'
+    stimulus:
+    """
+    )
+    (d / "task.yaml").write_text(text + SYNTH_STIMULUS, encoding="utf-8")
+    (d / "solution.py").write_text(entry_code, encoding="utf-8")
+    return load_task(d)
+
+
+RESPONDER = (
+    "import sys\n"
+    "print('boot ok', flush=True)\n"
+    "while True:\n"
+    "    line = sys.stdin.readline()\n"
+    "    if not line:\n"
+    "        break\n"
+    "    print('echo: ' + line.strip(), flush=True)\n"
+)
+DUMP_EXIT = (
+    "print('boot ok')\nprint('echo: hi')\nprint('echo: again')\n"
+)
+DUMP_ALIVE = (
+    "import time\n"
+    "print('boot ok', flush=True)\n"
+    "print('echo: hi', flush=True)\n"
+    "print('echo: again', flush=True)\n"
+    "time.sleep(30)\n"
+)
+
+
+def run_synthetic(tmp_path, entry_code: str):
+    task = make_synthetic_echo_task(tmp_path, entry_code)
+    cmd = [sys.executable, str(task.directory / "solution.py")]
+    return run_task(task, out_dir=tmp_path / "out", unix_cmd=cmd)
+
+
+def test_legal_fast_responder_passes(tmp_path):
+    # The blocker pin: a solution that answers the stimulus QUICKLY must pass -
+    # the anti-cheat anchor classifies answers by emission time relative to the
+    # stimulus write, not by how soon they arrive.
+    res = run_synthetic(tmp_path, RESPONDER)
+    assert res.passed, (res.error, res.missed)
+
+
+def test_dump_and_exit_cheater_fails_with_zero_waits(tmp_path):
+    res = run_synthetic(tmp_path, DUMP_EXIT)
+    assert not res.passed
+    assert "exited before the first wait-serial" in (res.error or "")
+
+
+def test_dump_and_stay_alive_cheater_fails_with_anchor(tmp_path):
+    res = run_synthetic(tmp_path, DUMP_ALIVE)
+    assert not res.passed
+    assert "pre-printed output" in (res.error or "")
+
+
+# --- golden unix solutions must survive the anti-cheat (offline via WSL) ---
+
+
+GOLDEN_UNIX = ["coop-scheduler", "frame-corrupt", "noisy-frames", "uart-menu", "watchdog"]
+
+
+@pytest.mark.skipif(shutil.which("wsl") is None, reason="needs WSL micropython")
+@pytest.mark.parametrize("name", GOLDEN_UNIX)
+def test_golden_unix_survives_anticheat(name, tmp_path):
+    # Regression guard for the anti-cheat: the real golden solutions answer the
+    # stimulus and must keep passing with the anchor active.
+    task = load_task(TASKS_DIR / name)
+    res = run_task(task, out_dir=tmp_path / name)
+    assert res.passed, (res.error, res.missed)

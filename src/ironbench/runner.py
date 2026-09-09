@@ -732,7 +732,11 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
             sock.sendall(str(step["write-serial"]).encode("utf-8"))
         elif "wait-serial" in step:
             needle = str(step["wait-serial"])
-            # anti-cheat (IH-14), same rule as unix/real: pre-printed answers fail
+            # anti-cheat (IH-14): unlike unix/real (chunk ingestion stamps), here
+            # the check is positional over everything read so far - INCLUDING the
+            # echo of the pasted firmware source, so a needle that appears as a
+            # literal inside the source (print("...")) would flag too. Renode
+            # goldens have no stimulus yet; revisit before adding any.
             if needle in "".join(parts):
                 return "".join(parts), (
                     f"anti-cheat: {needle!r} was printed before the stimulus asked "
@@ -1028,6 +1032,26 @@ def _stop_broker_proc(proc: subprocess.Popen | None, wsl_pid: int | None) -> Non
         proc.stdout.close()
 
 
+def _first_answer_stamp(box, needle: str, since: float | None) -> float | None:
+    """Ingestion stamp of the chunk holding the first occurrence of `needle`,
+    or None when it is not printed yet / was printed unprompted (stamped at or
+    before `since`; since=None = no stimulus write happened yet)."""
+    with box["lock"]:
+        pos = box["text"].find(needle)
+        if pos < 0:
+            return None
+        seen = 0
+        stamp_hit: float | None = None
+        for stamp, chunk in box["chunks"]:
+            seen += len(chunk)
+            if pos < seen:
+                stamp_hit = stamp
+                break
+    if stamp_hit is None or since is None:
+        return None
+    return stamp_hit if stamp_hit > since else None
+
+
 def _run_unix(
     task: Task,
     *,
@@ -1119,12 +1143,24 @@ def _run_unix(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,  # the unix port writes tracebacks to stderr
         )
-        box = {"text": "", "eof": False}
+        box = {"text": "", "chunks": [], "eof": False, "lock": threading.Lock()}
+
+        def _box_append(chunk: str) -> None:
+            # text and chunks must stay position-consistent (the anti-cheat
+            # maps a needle position back to its chunk); collect-appends and
+            # the reader thread both land here under the same lock
+            with box["lock"]:
+                box["chunks"].append((time.monotonic(), chunk))
+                box["text"] += chunk
 
         def reader():
             try:
                 for line in iter(proc.stdout.readline, b""):
-                    box["text"] += line.decode("utf-8", "replace")
+                    # the ingestion stamp powers the anti-cheat: a chunk cannot
+                    # be ingested before it was printed, so "first occurrence
+                    # of the needle stamped at or before the stimulus write"
+                    # proves the string was printed unprompted
+                    _box_append(line.decode("utf-8", "replace"))
             except OSError:
                 pass
             finally:
@@ -1145,43 +1181,33 @@ def _run_unix(
                 writer, task.noise.get("faults", []), rng=random.Random(task.noise.get("seed", 0))
             )
         waits_done = 0
+        last_trigger_stamp: float | None = None  # set by write-serial / mqtt-publish
         try:
             for step in task.stimulus:
                 if time.monotonic() > deadline:
                     break
                 if "wait-serial" in step:
                     needle = str(step["wait-serial"])
-                    # anti-cheat (IH-14): a program may dump the expected answers
-                    # up front and exit. Before waiting, let earlier output
-                    # settle and fix a baseline: an answer found at or before
-                    # the baseline was printed without the stimulus asking for
-                    # it - a failed run, not a match. After EOF the reader has
-                    # ingested everything, so the check is deterministic.
-                    settle = time.monotonic() + 0.15
-                    while not box["eof"] and time.monotonic() < settle:
-                        before = len(box["text"])
-                        time.sleep(0.05)
-                        if len(box["text"]) == before:
-                            break
-                    baseline = len(box["text"])
-                    if needle in box["text"][:baseline]:
-                        error = (
-                            f"anti-cheat: {needle!r} was printed before the stimulus "
-                            "asked for it (pre-printed output)"
-                        )
-                        break
-                    while (
-                        needle not in box["text"][baseline:]
-                        and time.monotonic() < deadline
-                        and not box["eof"]
-                    ):
-                        time.sleep(0.05)
-                    if needle not in box["text"][baseline:]:
+                    # anti-cheat (IH-14): the answer must be emitted after the
+                    # stimulus write asked for it (see _first_answer_stamp).
+                    # Deterministic: ingestion stamps only ever grow, and a
+                    # chunk cannot be ingested before it was printed.
+                    while True:
+                        stamp = _first_answer_stamp(box, needle, last_trigger_stamp)
+                        if stamp is not None:
+                            break  # a genuine answer, emitted after the write
                         if needle in box["text"]:
                             error = (
-                                f"anti-cheat: {needle!r} was printed before the stimulus "
-                                "asked for it (pre-printed output)"
+                                f"anti-cheat: {needle!r} was printed before the "
+                                "stimulus asked for it (pre-printed output)"
                             )
+                            break
+                        if time.monotonic() >= deadline or box["eof"]:
+                            break  # no answer at all - an honest miss
+                        time.sleep(0.05)
+                    if error is not None:
+                        break
+                    if stamp is None:
                         break  # no answer in this segment - the rest is pointless
                     waits_done += 1
                     continue
@@ -1192,6 +1218,7 @@ def _run_unix(
                         min(_parse_delay(step["delay"]), max(0.0, deadline - time.monotonic()))
                     )
                 elif "write-serial" in step:
+                    last_trigger_stamp = time.monotonic()  # the anti-cheat anchor point
                     raw = str(step["write-serial"]).replace("\r\n", "\n").replace("\r", "\n")
                     raw = raw.encode("utf-8")
                     if task.noise and raw.endswith(b"\n"):
@@ -1204,6 +1231,9 @@ def _run_unix(
                         writer.write(raw)
                 elif "mqtt-publish" in step and mqtt_client is not None:
                     pub = step["mqtt-publish"]
+                    # a retained/published command is what the firmware reacts to:
+                    # it anchors the wait-serial anti-cheat just like write-serial
+                    last_trigger_stamp = time.monotonic()
                     mqtt_client.publish(
                         str(pub["topic"]),
                         str(pub["payload"]),
@@ -1228,7 +1258,7 @@ def _run_unix(
                         msg = mqtt_client.read_message(timeout=0.2)
                         if msg is not None:
                             got += 1
-                            box["text"] += f"mqtt: {msg['topic']} {msg['payload']}\n"
+                            _box_append(f"mqtt: {msg['topic']} {msg['payload']}\n")
                     if got < need:
                         box["text"] += (
                             f"mqtt: collect {col['topic']}: received {got} of {need}\n"
