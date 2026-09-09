@@ -10,6 +10,7 @@ from io_core import (
     Session,
     read_events,
 )
+from io_core.mqtt_sim import MqttSimBroker
 
 
 @pytest.fixture()
@@ -134,3 +135,22 @@ def test_replay_per_connection(session, tmp_path):
         # strict-сверка записей — на соединение: команда «b» в «a» не проходит
         with pytest.raises(ReplayMismatch):
             ra.write(b"ping-b")
+
+
+def test_journal_conn_covers_modbus_and_mqtt(session, tmp_path):
+    # хук с conn получает каждый транспорт, включая mqtt (события из сетевого
+    # потока paho идут через тот же _journal_for)
+    broker = MqttSimBroker()
+    port = broker.start()
+    try:
+        with ModbusSimServer(port=0, registers=[0] * 64) as srv:
+            session.modbus_open("m", "127.0.0.1", port=srv.port)
+            session.modbus_read("m", 0)
+            session.mqtt_open("q", "127.0.0.1", port=port)
+            session.mqtt_publish("q", "dev1/value", "1")
+    finally:
+        broker.stop()
+    events = read_events(tmp_path / "journal.jsonl")
+    conns = {(e["kind"], e["conn"]) for e in events}
+    assert ("modbus_read", "m") in conns
+    assert ("mqtt_publish", "q") in conns

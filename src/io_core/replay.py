@@ -46,7 +46,7 @@ class ReplayTransport:
         self._rpos = 0
         self._wpos = 0
         for e in events:
-            if e.get("conn", LEGACY_CONN) != conn:
+            if str(e.get("conn", LEGACY_CONN)) != conn:
                 continue
             if e.get("kind") in ("read", "read_line"):
                 self._read_stream += bytes.fromhex(e["data_hex"])
@@ -100,13 +100,19 @@ class ReplaySession:
     """По-соединений реплей записанной сессии: по одному ReplayTransport на
     каждое имя conn в порядке первого появления в журнале. Для сессии из двух
     устройств «a» и «b» ответы «b» больше не читаются из транспорта «a», и
-    strict-сверка записей идёт отдельно на каждое соединение."""
+    strict-сверка записей идёт отдельно на каждое соединение.
+
+    Несколько open/close циклов одного имени — один непрерывный поток этого
+    conn: реплеить можно только всю историю имени целиком, частичный реплей
+    отдельной инкарнации требует ручной нарезки событий.
+    """
 
     def __init__(self, events: list[Event], *, strict: bool = True) -> None:
         groups: dict[str, list[Event]] = {}
         order: list[str] = []
         for e in events:
-            conn = e.get("conn", LEGACY_CONN)
+            # str(): journal is untrusted input, a non-scalar conn must not crash
+            conn = str(e.get("conn", LEGACY_CONN))
             if conn not in groups:
                 groups[conn] = []
                 order.append(conn)
