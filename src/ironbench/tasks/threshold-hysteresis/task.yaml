@@ -1,27 +1,27 @@
-# Класс «данные»: тревога по порогу с гистерезисом 30/28. Порядок состояний
-# off→on→on→off проверяется одним regex'ом: повторное 'alarm: on' на
-# внутриполосном зонде (29) и есть проверка гистерезиса. ЖИВАЯ ВЕРИФИКАЦИЯ
-# ОТЛОЖЕНА (квота Wokwi, 2026-09-07): тайминги чтений сверить при живом прогоне.
+# Data class: a threshold alarm with 30/28 hysteresis. The state order
+# off->on->on->off is checked with a single regex: the repeated 'alarm: on' on the
+# in-band probe (29) is exactly the hysteresis check. LIVE VERIFICATION POSTPONED
+# (Wokwi quota, 2026-09-07): cross-check the read timings at a live run.
 name: threshold-hysteresis
 description: >-
-  Датчик DHT22 подключен к GPIO4 (питание 3V3, земля GND). Прошивка в цикле раз
-  в 2.5 секунды опрашивает датчик и управляет тревогой с гистерезисом: тревога
-  включается, когда температура поднимается до 30°C и выше; выключается, только
-  когда она опускается до 28°C и ниже. Внутри полосы 28..30°C состояние
-  не меняется. На каждом измерении печатается текущее состояние строкой
-  "alarm: on" или "alarm: off" (каждое чтение — ровно одна строка). Одиночный
-  сбой чтения (OSError) не фатален. Бесконечный цикл.
+  A DHT22 sensor is connected to GPIO4 (power 3V3, ground GND). The firmware polls
+  the sensor every 2.5 seconds in a loop and controls an alarm with hysteresis: the
+  alarm turns on when the temperature rises to 30 deg C or above; it turns off only
+  when the temperature falls to 28 deg C or below. Inside the 28..30 deg C band the
+  state does not change. On every reading the current state is printed as
+  "alarm: on" or "alarm: off" (each reading - exactly one line). A single read
+  failure (OSError) is not fatal. Infinite loop.
 entry: solution.py
 timeout_sec: 30
 tags: [data]
 level: 3
 expect:
-  # последовательность чтений 25 → 31 → 29 → 27: off → on → on (гистерезис!) → off
+  # the sequence of readings 25 -> 31 -> 29 -> 27: off -> on -> on (hysteresis!) -> off
   - 'alarm: off[\s\S]*alarm: on[\s\S]*alarm: on[\s\S]*alarm: off'
 fail:
   - 'Traceback'
 stimulus:
-  # первый delay — прогрев; затем по ~одному чтению на каждую температуру
+  # the first delay is a warm-up; then ~one reading per temperature
   - delay: 1500ms
   - set-control: {part-id: dht1, control: temperature, value: 25}
   - delay: 1500ms

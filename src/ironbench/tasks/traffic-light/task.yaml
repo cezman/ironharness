@@ -1,17 +1,17 @@
-# Описание задачи для ironbench: см. AGENTS.md / skills ironbench-task.
+# Task description for ironbench: see AGENTS.md / ironbench-task skill.
 name: traffic-light
 description: >-
-  Конечный автомат светофора: red 3 секунды → green 3 секунды → yellow 1 секунда → снова red,
-  циклически. Каждый вход в состояние печатается строкой "state: <имя>". Порядок переходов
-  и цикличность обязательны.
+  A traffic-light state machine: red 3 seconds -> green 3 seconds -> yellow 1 second -> red again,
+  cyclically. Every state entry is printed as "state: <name>". The transition order
+  and the cyclic behavior are mandatory.
 entry: solution.py
 timeout_sec: 20
 tags: [fsm]
 level: 3
 expect:
-  # 'cycle: 2' — литеральный маркер: wait-serial держит симуляцию до конца второго цикла
+  # 'cycle: 2' - a literal marker: wait-serial holds the simulation until the end of the second cycle
   - 'cycle: 2'
-  # порядок переходов red→green→yellow→red проверяем одним regex'ом
+  # the transition order red->green->yellow->red is checked with a single regex
   - 'state: red[\s\S]*state: green[\s\S]*state: yellow[\s\S]*state: red'
 fail:
   - 'Traceback'

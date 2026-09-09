@@ -1,17 +1,18 @@
-"""Агентский цикл ironbench (2.4): LLM пишет main.py для задачи, раннер проверяет.
+"""ironbench agent loop (2.4): an LLM writes main.py for the task, the runner scores it.
 
-Минимальный loop без function calling: агент получает постановку задачи и последний
-serial-вывод, отвечает одним блоком ```python с полным кодом main.py; код исполняется
-раннером (REPL-paste в Wokwi), результат — обратная связь. Так цикл работает с любой
-OpenAI-совместимой моделью, включая локальные LM Studio/ollama без поддержки тулзов.
+A minimal loop without function calling: the agent receives the task statement and
+the latest serial output, answers with a single ```python block containing the full
+main.py code; the code is executed by the runner (REPL-paste in Wokwi) and the result
+comes back as feedback. This way the loop works with any OpenAI-compatible model,
+including local LM Studio/ollama without tool-calling support.
 
-Конфиг — переменные окружения (или .env): LLM_BASE_URL (по умолчанию локальный
-LM Studio), LLM_API_KEY (для локальных сойдёт фиктивный), LLM_MODEL.
+Config - environment variables (or .env): LLM_BASE_URL (defaults to local
+LM Studio), LLM_API_KEY (a dummy value is fine for local servers), LLM_MODEL.
 
-Безопасность исходящих запросов: схема только http/https, редиректы запрещены,
-link-local и облачный metadata-хосты заблокированы всегда, приватные/loopback
-адреса разрешены только флагом LLM_ALLOW_LOCAL=1 (по умолчанию включён — проект
-заточен под локальный LLM; выключение оставляет только публичные эндпоинты).
+Outbound request safety: the scheme must be http/https, redirects are forbidden,
+link-local and cloud metadata hosts are always blocked, and private/loopback
+addresses are allowed only with the LLM_ALLOW_LOCAL=1 flag (on by default - the
+project targets a local LLM; turning it off leaves only public endpoints).
 """
 
 from __future__ import annotations
@@ -32,26 +33,26 @@ from ironbench.runner import find_env_file, is_infra_error, load_env_file, run_t
 from ironbench.tasks import Task
 
 SYSTEM_PROMPT = (
-    "Ты — embedded-инженер. Пишешь прошивку MicroPython для ESP32 в виде цельного "
-    "скрипта верхнего уровня. Отвечай только одним блоком ```python с полным кодом "
-    "main.py, без пояснений."
+    "You are an embedded engineer. You write MicroPython firmware for ESP32 as a single "
+    "top-level script. Reply with exactly one ```python block containing the full "
+    "main.py code, no explanations."
 )
 
 PLANT_SYSTEM_PROMPT = (
-    "Ты — инженер по системам управления. Пишешь контроллер на Python в виде функции "
-    "control(t, y, setpoint). Отвечай только одним блоком ```python с полным кодом "
-    "main.py, без пояснений."
+    "You are a control-systems engineer. You write a Python controller as a function "
+    "control(t, y, setpoint). Reply with exactly one ```python block containing the full "
+    "main.py code, no explanations."
 )
 
 CODE_FENCE = re.compile(r"```(?:python|micropython)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 
-# Название файла, который пишет агент (в золотых задачах это место занято solution.py)
+# The file the agent writes (in golden tasks this slot is taken by solution.py)
 AGENT_FILE = "main.py"
 
-# Сколько строк serial-вывода показываем агенту как обратную связь
+# How many lines of serial output to show the agent as feedback
 SERIAL_FEEDBACK_LINES = 40
 
-# Всегда запрещённые цели (облачный metadata) — даже при LLM_ALLOW_LOCAL=1
+# Always-blocked destinations (cloud metadata) - even with LLM_ALLOW_LOCAL=1
 ALWAYS_BLOCKED_IPS = frozenset({ipaddress.ip_address("169.254.169.254")})
 
 
@@ -64,8 +65,8 @@ class SolveConfig:
     temperature: float = 0.7
     timeout_sec: int = 600
     allow_local: bool = True
-    # потолок генерации: без него рассуждающие модели на сложных задачах
-    # зависают в бесконечном "думании" и занимают очередь сервера
+    # generation ceiling: without it, reasoning models on hard tasks get stuck
+    # "thinking" forever and hog the server queue
     max_tokens: int = 8192
 
 
@@ -89,13 +90,13 @@ def _pick(explicit: str | None, names: tuple[str, ...], default: str) -> str:
 def resolve_llm_config(
     base_url: str | None = None, api_key: str | None = None, model: str | None = None
 ) -> SolveConfig:
-    """Конфиг LLM: явные аргументы > окружение > .env > значения по умолчанию."""
+    """LLM config: explicit arguments > environment > .env > defaults."""
     return SolveConfig(
         base_url=_pick(base_url, ("LLM_BASE_URL",), "http://localhost:1234/v1"),
         api_key=_pick(api_key, ("LLM_API_KEY",), "lm-studio"),
         model=_pick(model, ("LLM_MODEL",), "qwen3.5-9b"),
         max_iterations=int(_pick(None, ("LLM_MAX_ITERATIONS",), "5") or 5),
-        # локальные 9B с длинным контекстом думают по несколько минут на вызов
+        # local 9B models with long context think for minutes per call
         timeout_sec=int(_pick(None, ("LLM_TIMEOUT",), "600") or 600),
         allow_local=_pick(None, ("LLM_ALLOW_LOCAL",), "1").strip().lower() not in ("0", "false", "no"),
         max_tokens=int(_pick(None, ("LLM_MAX_TOKENS",), "8192") or 8192),
@@ -103,31 +104,33 @@ def resolve_llm_config(
 
 
 def validate_endpoint(base_url: str, *, allow_local: bool) -> None:
-    """Границы SSRF: схема, резолв хоста, запрет metadata/link-local и (опц.) приватных сетей."""
+    """SSRF boundary: scheme, host resolution, metadata/link-local blocked, and
+    (optionally) private networks."""
     if not base_url.startswith(("http://", "https://")):
-        raise ValueError(f"LLM_BASE_URL должен быть http/https: {base_url}")
+        raise ValueError(f"LLM_BASE_URL must be http/https: {base_url}")
     host = (urllib.parse.urlsplit(base_url).hostname or "").rstrip(".")
     if not host:
-        raise ValueError(f"LLM_BASE_URL без хоста: {base_url}")
+        raise ValueError(f"LLM_BASE_URL has no host: {base_url}")
     if host.lower() in ("metadata.google.internal", "metadata"):
-        raise ValueError(f"заблокированный metadata-хост: {host}")
+        raise ValueError(f"blocked metadata host: {host}")
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror as e:
-        raise ValueError(f"хост LLM_BASE_URL не резолвится: {host}") from e
+        raise ValueError(f"LLM_BASE_URL host does not resolve: {host}") from e
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
-        # is_reserved не трогаем: у IPv6 он ложится и на ::1
+        # leave is_reserved alone: for IPv6 it also matches ::1
         if ip in ALWAYS_BLOCKED_IPS or ip.is_link_local or ip.is_multicast:
-            raise ValueError(f"заблокированный адрес {host} -> {ip}")
+            raise ValueError(f"blocked address {host} -> {ip}")
         if not allow_local and (ip.is_private or ip.is_loopback or ip.is_unspecified):
             raise ValueError(
-                f"приватный/loopback адрес {host} -> {ip} запрещён при LLM_ALLOW_LOCAL=0"
+                f"private/loopback address {host} -> {ip} is forbidden with LLM_ALLOW_LOCAL=0"
             )
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Редиректы запрещены: URL проверяется до запроса, переадресация обойдёт границу."""
+    """Redirects are forbidden: the URL is checked before the request; a
+    redirection would bypass the boundary."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise urllib.error.HTTPError(req.full_url, code, "redirects disabled", headers, fp)
@@ -137,7 +140,7 @@ _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def chat(cfg: SolveConfig, messages: list[dict]) -> str:
-    """Один вызов /chat/completions без SDK (хватает urllib для локального сервера)."""
+    """A single /chat/completions call without an SDK (urllib suffices for a local server)."""
     validate_endpoint(cfg.base_url, allow_local=cfg.allow_local)
     url = cfg.base_url.rstrip("/") + "/chat/completions"
     body = json.dumps(
@@ -164,7 +167,7 @@ def chat(cfg: SolveConfig, messages: list[dict]) -> str:
 
 
 def extract_code(response: str) -> str | None:
-    """Последний блок ```python из ответа; без блоков — None."""
+    """The last ```python block in the response; None when there are no blocks."""
     blocks = CODE_FENCE.findall(response)
     if not blocks:
         return None
@@ -175,28 +178,28 @@ def extract_code(response: str) -> str | None:
 def _first_prompt(task: Task) -> str:
     if task.target == "plant":
         return (
-            f"Задача: {task.description}\n\n"
-            f"Напиши полный код файла {AGENT_FILE} — контроллер замкнутой системы "
-            "в виде функции control(t, y, setpoint). "
-            "Ответ — только один блок ```python с полным кодом."
+            f"Task: {task.description}\n\n"
+            f"Write the complete code of the {AGENT_FILE} file - the controller of the "
+            "closed-loop system as a control(t, y, setpoint) function. "
+            "The answer must be a single ```python block with the complete code."
         )
     return (
-        f"Задача: {task.description}\n\n"
-        f"Напиши полный код файла {AGENT_FILE} для MicroPython ESP32. "
-        "Печать в serial — обычный print(). "
-        "Ответ — только один блок ```python с полным кодом."
+        f"Task: {task.description}\n\n"
+        f"Write the complete code of the {AGENT_FILE} file for MicroPython ESP32. "
+        "Printing to serial is a regular print(). "
+        "The answer must be a single ```python block with the complete code."
     )
 
 
 def _serial_feedback(serial_log: Path | None) -> str:
     if serial_log is None or not serial_log.is_file():
-        return "(serial-вывод пуст — прошивка не запустилась)"
+        return "(serial output is empty - the firmware did not start)"
     lines = serial_log.read_text(encoding="utf-8", errors="replace").splitlines()
     return "\n".join(lines[-SERIAL_FEEDBACK_LINES:])
 
 
 def _work_task(task: Task, work_dir: Path) -> Task:
-    """Копия задачи в рабочий каталог: entry — main.py агента, без solution.py."""
+    """A copy of the task in the working directory: entry is the agent's main.py, no solution.py."""
     work_dir.mkdir(parents=True, exist_ok=True)
     for item in task.directory.iterdir():
         if item.is_file() and item.name not in ("solution.py", "task.yaml"):
@@ -225,9 +228,9 @@ def solve_attempt(
     runner=run_task,
     journal=None,
 ) -> AttemptResult:
-    """Одна попытка решить задачу: цикл «ответ LLM → main.py → прогон → фидбек».
+    """One attempt to solve the task: the "LLM answer -> main.py -> run -> feedback" loop.
 
-    llm/runner — точки инъекции для офлайн-тестов (фейковый LLM и раннер).
+    llm/runner are injection points for offline tests (a fake LLM and runner).
     """
     attempt_dir = out_dir / f"attempt-{attempt}"
     work_dir = attempt_dir / "work"
@@ -246,9 +249,9 @@ def solve_attempt(
         try:
             response = llm(cfg, messages)
         except (OSError, ValueError, LookupError, TypeError) as e:
-            # сеть/HTTP/битый ответ сервера LLM (в т.ч. пустой "choices") —
-            # ошибка попытки, а не падение раннера
-            error = f"ошибка LLM: {e}"
+            # network/HTTP/broken LLM server response (incl. an empty "choices") -
+            # an attempt error, not a runner crash
+            error = f"LLM error: {e}"
             break
         code = extract_code(response)
         if code is None:
@@ -256,8 +259,8 @@ def solve_attempt(
             messages.append(
                 {
                     "role": "user",
-                    "content": "В ответе нет блока ```python. Повтори ответ: только один "
-                    "блок ```python с полным кодом main.py.",
+                    "content": "The answer has no ```python block. Try again: exactly one "
+                    "```python block with the full main.py code.",
                 }
             )
             continue
@@ -265,7 +268,7 @@ def solve_attempt(
         if journal:
             journal("iteration", {"task": task.name, "attempt": attempt, "n": iterations})
         result = runner(work_task, out_dir=attempt_dir, journal=journal)
-        # артефакты итерации: код и serial-вывод сохраняются до перезаписи следующим ходом
+        # iteration artifacts: the code and serial output are saved before the next move overwrites them
         (attempt_dir / f"iter-{iterations}.main.py").write_text(code, encoding="utf-8")
         if result.serial_log and result.serial_log.is_file():
             (attempt_dir / f"iter-{iterations}.serial.log").write_bytes(
@@ -275,21 +278,21 @@ def solve_attempt(
             solved = True
             break
         if is_infra_error(result.error):
-            # среда сломана (нет Renode/прошивки/CLI) — LLM это не починит,
-            # дальнейшие итерации только жгут токены
-            error = f"среда не готова, попытка остановлена: {result.error}"
+            # the environment is broken (no Renode/firmware/CLI) - the LLM cannot fix
+            # it, further iterations would only burn tokens
+            error = f"environment not ready, attempt stopped: {result.error}"
             break
         messages.append({"role": "assistant", "content": response})
         messages.append(
             {
                 "role": "user",
-                "content": "Проверка не пройдена. Вывод прогона:\n\n"
+                "content": "The check failed. Run output:\n\n"
                 f"{_serial_feedback(result.serial_log)}\n\n"
-                "Исправь код и пришли снова только один блок ```python с полным main.py.",
+                "Fix the code and again send exactly one ```python block with the full main.py.",
             }
         )
     if error is None and not solved:
-        error = f"лимит итераций ({cfg.max_iterations}) исчерпан"
+        error = f"iteration limit ({cfg.max_iterations}) exhausted"
 
     duration = round(time.monotonic() - start, 2)
     return AttemptResult(
@@ -313,7 +316,7 @@ def solve(
     runner=run_task,
     journal=None,
 ) -> list[AttemptResult]:
-    """pass@k-кампания: attempts независимых попыток решить задачу."""
+    """A pass@k campaign: attempts independent tries at solving the task."""
     results = [
         solve_attempt(
             task, cfg, attempt=n, out_dir=out_dir, llm=llm, runner=runner, journal=journal

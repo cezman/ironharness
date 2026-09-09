@@ -1,5 +1,5 @@
-# АЦП на GPIO34: полный диапазон (ATTN_11DB), линейная шкала raw→милливольты
-# по опорным точкам 0→0 и 4095→3300.
+# ADC on GPIO34: full range (ATTN_11DB), a linear raw->millivolts scale
+# over the reference points 0->0 and 4095->3300.
 import time
 
 from machine import ADC, Pin

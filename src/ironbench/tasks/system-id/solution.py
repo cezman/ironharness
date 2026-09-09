@@ -1,6 +1,6 @@
-# Фаза 1: ступенька u=1, копим траекторию. Фаза 2: K по превышению на конце
-# пробного окна (окно 4.4T — ошибка K менее 1.2%), T по достижению 63.2%
-# превышения, далее компенсация + П-связь. Шум усредняется медленной оценкой.
+# Phase 1: a u=1 step, collect the trajectory. Phase 2: K from the rise at the end
+# of the probe window (a 4.4T window - the K error is under 1.2%), T from the time
+# to reach 63.2% of the rise, then feedforward + P-feedback. Noise is averaged by a slow estimate.
 T_PROBE = 110.0
 AMBIENT = 20.0
 KP = 0.5

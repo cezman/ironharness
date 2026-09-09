@@ -1,5 +1,5 @@
-# Строки длиннее 32 символов — патологический ввод: сброс состояния, отчёт
-# "wd: reset" и продолжение работы (падать нельзя).
+# Lines longer than 32 characters are pathological input: a state reset, a
+# "wd: reset" report, and continued operation (crashing is not allowed).
 print("wd ready")
 val = 0
 

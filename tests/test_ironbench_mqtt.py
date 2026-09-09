@@ -1,6 +1,6 @@
-"""Тесты MQTT-оркестрации у мишени unix: брокер mqtt_sim + клиент харнесса +
-шаги mqtt-publish/mqtt-collect. Фейковое устройство — настоящий paho-клиент,
-всё локально (без WSL) — проверяет оркестрацию, а не MicroPython-клиент."""
+"""Tests of MQTT orchestration on the unix target: the mqtt_sim broker + the harness
+client + mqtt-publish/mqtt-collect steps. The fake device is a real paho client,
+everything is local (no WSL) - it checks the orchestration, not the MicroPython client."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from io_core.mqtt_sim import MqttSimBroker
 from ironbench.runner import run_task
 from ironbench.tasks import load_task
 
-# Фейковое устройство: ведёт себя как золотой mqtt-device — публикует счётчик
-# в dev1/value, применяет "add <n>" из dev1/cmd, печатает маркеры в serial.
+# Fake device: behaves like the golden mqtt-device - publishes a counter to
+# dev1/value, applies "add <n>" from dev1/cmd, prints markers to serial.
 FAKE_DEVICE = textwrap.dedent(
     """
     import sys, time
@@ -50,7 +50,7 @@ def make_mqtt_task(tmp_path) -> object:
     d.mkdir()
     text = """
 name: fake-mqtt
-description: фейк
+description: fake
 entry: solution.py
 target: unix
 timeout_sec: 15
@@ -87,14 +87,14 @@ def test_unix_mqtt_roundtrip(tmp_path):
         assert res.passed, (res.error, res.missed)
         log = res.serial_log.read_text("utf-8")
         assert "mqtt: dev1/value 1" in log
-        assert "mqtt: dev1/value 4" in log  # offset применён к публикациям
+        assert "mqtt: dev1/value 4" in log  # the offset is applied to the publications
         assert "applied" in log
     finally:
         broker.stop()
 
 
 def test_unix_mqtt_collect_timeout_is_logged_and_fails(tmp_path):
-    # устройство молчит по MQTT: collect не набирает count, expect не матчатся
+    # the device is silent over MQTT: collect never reaches count, the expects never match
     broker = MqttSimBroker()
     port = broker.start()
     try:
@@ -105,7 +105,7 @@ def test_unix_mqtt_collect_timeout_is_logged_and_fails(tmp_path):
         res = run_task(task, out_dir=tmp_path / "out", unix_cmd=cmd, mqtt_broker=broker)
         assert not res.passed
         log = res.serial_log.read_text("utf-8")
-        assert "получено 0 из 3" in log
+        assert "received 0 of 3" in log
     finally:
         broker.stop()
 
@@ -117,7 +117,7 @@ def test_mqtt_task_schema_requires_section(tmp_path):
     d.mkdir()
     text = """
 name: bad-mqtt
-description: фейк
+description: fake
 entry: solution.py
 target: unix
 timeout_sec: 5
@@ -130,5 +130,5 @@ stimulus:
     (d / "solution.py").write_text("pass\n", encoding="utf-8")
     import pytest
 
-    with pytest.raises(ValueError, match="непустая секция mqtt"):
+    with pytest.raises(ValueError, match="non-empty mqtt section"):
         lt(d)

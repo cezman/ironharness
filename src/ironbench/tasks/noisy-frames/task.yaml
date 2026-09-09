@@ -1,17 +1,18 @@
-# Золотая задача класса «шумная линия» (план бэклога: frame-corrupt):
-# линия портит и теряет кадры, прошивка обязана проверить контрольную сумму
-# и честно ответить ack/nak; переприёмом занимается отправитель (стимул).
-# Шум детерминирован (seed) и описан секцией noise; op счётчика = один
-# write-serial шаг: op1 портится, op3 выбрасывается.
+# The golden task of the "noisy line" class (backlog plan: frame-corrupt):
+# the line corrupts and drops frames; the firmware must verify the checksum
+# and honestly answer ack/nak; retransmission is the sender's job (the stimulus).
+# The noise is deterministic (seed) and described by the noise section; one op of
+# the counter = one write-serial step: op1 gets corrupted, op3 is dropped.
 name: noisy-frames
 description: >-
-  Прошивка читает кадры из serial-консоли. Кадр — строка "<id>:<payload>:<xor2>",
-  где xor2 — контрольная сумма: XOR всех байтов payload в hex из двух знаков
-  (например, для "1:hello:62": XOR байтов 'h','e','l','l','o' равен 0x62).
-  На каждый кадр прошивка отвечает ровно одной строкой: "ack <id>", если формат
-  верный и сумма сошлась, иначе — "nak". Линия шумная: часть кадров доходит
-  битой или теряется совсем; переприёмом занимается отправитель, прошивка
-  только честно отвечает. Бесконечный цикл.
+  The firmware reads frames from the serial console. A frame is the line
+  "<id>:<payload>:<xor2>", where xor2 is a checksum: the XOR of all payload bytes
+  as two hex digits (for example, for "1:hello:62": the XOR of the bytes
+  'h','e','l','l','o' equals 0x62). For every frame the firmware answers with
+  exactly one line: "ack <id>" if the format is correct and the checksum
+  matches, otherwise "nak". The line is noisy: some frames arrive corrupted or
+  are lost entirely; retransmission is the sender's job, the firmware just
+  answers honestly. Infinite loop.
 entry: solution.py
 target: unix
 timeout_sec: 20
@@ -35,14 +36,14 @@ expect:
 fail:
   - 'Traceback'
 stimulus:
-  # первый delay — прогрев: прошивка должна дойти до input()
+  # the first delay is a warm-up: the firmware must reach input()
   - delay: 100ms
-  - write-serial: "1:hello:62\r"   # кадр испортится линией → nak
+  - write-serial: "1:hello:62\r"   # the frame gets corrupted by the line -> nak
   - wait-serial: "nak"
-  - write-serial: "1:hello:62\r"   # ретрай — чисто → ack 1
+  - write-serial: "1:hello:62\r"   # retry - clean -> ack 1
   - wait-serial: "ack 1"
-  - write-serial: "2:abc:60\r"     # тело кадра линия выбросит, а голый \n дойдёт → nak
-  - write-serial: "2:abc:60\r"     # ретрай — чисто → ack 2
+  - write-serial: "2:abc:60\r"     # the line drops the frame body, the bare \n arrives -> nak
+  - write-serial: "2:abc:60\r"     # retry - clean -> ack 2
   - wait-serial: "ack 2"
-  - write-serial: "3:x:78\r"       # чисто → ack 3
+  - write-serial: "3:x:78\r"       # clean -> ack 3
   - wait-serial: "ack 3"

@@ -1,18 +1,19 @@
-# Первая задача класса «управление» (ТАУ) на plant-мишени: объект — нагреватель
-# 1-го порядка, от агента требуется осознанный выбор коэффициента П-регулятора
-# (установившаяся ошибка П-петли e_ss = (r-ambient)/(1+K·Kp) — в ТЗ данных
-# достаточно, чтобы Kp пришлось посчитать). Оценка — метрики, не regex.
+# The first control-theory task on the plant target: the plant is a first-order
+# heater; the agent must make an informed choice of the P-controller gain
+# (the P-loop steady-state error e_ss = (r-ambient)/(1+K*Kp) - the spec has enough
+# data that Kp has to be computed). Scoring is by metrics, not regex.
 name: p-regulator
 description: >-
-  Объект — нагреватель: апериодическое звено первого порядка. Установившаяся
-  температура y_oo = ambient + K*u, где ambient = 20°C, K = 60 (°C при u=1),
-  постоянная времени T = 30 c. Напиши П-регулятор: main.py обязан определять
-  функцию control(t, y, setpoint) -> float. Её вызывают каждые 0.5 c
-  симуляционного времени: t — секунды от старта, y — измеренная температура,
-  setpoint — уставка 74°C. Возврат зажимается в [0, 1] (мощность нагревателя).
-  Регулятор имеет вид u = Kp*(setpoint - y). Подбери Kp так, чтобы: y вошла
-  в полосу ±2°C от уставки и осталась там не позже 100 c (время установления),
-  установившаяся ошибка была не больше 2°C, перерегулирование — не больше 15%.
+  The plant is a heater: a first-order lag. The steady-state temperature is
+  y_oo = ambient + K*u, where ambient = 20 deg C, K = 60 (deg C at u=1), the time
+  constant T = 30 s. Write a P-controller: main.py must define the function
+  control(t, y, setpoint) -> float. It is called every 0.5 s of simulation time:
+  t - seconds since start, y - the measured temperature, setpoint - the setpoint
+  of 74 deg C. The return value is clamped to [0, 1] (the heater power). The
+  controller has the form u = Kp*(setpoint - y). Pick Kp so that: y enters the
+  +-2 deg C band around the setpoint and stays there no later than 100 s (the
+  settling time), the steady-state error is at most 2 deg C, and the overshoot
+  is at most 15%.
 entry: solution.py
 target: plant
 timeout_sec: 30

@@ -1,6 +1,6 @@
-"""Тесты мишени plant (закрытая петля «объект + регулятор», см. ironbench/plant.py):
-юнит-тесты физики/метрик + интеграция через реальный воркер (локальный процесс,
-без WSL и симуляторов)."""
+"""Tests of the plant target (a closed "plant + controller" loop, see ironbench/plant.py):
+unit tests of the physics/metrics + integration through the real worker (a local
+process, no WSL or simulators)."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def make_spec(**overrides) -> PlantSpec:
 
 
 def test_step_matches_analytic_solution():
-    # y(T) = ambient + K*u - (превышение)*exp(-1) для u=1: точная дискретизация
+    # y(T) = ambient + K*u - (rise)*exp(-1) for u=1: exact discretization
     spec = make_spec()
     y = spec.step(spec.ambient, 1.0, spec.ambient, spec.T)
     assert y == pytest.approx(spec.ambient + spec.K * (1 - math.exp(-1)))
@@ -52,7 +52,7 @@ def test_deterministic_noise_same_seed_same_values():
     seq1 = [gen1.gauss(1.0) for _ in range(10)]
     seq2 = [gen2.gauss(1.0) for _ in range(10)]
     assert seq1 == seq2
-    assert len(set(seq1)) > 1  # и это не константа
+    assert len(set(seq1)) > 1  # and it is not a constant
 
 
 def test_closed_loop_clamps_actuator_and_deterministic():
@@ -61,21 +61,21 @@ def test_closed_loop_clamps_actuator_and_deterministic():
     rows1, err1 = run_closed_loop(ctrl, spec)
     rows2, err2 = run_closed_loop(ctrl, spec)
     assert err1 is None and err2 is None
-    assert rows1 == rows2  # детерминизм прогона при фиксированном seed
+    assert rows1 == rows2  # run determinism at a fixed seed
     assert all(u == spec.u_max for _, _, _, u in rows1)
 
 
 def test_closed_loop_reports_non_number_return():
-    rows, err = run_closed_loop(lambda t, y, sp: "жара", make_spec())
+    rows, err = run_closed_loop(lambda t, y, sp: "heat", make_spec())
     assert rows == []
-    assert "не-число" in err
+    assert "non-number" in err
 
 
 def test_metrics_monotonic_heating_has_no_overshoot_and_settles():
     spec = make_spec()
     rows, _ = run_closed_loop(lambda t, y, sp: 1.0 if y < sp else 0.0, spec)
     m = compute_metrics(rows, spec)
-    # гистерезисный bang-bang: уходит за уставку на шаг, но в пределах допуска
+    # hysteresis bang-bang: it overshoots the setpoint by a step but stays within tolerance
     assert m["overshoot_pct"] < 5.0
     assert 0 < m["settle_time"] < spec.duration
     assert m["steady_error"] < 2.0
@@ -83,11 +83,11 @@ def test_metrics_monotonic_heating_has_no_overshoot_and_settles():
 
 def test_metrics_never_settling_is_inf():
     spec = make_spec(requirements={"steady_error": 0.001, "settle_time": 50.0})
-    rows, _ = run_closed_loop(lambda t, y, sp: 0.0, spec)  # нагреватель выключен
+    rows, _ = run_closed_loop(lambda t, y, sp: 0.0, spec)  # the heater is off
     m = compute_metrics(rows, spec)
     assert m["settle_time"] == math.inf
     missed = check_requirements(m, spec.requirements)
-    assert missed and "не установилось" in missed[-1]
+    assert missed and "never settled" in missed[-1]
 
 
 def test_check_requirements_reports_facts():
@@ -98,10 +98,10 @@ def test_check_requirements_reports_facts():
     assert len(missed) == 3
     assert "12.3%" in missed[0] and "5%" in missed[0]
     assert "3.00" in missed[1] and "2" in missed[1]
-    assert "не установилось" in missed[2]
+    assert "never settled" in missed[2]
 
 
-# --- интеграция: run_task → реальный воркер ---
+# --- integration: run_task -> the real worker ---
 
 
 def make_plant_task(tmp_path, controller: str, name="fake-plant", **task_overrides):
@@ -109,7 +109,7 @@ def make_plant_task(tmp_path, controller: str, name="fake-plant", **task_overrid
     d.mkdir(exist_ok=True)
     text = f"""
 name: {name}
-description: фейк
+description: fake
 entry: solution.py
 target: plant
 timeout_sec: 5
@@ -130,7 +130,7 @@ expect:
     text = textwrap.dedent(text)
     expect = task_overrides.get("expect", ())
     text += (
-        "".join(f"  - {p!r}\n" for p in expect) if expect else "  []\n"  # пустой expect — валидный
+        "".join(f"  - {p!r}\n" for p in expect) if expect else "  []\n"  # an empty expect is valid
     )
     (d / "task.yaml").write_text(text, encoding="utf-8")
     (d / "solution.py").write_text(controller, encoding="utf-8")
@@ -138,7 +138,7 @@ expect:
 
 
 def test_plant_pass_and_log_tail(tmp_path):
-    # GAIN 0.5: e_ss = 30/31 ≈ 0.97 <= 2, насыщение до y≈48, установление ~7 c
+    # GAIN 0.5: e_ss = 30/31 ~= 0.97 <= 2, saturation up to y~=48, settling ~7 s
     task = make_plant_task(
         tmp_path,
         "GAIN = 0.5\ndef control(t, y, setpoint):\n    return GAIN * (setpoint - y)\n",
@@ -147,8 +147,8 @@ def test_plant_pass_and_log_tail(tmp_path):
     assert res.passed, (res.error, res.missed)
     assert res.exit_code == 0
     log = res.serial_log.read_text("utf-8")
-    assert "# метрики:" in log and "# --- итог ---" in log
-    assert "K=" not in log.split("# --- итог ---")[0]  # параметры объекта не светятся
+    assert "# metrics:" in log and "# --- summary ---" in log
+    assert "K=" not in log.split("# --- summary ---")[0]  # the plant parameters never show up
 
 
 def test_plant_missed_requirement_fails(tmp_path):
@@ -162,21 +162,21 @@ def test_plant_controller_crash_is_result_not_infra(tmp_path):
     task = make_plant_task(tmp_path, "def control(t, y, setpoint):\n    return 1 / 0\n")
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert "контроллер упал" in res.error
-    assert "контроллер упал" in res.serial_log.read_text("utf-8")  # фидбек агенту
+    assert "controller crashed" in res.error
+    assert "controller crashed" in res.serial_log.read_text("utf-8")  # feedback to the agent
     assert not runner_module.is_infra_error(res.error)
 
 
 def test_plant_controller_sys_exit_is_result(tmp_path):
-    # sys.exit в контроллере — тоже результат прогона: result.json/лог пишутся,
-    # воркер не падает; текст исключения агента не попадает в error (infra-скан)
-    controller = "import sys\ndef control(t, y, setpoint):\n    sys.exit('датчик не найден')\n"
+    # sys.exit in the controller is also a run result: result.json/log are written,
+    # the worker does not crash; the agent's exception text stays out of error (infra scan)
+    controller = "import sys\ndef control(t, y, setpoint):\n    sys.exit('sensor not found')\n"
     task = make_plant_task(tmp_path, controller)
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert "контроллер упал" in (res.error or "")
-    assert "датчик не найден" not in (res.error or "")  # только в логе-фидбеке
-    assert "датчик не найден" in res.serial_log.read_text("utf-8")
+    assert "controller crashed" in (res.error or "")
+    assert "sensor not found" not in (res.error or "")  # only in the feedback log
+    assert "sensor not found" in res.serial_log.read_text("utf-8")
     assert not runner_module.is_infra_error(res.error)
 
 
@@ -184,7 +184,7 @@ def test_plant_missing_control_function(tmp_path):
     task = make_plant_task(tmp_path, "x = 1\n")
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert "нет функции control" in res.error
+    assert "no control" in res.error
     assert not runner_module.is_infra_error(res.error)
 
 
@@ -193,7 +193,7 @@ def test_plant_hung_controller_hits_wall_limit(tmp_path, monkeypatch):
     task = make_plant_task(tmp_path, "def control(t, y, setpoint):\n    while True:\n        pass\n")
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert "wall-лимит" in res.error
+    assert "wall limit" in res.error
     assert not runner_module.is_infra_error(res.error)
 
 
@@ -206,7 +206,7 @@ def test_plant_missing_entry_is_infra(tmp_path):
 
 
 def test_plant_fail_pattern_still_applies(tmp_path):
-    # expect/fail паттерны работают поверх метрик: 'ZeroDivision' в логе ловится
+    # expect/fail patterns work on top of metrics: 'ZeroDivision' in the log is caught
     task = make_plant_task(tmp_path, "def control(t, y, setpoint):\n    return 1 / 0\n")
     import dataclasses
 
@@ -229,7 +229,7 @@ def test_plant_journal_records_start_and_result(tmp_path):
     assert "task_start" in kinds and "task_result" in kinds
 
 
-# --- золотые plant-задачи: локальные, бесплатные и детерминированные ---
+# --- golden plant tasks: local, free and deterministic ---
 
 
 @pytest.mark.parametrize("name", ["p-regulator", "pid-antiwindup", "system-id"])

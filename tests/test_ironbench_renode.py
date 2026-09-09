@@ -1,5 +1,5 @@
-"""Тесты мишени renode (этап 2.6): фейковый «Renode» — локальный TCP-сервер,
-говорящий протоколом MicroPython REPL. Без WSL, Renode и сети.
+"""Tests of the renode target (stage 2.6): a fake "Renode" - a local TCP server
+speaking the MicroPython REPL protocol. No WSL, Renode, or network.
 """
 
 from __future__ import annotations
@@ -23,9 +23,9 @@ from ironbench.runner import (
 )
 from ironbench.tasks import load_task
 
-# Фейковый Renode: слушает TCP-порт, ведёт диалог по REPL-протоколу раннера
-# (nudge → Ctrl+E paste mode → код до Ctrl+D → ответ по режиму).
-# Режимы: ok / missed / traceback / nopaste / nolisten / hang / echo.
+# Fake Renode: listens on a TCP port and follows the runner's REPL protocol
+# (nudge -> Ctrl+E paste mode -> code until Ctrl+D -> answer per mode).
+# Modes: ok / missed / traceback / nopaste / nolisten / hang / echo.
 FAKE_RENODE = textwrap.dedent(
     """
     import socket, sys
@@ -82,7 +82,7 @@ def make_renode_task(tmp_path, expect=("alpha bravo",), fail=(), stimulus=(), ti
     d.mkdir()
     text = f"""
 name: fake-rn
-description: фейк
+description: fake
 entry: solution.py
 target: renode
 timeout_sec: {timeout_sec}
@@ -115,7 +115,7 @@ def run_fake_renode(tmp_path, task, mode, **kw):
         mp.undo()
 
 
-# --- утилиты ---
+# --- utilities ---
 
 
 def test_parse_delay():
@@ -130,14 +130,14 @@ def test_generate_resc_contains_terminal_and_firmware_placeholder(tmp_path):
     assert "platforms/cpus/fake_platform.repl" in resc
     assert "CreateServerSocketTerminal 1234" in resc
     assert "connector Connect sysbus.uart term" in resc
-    # маркер пути @ обязан остаться перед плейсхолдером (иначе монетор не съест путь)
+    # the @ path marker must stay in front of the placeholder (otherwise the monitor rejects the path)
     assert "LoadELF @__FIRMWARE__" in resc
 
 
 def test_telnet_filter_strips_iac_and_unescapes_ff():
     tel = runner_module._TelnetFilter()
-    # согласование + данные с экранированным 0xFF и IAC, разорванным между чанками;
-    # литеральные 0xFF — не UTF-8, при lossy-декоде дают U+FFFD
+    # negotiation + data with an escaped 0xFF and an IAC split across chunks;
+    # literal 0xFF bytes are not UTF-8, lossy decoding turns them into U+FFFD
     out = tel.feed(b"\xff\xfd\x00\xff\xfb\x01he")
     out += tel.feed(b"\xff")
     out += tel.feed(b"\xffllo\xff\xffworld")
@@ -146,14 +146,14 @@ def test_telnet_filter_strips_iac_and_unescapes_ff():
 
 
 def test_telnet_filter_split_iac_waits_for_next_chunk():
-    # WILL-опция и IAC SE, разорванные между чанками, не должны ни глотать данные
-    # из следующего чанка, ни навсегда глушить фильтр внутри SB
+    # a WILL option and IAC SE split across chunks must neither swallow data
+    # from the next chunk nor permanently mute the filter inside SB
     tel = runner_module._TelnetFilter()
-    out = tel.feed(b"\xff\xfb")  # WILL без опции
-    out += tel.feed(b"\x01data")  # опция 0x01 не должна попасть в данные
+    out = tel.feed(b"\xff\xfb")  # WILL without an option
+    out += tel.feed(b"\x01data")  # the 0x01 option must not reach the data
     assert out == "data"
     tel = runner_module._TelnetFilter()
-    out = tel.feed(b"\xff\xfa\x18value\xff")  # SB без SE — SE на границе чанков
+    out = tel.feed(b"\xff\xfa\x18value\xff")  # SB without SE - SE at a chunk boundary
     out += tel.feed(b"\xf0rest")
     assert out == "rest"
 
@@ -166,19 +166,19 @@ def test_read_port_line_skips_noise_lines():
         b"RENODE_PORT=54321\n"
     )
     assert runner_module._read_port_line(stream, timeout=2) == 54321
-    # пустое значение после '=' — не порт (до EOF → ошибка)
-    with pytest.raises(ConnectionError, match="не сообщил"):
+    # an empty value after '=' is not a port (reads to EOF -> error)
+    with pytest.raises(ConnectionError, match="did not report"):
         runner_module._read_port_line(io.BytesIO(b"RENODE_PORT=\n"), timeout=0.3)
 
 
 def test_paste_code_drops_comment_lines():
-    code = "# шапка\nprint('a')\n    # вложенный комментарий\nprint('b')  # хвост остаётся\n"
-    assert runner_module._paste_code(code) == "print('a')\nprint('b')  # хвост остаётся"
+    code = "# header\nprint('a')\n    # a nested comment\nprint('b')  # the tail stays\n"
+    assert runner_module._paste_code(code) == "print('a')\nprint('b')  # the tail stays"
 
 
 def test_stage_requires_renode_section(tmp_path):
     task = dataclasses.replace(make_renode_task(tmp_path), renode={})
-    with pytest.raises(ValueError, match="platform и firmware"):
+    with pytest.raises(ValueError, match="platform and firmware"):
         _stage_renode_task(task, tmp_path / "out", 3456)
 
 
@@ -189,7 +189,7 @@ def test_stage_missing_firmware_is_clean_fail(tmp_path):
         _stage_renode_task(task, tmp_path / "out", 3456)
 
 
-# --- полный прогон через диспетчер на фейковом Renode ---
+# --- a full run through the dispatcher on the fake Renode ---
 
 
 def test_renode_pass_when_all_patterns_printed(tmp_path):
@@ -239,7 +239,7 @@ def test_renode_no_listener_is_infra_error(tmp_path, monkeypatch):
     task = make_renode_task(tmp_path)
     res = run_fake_renode(tmp_path, task, "nolisten")
     assert not res.passed
-    assert "не удалось подключиться" in (res.error or "")
+    assert "failed to connect" in (res.error or "")
     assert is_infra_error(res.error)
 
 
@@ -248,7 +248,7 @@ def test_renode_hang_repl_deadline(tmp_path, monkeypatch):
     task = make_renode_task(tmp_path, timeout_sec=0)
     res = run_fake_renode(tmp_path, task, "hang")
     assert not res.passed
-    assert res.missed == task.expect  # тишина в serial → всё не найдено
+    assert res.missed == task.expect  # silence in serial -> everything missed
 
 
 def test_renode_set_control_rejected_upfront(tmp_path):
@@ -271,7 +271,7 @@ def test_renode_journal_records_start_and_result(tmp_path):
 
 
 def test_renode_without_cmd_builds_wsl_pipeline(tmp_path, monkeypatch):
-    # без renode_cmd: прошивка и стейдж уходят в WSL, затем запускается wsl-run.sh
+    # without renode_cmd: the firmware and the stage go into WSL, then wsl-run.sh starts
     task = make_renode_task(tmp_path)
     runs, popens = [], []
 
@@ -289,24 +289,24 @@ def test_renode_without_cmd_builds_wsl_pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_module.subprocess, "Popen", fake_popen)
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert "не найден" in (res.error or "")
-    assert len(runs) == 2  # прошивка + стейдж
+    assert "not found" in (res.error or "")
+    assert len(runs) == 2  # firmware + stage
     assert "ironharness-firmware" in runs[0][-1]
     assert "wsl-run.sh" in popens[0][-1]
     assert popens[0][:3] == ["wsl", "-d", "OpenClawGateway"]
 
 
 def test_wsl_run_script_binds_firmware_from_home_store(tmp_path):
-    # вся сложная логика — в wsl-run.sh (файлом, не через argv wsl.exe)
+    # all the complex logic lives in wsl-run.sh (as a file, not through wsl.exe argv)
     task = make_renode_task(tmp_path)
     script = runner_module._wsl_run_script(task)
-    assert "sleep infinity" in script  # монитор без вечного stdin получает EOF
-    assert "> run.log 2>&1" in script  # вывод Renode не забивает pipe раннера
-    assert "pkill -9 -f 'renode/renode|renode_[0-9]'" in script  # -9: mono медленно умирает от TERM
-    assert 'echo "RENODE_PORT=$PORT"' in script  # динамический порт передаётся раннеру
-    assert "CreateServerSocketTerminal $PORT" in script  # порт подставляет sed
+    assert "sleep infinity" in script  # a monitor without an eternal stdin gets EOF
+    assert "> run.log 2>&1" in script  # Renode output must not clog the runner's pipe
+    assert "pkill -9 -f 'renode/renode|renode_[0-9]'" in script  # -9: mono dies slowly from TERM
+    assert 'echo "RENODE_PORT=$PORT"' in script  # the dynamic port is reported to the runner
+    assert "CreateServerSocketTerminal $PORT" in script  # sed substitutes the port
     assert "$HOME/ironharness-firmware/fake.elf" in script
-    # sed не должен оказаться в bash-комментарии (бывает при склейке строк)
+    # sed must not end up inside a bash comment (it happens when lines get glued)
     sed_line = next(l for l in script.splitlines() if "sed -i" in l)
     assert sed_line.strip().startswith("sed")
 
@@ -331,7 +331,7 @@ def test_push_firmware_sends_tar_with_marker(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
     runner_module._push_firmware(task)
     assert "ironharness-firmware" in seen["cmd"][-1]
-    assert seen["input"][:2] == b"\x1f\x8b"  # gzip-магия tar.gz
+    assert seen["input"][:2] == b"\x1f\x8b"  # the gzip magic of tar.gz
     import io
 
     with runner_module.tarfile.open(fileobj=io.BytesIO(seen["input"])) as tar:
@@ -350,15 +350,15 @@ def test_read_port_line():
 
     port = runner_module._read_port_line(io.BytesIO(b"RENODE_PORT=12345\n"), timeout=1)
     assert port == 12345
-    with pytest.raises(ConnectionError, match="не сообщил"):
+    with pytest.raises(ConnectionError, match="did not report"):
         runner_module._read_port_line(io.BytesIO(b""), timeout=0.2)
 
 
 def test_is_infra_error_marks():
-    assert is_infra_error("не найден: wokwi-cli")
-    assert is_infra_error("мишень 'real' не реализована (этап 3)")
-    assert is_infra_error("не удалось подключиться: :3456")
-    assert is_infra_error("не удалось подготовить задачу: нет файла")
+    assert is_infra_error("not found: wokwi-cli")
+    assert is_infra_error("the 'real' target is not implemented (stage 3)")
+    assert is_infra_error("failed to connect: :3456")
+    assert is_infra_error("failed to prepare task: no such file")
     assert not is_infra_error(None)
-    # ошибка самой прошивки — не инфраструктурная, попытки продолжаются
-    assert not is_infra_error("проверка не пройдена: ошибка в коде прошивки")
+    # a firmware error of its own is not an infrastructure one, attempts continue
+    assert not is_infra_error("check failed: an error in the firmware code")
