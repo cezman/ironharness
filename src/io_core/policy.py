@@ -11,6 +11,9 @@ boundary right before an operation reaches the outside world:
 - IRONHARNESS_ENABLED_KINDS — comma-separated subset of serial,modbus,mqtt,esp,
   file. Unset or empty means all kinds are enabled; a disabled kind makes the
   Session open methods, esp_* and file_* methods raise PolicyViolation.
+- IRONHARNESS_MAX_CONNECTIONS — ceiling on simultaneously open transports per
+  Session (unset = unlimited). A denial is a PolicyViolation, journaled like
+  every other policy denial.
 
 Every denial is reported through the on_event hook as a "policy_violation"
 event before the exception is raised — the "no log = didn't happen" convention
@@ -29,8 +32,23 @@ EventHook = Callable[[str, dict[str, Any]], None]
 
 ALLOWED_HOSTS_ENV = "IRONHARNESS_ALLOWED_HOSTS"
 ENABLED_KINDS_ENV = "IRONHARNESS_ENABLED_KINDS"
+MAX_CONNECTIONS_ENV = "IRONHARNESS_MAX_CONNECTIONS"
 
 ALL_KINDS: tuple[str, ...] = ("serial", "modbus", "mqtt", "esp", "file")
+
+
+def parse_max_connections(raw: str | None) -> int | None:
+    """Parses IRONHARNESS_MAX_CONNECTIONS into a limit (None/empty = unlimited).
+
+    A non-numeric or negative value raises ValueError: a broken limit must fail
+    loudly, not silently disable itself (same philosophy as parse_enabled_kinds).
+    """
+    if raw is None or not raw.strip():
+        return None
+    n = int(raw)
+    if n < 0:
+        raise ValueError(f"{MAX_CONNECTIONS_ENV} must be >= 0, got {raw!r}")
+    return n
 
 
 def parse_allowed_hosts(raw: str | None) -> tuple[tuple[str, int | None], ...]:

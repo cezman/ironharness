@@ -86,3 +86,28 @@ def test_operations_are_journaled(tmp_path):
         box.delete_file("f.txt")
     events = read_events(jpath)
     assert [e["kind"] for e in events] == ["file_write", "file_read", "file_delete"]
+
+
+def test_parallel_writes_cannot_exceed_quota(tmp_path):
+    # IH-12: две параллельные записи по 600 КБ при лимите 1 МБ — ровно одна
+    # проходит: проверка квоты и запись атомарны (раньше успевали обе).
+    import threading
+
+    box = FileSandbox(tmp_path / "sb", max_bytes=1_000_000, max_files=10)
+    barrier = threading.Barrier(2)
+    results: list[str] = []
+
+    def worker(n: int) -> None:
+        barrier.wait()
+        try:
+            box.write_file(f"{n}.bin", b"x" * 600_000, overwrite=True)
+            results.append("ok")
+        except QuotaExceeded:
+            results.append("quota")
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in (1, 2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == ["ok", "quota"]

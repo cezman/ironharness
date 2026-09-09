@@ -1,9 +1,13 @@
 """Тесты сессии: именованные транспорты, песочница, единый журнал (этап 1, задача 7)."""
 
+import threading
+import time
+
 import pytest
 
 from io_core import (
     ModbusSimServer,
+    PolicyViolation,
     ReplayMismatch,
     ReplaySession,
     SandboxViolation,
@@ -154,3 +158,77 @@ def test_journal_conn_covers_modbus_and_mqtt(session, tmp_path):
     conns = {(e["kind"], e["conn"]) for e in events}
     assert ("modbus_read", "m") in conns
     assert ("mqtt_publish", "q") in conns
+
+
+# --- IH-12: атомарность реестра и квот, предел соединений, живучий close ---
+
+
+def test_duplicate_open_race_is_atomic(session, monkeypatch):
+    # Два потока открывают одно имя: даже при медленном open() ровно один
+    # успешен, второй получает KeyError (раньше оба проходили check_free,
+    # открывались дважды и один транспорт терялся навсегда).
+    import io_core.session as session_module
+
+    real_cls = session_module.SerialTransport
+
+    class SlowSerial(real_cls):
+        def open(self):
+            time.sleep(0.2)
+            super().open()
+
+    monkeypatch.setattr(session_module, "SerialTransport", SlowSerial)
+    errors: list[KeyError] = []
+
+    def worker():
+        try:
+            session.serial_open("s", "loop://", timeout=0.5)
+        except KeyError as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(errors) == 1
+    assert len(session._transports) == 1
+
+
+def test_connection_limit_policy(session, tmp_path, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_MAX_CONNECTIONS", "1")
+    session.serial_open("a", "loop://", timeout=0.5)
+    with pytest.raises(PolicyViolation):
+        session.serial_open("b", "loop://", timeout=0.5)
+    events = read_events(tmp_path / "journal.jsonl")
+    assert any(
+        e["kind"] == "policy_violation" and e.get("rule") == "max_connections" for e in events
+    )
+
+
+def test_connection_limit_rejects_garbage(session, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_MAX_CONNECTIONS", "two")
+    with pytest.raises(ValueError):
+        session.serial_open("a", "loop://", timeout=0.5)
+
+
+def test_typed_close_frees_name_even_when_close_fails(session, monkeypatch):
+    session.serial_open("s", "loop://", timeout=0.5)
+    t = session._transports["s"]
+    monkeypatch.setattr(t, "close", lambda: (_ for _ in ()).throw(OSError("port stuck")))
+    with pytest.raises(OSError):
+        session.serial_close("s")
+    session.serial_open("s", "loop://", timeout=0.5)  # имя освободилось
+
+
+def test_session_close_survives_a_bad_port(session, monkeypatch):
+    # Один зависший порт не должен оставить открытыми остальные и журнал:
+    # close() собирает первую ошибку и перевыбрасывает её после зачистки.
+    session.serial_open("bad", "loop://", timeout=0.5)
+    session.serial_open("good", "loop://", timeout=0.5)
+    bad = session._transports["bad"]
+    monkeypatch.setattr(bad, "close", lambda: (_ for _ in ()).throw(OSError("stuck")))
+    with pytest.raises(OSError):
+        session.close()
+    assert session._transports == {}  # реестр очищен, «good» не брошен
+    with pytest.raises(ValueError):
+        session.journal("late", {})  # журнал тоже закрыт
