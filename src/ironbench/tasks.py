@@ -158,7 +158,23 @@ def load_task(task_dir: Path) -> Task:
             ts = col.get("timeout_sec", 10)
             if isinstance(ts, bool) or not isinstance(ts, (int, float)) or ts <= 0:
                 raise ValueError(f"{task_file}: mqtt-collect.timeout_sec must be a number > 0")
+    # anti-cheat (IH-14): on the runner-anchored targets a wait-serial answer is
+    # anchored to the stimulus that asked for it (a preceding write-serial or
+    # mqtt-publish). A wait without any preceding trigger would false-flag
+    # honest firmware output as pre-printed cheating - reject at load time.
+    # (wokwi wait-serials live in the generated scenario, outside the runner.)
     target = str(raw.get("target", "wokwi"))
+    if target in ("unix", "renode", "real"):
+        seen_trigger = False
+        for step in stimulus:
+            if "write-serial" in step or "mqtt-publish" in step:
+                seen_trigger = True
+            if "wait-serial" in step and not seen_trigger:
+                raise ValueError(
+                    f"{task_file}: wait-serial must be preceded by a write-serial or "
+                    "mqtt-publish step (an answer is anchored to the stimulus that "
+                    "asked for it); use delay to sync with boot output"
+                )
     if target not in TASK_TARGETS:
         raise ValueError(f"{task_file}: unknown target {target!r} (allowed: {TASK_TARGETS})")
     renode = raw.get("renode", {})

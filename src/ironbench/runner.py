@@ -1190,8 +1190,11 @@ def _run_unix(
                     needle = str(step["wait-serial"])
                     # anti-cheat (IH-14): the answer must be emitted after the
                     # stimulus write asked for it (see _first_answer_stamp).
-                    # Deterministic: ingestion stamps only ever grow, and a
-                    # chunk cannot be ingested before it was printed.
+                    # Deterministic in the condemning direction (a chunk cannot
+                    # be ingested before it was printed); the justifying
+                    # direction is theoretically spoofable within the pipe lag
+                    # (sub-millisecond, not attacker-controlled) - zero-waits
+                    # covers the exit case.
                     while True:
                         stamp = _first_answer_stamp(box, needle, last_trigger_stamp)
                         if stamp is not None:
@@ -1260,7 +1263,10 @@ def _run_unix(
                             got += 1
                             _box_append(f"mqtt: {msg['topic']} {msg['payload']}\n")
                     if got < need:
-                        box["text"] += (
+                        # registered as a chunk too: the anti-cheat maps needle
+                        # positions to chunks, an unregistered append would
+                        # shift them and misattribute later answers
+                        _box_append(
                             f"mqtt: collect {col['topic']}: received {got} of {need}\n"
                         )
             # anti-cheat (IH-14): the firmware exited before answering a single
@@ -1437,7 +1443,12 @@ def _run_real(
                 time.sleep(min(_parse_delay(step["delay"]), max(0.0, deadline - time.monotonic())))
             elif "wait-serial" in step:
                 needle = str(step["wait-serial"])
-                # anti-cheat (IH-14), same rule as unix/renode: pre-printed answers fail
+                # anti-cheat (IH-14): presence-based check, NOT the unix
+                # chunk-stamp mechanism - it is racy for fast answers (an
+                # answer ingested between the write and this check would be
+                # misattributed). Fine for dumps that arrived earlier; port
+                # the stamp mechanism before any real target task uses
+                # wait-serial stimulus.
                 if needle in repl.output():
                     error = (
                         f"anti-cheat: {needle!r} was printed before the stimulus "

@@ -163,3 +163,60 @@ def test_golden_unix_survives_anticheat(name, tmp_path):
     task = load_task(TASKS_DIR / name)
     res = run_task(task, out_dir=tmp_path / name)
     assert res.passed, (res.error, res.missed)
+
+
+# --- collect-timeout gap: every log append must be a registered chunk ---
+
+
+def test_mqtt_collect_timeout_gap_does_not_false_flag(tmp_path):
+    # Review round-2 blocker: the collect-timeout line ('received 0 of 1') was
+    # appended to the log without a chunk registration - positions shifted and
+    # honest output printed after the gap was misattributed as pre-printed
+    # cheating. The firmware here answers only after the collect timeout, so
+    # the answer's chunk lies beyond the unregistered-append position.
+    from io_core.mqtt_sim import MqttSimBroker
+
+    d = tmp_path / "t"
+    d.mkdir()
+    text = textwrap.dedent(
+        """
+    name: mqtt-gap
+    description: fake
+    entry: solution.py
+    target: unix
+    timeout_sec: 15
+    mqtt:
+      client_id: ironbench-gap
+    expect:
+      - 'boot'
+      - 'READY'
+    stimulus:
+      - delay: 100ms
+      - write-serial: "go\\r"
+      - mqtt-collect: {topic: never/pub, count: 1, timeout_sec: 1}
+      - wait-serial: "READY"
+    """
+    )
+    (d / "task.yaml").write_text(text, encoding="utf-8")
+    (d / "solution.py").write_text(
+        "import sys, time\n"
+        "print('boot', flush=True)\n"
+        "sys.stdin.readline()\n"
+        "print('go-ack', flush=True)\n"
+        "time.sleep(1.2)\n"  # READY lands after the collect timeout line
+        "print('READY', flush=True)\n",
+        encoding="utf-8",
+    )
+    task = load_task(d)
+    broker = MqttSimBroker()
+    broker.start()
+    try:
+        res = run_task(
+            task,
+            out_dir=tmp_path / "out",
+            unix_cmd=[sys.executable, str(d / "solution.py")],
+            mqtt_broker=broker,
+        )
+    finally:
+        broker.stop()
+    assert res.passed, (res.error, res.missed)
