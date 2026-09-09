@@ -1,5 +1,5 @@
-"""Тесты мишени unix (MicroPython unix-port в WSL2): фейковый micropython —
-локальный скрипт, читающий stdin и печатающий в stdout. Без WSL и сборки.
+"""Tests of the unix target (the MicroPython unix port in WSL2): a fake micropython -
+a local script reading stdin and printing to stdout. No WSL, no build.
 """
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ from io_core.journal import JsonlJournal
 from ironbench.runner import run_task
 from ironbench.tasks import load_task
 
-# Фейковый micropython: печатает баннер, потом эхо строк из stdin (как uart-echo).
-# Режимы: echo / missed (баннер и выход) / crash (ненулевой exit) / hang (вечный
-# цикл без stdin) / finite (баннер и чистый выход 0).
+# Fake micropython: prints a banner, then echoes lines from stdin (like uart-echo).
+# Modes: echo / missed (a banner and exit) / crash (a non-zero exit) / hang (an
+# eternal loop without stdin) / finite (a banner and a clean exit 0).
 FAKE_UPY = textwrap.dedent(
     """
     import sys, time
@@ -46,7 +46,7 @@ def make_unix_task(tmp_path, expect=("boot ok",), stimulus=(), timeout_sec=5):
     d.mkdir()
     text = f"""
 name: fake-unix
-description: фейк
+description: fake
 entry: solution.py
 target: unix
 timeout_sec: {timeout_sec}
@@ -69,14 +69,14 @@ def run_fake_unix(tmp_path, task, mode, **kw):
 
 @pytest.fixture(autouse=True)
 def _fast_deadlines(monkeypatch):
-    # missed-тесты по смыслу ждут до дедлайна — не ждём 25 реальных секунд
+    # the missed tests wait until the deadline by design - do not wait 25 real seconds
     monkeypatch.setattr(runner_module, "WALL_GRACE_SEC", 1)
 
 
 def test_unix_pass_with_stimulus_cr_translation(tmp_path):
-    # \r из wokwi-стимула переводится в \n: эхо отвечает на строку.
-    # Прошивка бесконечна — после матчинга её гасят, exit_code None
-    # (stdin не закрывают: EOF у input() дал бы Traceback в логе)
+    # \r from the wokwi-style stimulus is translated to \n: the echo answers the line.
+    # The firmware is infinite - after the match it gets killed, exit_code None
+    # (stdin is not closed: EOF at input() would put a Traceback in the log)
     task = make_unix_task(
         tmp_path,
         expect=("boot ok", "echo: hello"),
@@ -116,15 +116,15 @@ def test_unix_nonzero_exit_is_error(tmp_path):
     res = run_fake_unix(tmp_path, task, "crash")
     assert not res.passed
     assert res.exit_code == 3
-    assert "завершился с кодом 3" in (res.error or "")
+    assert "exited with code 3" in (res.error or "")
 
 
 def test_unix_hang_until_wall_deadline(tmp_path):
-    # паттерн не печатается никогда — задача фейлится по дедлайну, процесс гасится
+    # the pattern is never printed - the task fails on the deadline, the process is killed
     task = make_unix_task(tmp_path, expect=("never printed",), timeout_sec=0)
     res = run_fake_unix(tmp_path, task, "hang")
     assert not res.passed
-    assert res.exit_code is None  # убит по дедлайну, не завершился сам
+    assert res.exit_code is None  # killed on the deadline, did not exit on its own
     assert res.missed == task.expect
 
 
@@ -133,7 +133,7 @@ def test_unix_set_control_rejected_upfront(tmp_path):
     res = run_fake_unix(tmp_path, task, "echo")
     assert not res.passed
     assert "set-control" in (res.error or "")
-    # отказ неисправим для агента — solve-цикл должен выходить сразу, не жечь итерации
+    # the refusal is incurable for the agent - the solve loop must exit immediately, not burn iterations
     assert runner_module.is_infra_error(res.error)
 
 
@@ -164,15 +164,15 @@ def test_unix_without_cmd_pushes_entry_and_runs_wsl(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_module.subprocess, "Popen", fake_popen)
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert "не найден" in (res.error or "")
+    assert "not found" in (res.error or "")
     assert len(runs) == 1 and "ironharness-runs" in runs[0][-1]
     assert popens[0][:3] == ["wsl", "-d", "OpenClawGateway"]
     assert "~/bin/micropython" in popens[0][-1]
-    assert popens[0][-1].startswith("exec ")  # micropython замещает bash
+    assert popens[0][-1].startswith("exec ")  # micropython replaces bash
 
 
 def test_unix_cli_target_override(tmp_path):
-    # --target unix переопределяет мишень wokwi-задачи: диспетчер уходит в unix
+    # --target unix overrides the target of a wokwi task: the dispatcher goes to unix
     from ironbench.tasks import load_tasks
 
     tasks = load_tasks(Path(__file__).parents[1] / "src" / "ironbench" / "tasks")
@@ -188,7 +188,7 @@ def make_noise_task(tmp_path, noise_yaml, stimulus, expect=("echo: one",), timeo
     d.mkdir()
     text = f"""
 name: fake-noise
-description: фейк
+description: fake
 entry: solution.py
 target: unix
 timeout_sec: {timeout_sec}
@@ -203,7 +203,7 @@ expect:
 
 
 def test_unix_noise_drop_swallows_write_step(tmp_path):
-    # op2 выбрасывается линией: тело two не доходит, aaa/ccc доходят
+    # op2 is dropped by the line: the body of "two" never arrives, aaa/ccc arrive
     noise = """
 noise:
   seed: 7
@@ -228,7 +228,7 @@ noise:
 
 
 def test_unix_noise_corrupt_changes_bytes_then_retry_is_clean(tmp_path):
-    # op1 портится всеми байтами (ratio 1.0), ретрай op2 доходит чисто
+    # op1 gets every byte corrupted (ratio 1.0), the retry of op2 arrives clean
     noise = """
 noise:
   seed: 7
@@ -247,7 +247,7 @@ noise:
     assert res.passed, res.error
     log = res.serial_log.read_text("utf-8")
     assert "echo: one" in log
-    assert log.count("echo: ") == 2  # битая строка тоже напечатана, но другой
+    assert log.count("echo: ") == 2  # the corrupted line was printed too, but different
 
 
 def test_unix_noise_validation_bad_action(tmp_path):
@@ -273,7 +273,7 @@ noise:
 
 
 def test_unix_noise_validation_disconnect_rejected(tmp_path):
-    # disconnect из шумной линии не поддержан: валидатор режет на загрузке
+    # disconnect from the noisy line is not supported: the validator cuts it at load
     noise = """
 noise:
   seed: 7
@@ -290,7 +290,7 @@ def test_unix_noise_rejected_on_wokwi_target(tmp_path):
     d.mkdir()
     text = """
 name: fake-wokwi-noise
-description: фейк
+description: fake
 entry: main.py
 target: wokwi
 timeout_sec: 5
@@ -303,5 +303,5 @@ expect:
   - 'x'
 """
     (d / "task.yaml").write_text(textwrap.dedent(text), encoding="utf-8")
-    with pytest.raises(ValueError, match="только мишенью unix"):
+    with pytest.raises(ValueError, match="the unix target"):
         load_task(d)

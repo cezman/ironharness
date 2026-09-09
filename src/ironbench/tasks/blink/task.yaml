@@ -1,15 +1,15 @@
-# Описание задачи для ironbench. expect — regex-паттерны: все обязаны встретиться
-# в serial-выводе; fail — паттерны, появление которых сразу проваливает задачу.
-# entry — эталонное решение, которое раннер вставляет в REPL (main.py остаётся
-# файлом агента в бенчмарке и в задаче не хранится).
-# ВАЖНО: description — полное ТЗ для агента: все форматы строк и тайминги задаются
-# здесь, expect в task.yaml агенту не виден.
+# Task description for ironbench. expect - regex patterns: all of them must appear
+# in the serial output; fail - patterns whose appearance immediately fails the task.
+# entry - the reference solution that the runner pastes into the REPL (main.py stays
+# the agent's file in the benchmark and is not stored in the task).
+# IMPORTANT: description is the full spec for the agent: all line formats and timings
+# are defined here; the agent never sees expect from task.yaml.
 name: blink
 description: >-
-  ESP32 мигает светодиодом на GPIO2: 0.5 секунды горит, 0.5 секунды не горит, бесконечно.
-  При каждом включении печатает в serial "blink <N>: on", при каждом выключении —
-  "blink <N>: off", где N — номер хода, начиная с 0 (то есть "blink 0: on",
-  "blink 0: off", "blink 1: on", "blink 1: off", ...).
+  An ESP32 blinks the LED on GPIO2: 0.5 seconds on, 0.5 seconds off, forever.
+  On every turn-on it prints "blink <N>: on" to serial, on every turn-off -
+  "blink <N>: off", where N is the turn number starting from 0 (that is,
+  "blink 0: on", "blink 0: off", "blink 1: on", "blink 1: off", ...).
 entry: solution.py
 timeout_sec: 20
 tags: [io]

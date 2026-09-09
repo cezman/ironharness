@@ -2,8 +2,8 @@ import time
 
 from machine import Pin
 
-# Антидребезг: кнопка на GPIO4 (на GND, internal pullup). Нажатие засчитываем,
-# только если уровень 0 стабильно держится 30 мс; на каждое чистое нажатие — печать.
+# Debounce: a button on GPIO4 (to GND, internal pullup). A press counts
+# only if the 0 level holds steady for 30 ms; every clean press is printed.
 button = Pin(4, Pin.IN, Pin.PULL_UP)
 pressed = False
 count = 0

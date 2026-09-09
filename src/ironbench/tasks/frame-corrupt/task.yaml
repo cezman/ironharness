@@ -1,21 +1,23 @@
-# Развитие класса «шумная линия»: линия не только портит/теряет кадры, но и
-# склеивает обрывки (write-шаг op5 выброшен, хвост кадра 3 приклеился к кадру 4).
-# Прошивка обязана досинхронизироваться по заголовку '#' и вытащить валидный хвост.
-# xor2 = XOR байтов payload в hex (ab→03, cd→07, hi→01, qq→00); op2 портится
-# бит-флипами (ratio 1.0) — контрольная сумма гарантированно не сойдётся.
+# An evolution of the "noisy line" class: the line not only corrupts/drops frames
+# but also glues the pieces together (write step op5 is dropped, the tail of frame
+# 3 got glued to frame 4). The firmware must resynchronize on the '#' header and
+# extract the valid tail. xor2 = XOR of the payload bytes in hex (ab->03, cd->07,
+# hi->01, qq->00); op2 is corrupted with bit flips (ratio 1.0) - the checksum is
+# guaranteed to mismatch.
 name: frame-corrupt
 description: >-
-  Прошивка читает кадры из serial-консоли. Кадр — строка "#<id>:<payload>:<xor2>",
-  где xor2 — контрольная сумма: XOR всех байтов payload в hex из двух знаков
-  (например, для "#1:ab:03": XOR байтов 'a','b' равен 0x03). На каждый валидный
-  кадр прошивка отвечает строкой "ack <id>", на битый или битый формат — "nak".
-  Линия ненадёжна: байты портятся, записи теряются целиком, а обрывок кадра
-  может приклеиться к началу следующего (в одной строке оказывается мусор и
-  хвост другого кадра). Прошивка обязана досинхронизироваться по заголовку:
-  в любой строке искать '#', разбирать сегменты до следующего '#' или конца
-  строки, каждый валидный сегмент подтверждать "ack <id>", невалидный — "nak";
-  строка вообще без '#' — это один "nak". Чего пришло меньше — не дело
-  отправителя: он сам делает ретраи. Бесконечный цикл.
+  The firmware reads frames from the serial console. A frame is the line
+  "#<id>:<payload>:<xor2>", where xor2 is a checksum: the XOR of all payload bytes
+  as two hex digits (for example, for "#1:ab:03": the XOR of the bytes 'a','b'
+  equals 0x03). For every valid frame the firmware answers with "ack <id>", for a
+  corrupted frame or malformed line - "nak". The line is unreliable: bytes get
+  corrupted, writes are dropped whole, and a frame fragment can get glued to the
+  beginning of the next one (one line ends up containing junk and the tail of
+  another frame). The firmware must resynchronize on the header: in any line,
+  look for '#', parse the segments up to the next '#' or the end of the line,
+  acknowledge each valid segment with "ack <id>", answer "nak" for an invalid
+  one; a line with no '#' at all is one "nak". Missing frames are not the
+  sender's problem: it retries on its own. Infinite loop.
 entry: solution.py
 target: unix
 timeout_sec: 20
@@ -33,7 +35,7 @@ noise:
       count: 1
 expect:
   - 'ack 1'
-  - 'nak'      # битый кадр (op2) и обрывок в склейке — оба порождают nak
+  - 'nak'      # the corrupted frame (op2) and the fragment in the glue-up both produce a nak
   - 'ack 2'
   - 'ack 4'
   - 'ack 3'
@@ -41,15 +43,15 @@ fail:
   - 'Traceback'
 stimulus:
   - delay: 100ms
-  - write-serial: "#1:ab:03\r"    # чисто → ack 1
+  - write-serial: "#1:ab:03\r"    # clean -> ack 1
   - wait-serial: "ack 1"
-  - write-serial: "#2:cd:07\r"    # портится линией → nak
+  - write-serial: "#2:cd:07\r"    # corrupted by the line -> nak
   - wait-serial: "nak"
-  - write-serial: "#2:cd:07\r"    # ретрай → ack 2
+  - write-serial: "#2:cd:07\r"    # retry -> ack 2
   - wait-serial: "ack 2"
-  - write-serial: "#3:hi"         # начало кадра 3 без терминатора
-  - write-serial: ":01\r"         # хвост кадра 3 линия выбрасывает
-  - write-serial: "#4:qq:00\r"    # склейка: "3:hi" → nak, "#4:qq:00" → ack 4
+  - write-serial: "#3:hi"         # beginning of frame 3 without a terminator
+  - write-serial: ":01\r"         # the line drops the tail of frame 3
+  - write-serial: "#4:qq:00\r"    # glue-up: "3:hi" -> nak, "#4:qq:00" -> ack 4
   - wait-serial: "ack 4"
-  - write-serial: "#3:hi:01\r"    # ретрай кадра 3 → ack 3
+  - write-serial: "#3:hi:01\r"    # retry of frame 3 -> ack 3
   - wait-serial: "ack 3"

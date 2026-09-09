@@ -1,4 +1,4 @@
-"""Загрузка описаний задач ironbench из YAML (task.yaml в каталоге задачи)."""
+"""Loading ironbench task descriptions from YAML (task.yaml in the task directory)."""
 
 from __future__ import annotations
 
@@ -12,29 +12,30 @@ from ironbench.plant import PLANT_MODELS
 
 TASK_FILE = "task.yaml"
 
-# Мишени запуска задачи; real (этап 3) — в плане. unix = MicroPython unix-port
-# в WSL2: бесплатные локальные прогоны чисто-serial задач (см. runner._run_unix);
-# plant = закрытая петля «объект + регулятор» в Python (см. runner._run_plant)
+# Task run targets; real (stage 3) is in the plan. unix = the MicroPython unix port
+# in WSL2: free local runs of pure-serial tasks (see runner._run_unix);
+# plant = a closed "plant + controller" loop in Python (see runner._run_plant)
 TASK_TARGETS = ("wokwi", "renode", "unix", "plant", "real")
 
-# Типы шагов сценария wokwi, разрешённые в stimulus; расширять вместе с wokwi-cli
+# wokwi scenario step types allowed in stimulus; extend together with wokwi-cli
 STIMULUS_STEP_KEYS = frozenset(
     {"write-serial", "wait-serial", "delay", "set-control", "mqtt-publish", "mqtt-collect"}
 )
-# MQTT-шаги (харнесс выступает вторым участником обмена): доступны только
-# мишени unix (брокер mqtt_sim поднимается рядом с прошивкой в WSL2)
+# MQTT steps (the harness is the second party of the exchange): only available to
+# the unix target (an mqtt_sim broker starts next to the firmware in WSL2)
 MQTT_STEP_KEYS = frozenset({"mqtt-publish", "mqtt-collect"})
 
-# Ключи секции renode в task.yaml: платформа (.repl из поставки Renode), прошивка
-# (.elf из каталога задачи или tasks/_firmware), имя UART-периферии для терминала
+# Keys of the renode section in task.yaml: platform (.repl from the Renode shipset),
+# firmware (.elf from the task directory or tasks/_firmware), UART peripheral name
+# for the terminal
 RENODE_KEYS = frozenset({"platform", "firmware", "uart"})
 
-# Секция noise: шумная линия поверх стимула мишени unix. seed — детерминизм,
-# faults — те же сценарии, что у io_core.FaultyTransport (словари Fault)
+# The noise section: a noisy line on top of the unix target stimulus. seed is for
+# determinism, faults are the same scenarios as io_core.FaultyTransport (Fault dicts)
 NOISE_KEYS = frozenset({"seed", "faults"})
 
-# Секция plant (мишень plant): физика объекта 1-го порядка + требования к
-# переходной характеристике. Смысл ключей — в ironbench/plant.py
+# The plant section (plant target): first-order plant physics + step-response
+# requirements. Key meanings - in ironbench/plant.py
 PLANT_KEYS = frozenset(
     {
         "model",
@@ -56,23 +57,24 @@ PLANT_KEYS = frozenset(
 PLANT_REQUIREMENT_KEYS = frozenset({"steady_error", "overshoot", "settle_time"})
 PLANT_DISTURBANCE_KEYS = frozenset({"at", "ambient"})
 
-# Секция mqtt (мишень unix): харнесс поднимает мини-брокер mqtt_sim рядом с
-# прошивкой (в WSL2) и сам участвует в обмене шагами mqtt-publish/mqtt-collect.
-# Каждый принятый харнессом publish дописывается в serial-лог строкой
-# "mqtt: <topic> <payload>" — поэтому expect/fail-паттерны работают и на MQTT.
+# The mqtt section (unix target): the harness starts a mini mqtt_sim broker next to
+# the firmware (in WSL2) and itself takes part in the exchange via mqtt-publish/
+# mqtt-collect steps. Every publish received by the harness is appended to the
+# serial log as "mqtt: <topic> <payload>" - so expect/fail patterns work on MQTT too.
 MQTT_KEYS = frozenset({"client_id"})
 
-# Таксономия бенчмарка: тег класса — ядро навыка задачи, level — ступень
-# сложности 1..5. Отчёт показывает профиль модели по классам, а не одно число
+# Benchmark taxonomy: the class tag is the core skill of the task, level is the
+# difficulty step 1..5. The report shows the model's per-class profile, not one number
 CLASS_TAGS = ("io", "data", "protocol", "fsm", "control", "resilience")
 
 
 @dataclasses.dataclass(frozen=True)
 class Task:
-    """Одна золотая задача: каталог Wokwi-проекта + критерии проверки serial-вывода.
+    """One golden task: a Wokwi project directory + serial-output scoring criteria.
 
-    scenario=None → раннер сам генерирует REPL-paste сценарий из файла entry
-    (MicroPython: код вставляется в REPL, см. runner.generate_paste_scenario).
+    scenario=None -> the runner generates the REPL-paste scenario from the entry
+    file itself (MicroPython: the code is pasted into the REPL, see
+    runner.generate_paste_scenario).
     """
 
     name: str
@@ -94,230 +96,230 @@ class Task:
 
 
 def load_task(task_dir: Path) -> Task:
-    """Читает task.yaml из каталога задачи; ошибки формата — ValueError с путём."""
+    """Reads task.yaml from the task directory; format errors raise ValueError with the path."""
     task_file = task_dir / TASK_FILE
     if not task_file.is_file():
-        raise ValueError(f"нет {TASK_FILE} в {task_dir}")
+        raise ValueError(f"no {TASK_FILE} in {task_dir}")
     raw = yaml.safe_load(task_file.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise TypeError(f"{task_file}: ожидался YAML-словарь")
+        raise TypeError(f"{task_file}: expected a YAML mapping")
     name = raw.get("name")
     if not name or not isinstance(name, str):
-        raise ValueError(f"{task_file}: обязательное поле name (строка) отсутствует")
+        raise ValueError(f"{task_file}: the required field name (string) is missing")
     expect = raw.get("expect", [])
     fail = raw.get("fail", [])
     if not isinstance(expect, list) or not all(isinstance(p, str) for p in expect):
-        raise ValueError(f"{task_file}: expect должен быть списком строк")
+        raise ValueError(f"{task_file}: expect must be a list of strings")
     if not isinstance(fail, list) or not all(isinstance(p, str) for p in fail):
-        raise ValueError(f"{task_file}: fail должен быть списком строк")
+        raise ValueError(f"{task_file}: fail must be a list of strings")
     scenario = raw.get("scenario")
     if scenario is not None and not isinstance(scenario, str):
-        raise ValueError(f"{task_file}: scenario должен быть строкой (путь к YAML)")
+        raise ValueError(f"{task_file}: scenario must be a string (path to YAML)")
     try:
         timeout_sec = int(raw.get("timeout_sec", 30))
     except (TypeError, ValueError):
-        raise ValueError(f"{task_file}: timeout_sec должен быть целым числом") from None
+        raise ValueError(f"{task_file}: timeout_sec must be an integer") from None
     stimulus = raw.get("stimulus", [])
     if not isinstance(stimulus, list) or not all(isinstance(s, dict) for s in stimulus):
-        raise ValueError(f"{task_file}: stimulus должен быть списком шагов (словарей)")
+        raise ValueError(f"{task_file}: stimulus must be a list of steps (mappings)")
     for step in stimulus:
         unknown = set(step) - STIMULUS_STEP_KEYS
         if unknown:
             raise ValueError(
-                f"{task_file}: неизвестный шаг stimulus {sorted(unknown)} "
-                f"(разрешены: {sorted(STIMULUS_STEP_KEYS)})"
+                f"{task_file}: unknown stimulus step {sorted(unknown)} "
+                f"(allowed: {sorted(STIMULUS_STEP_KEYS)})"
             )
         if "mqtt-publish" in step:
             pub = step["mqtt-publish"]
             if not isinstance(pub, dict) or not pub.get("topic") or "payload" not in pub:
                 raise ValueError(
-                    f"{task_file}: mqtt-publish требует topic и payload"
+                    f"{task_file}: mqtt-publish requires topic and payload"
                 )
             if set(pub) - {"topic", "payload", "retain", "qos"}:
                 raise ValueError(
-                    f"{task_file}: неизвестные ключи mqtt-publish {sorted(set(pub) - {'topic', 'payload', 'retain', 'qos'})}"
+                    f"{task_file}: unknown mqtt-publish keys {sorted(set(pub) - {'topic', 'payload', 'retain', 'qos'})}"
                 )
             if not isinstance(pub.get("retain", False), bool) or pub.get("qos", 0) not in (0, 1):
-                raise ValueError(f"{task_file}: mqtt-publish.retain — bool, qos — 0 или 1")
+                raise ValueError(f"{task_file}: mqtt-publish.retain must be bool, qos 0 or 1")
         if "mqtt-collect" in step:
             col = step["mqtt-collect"]
             if not isinstance(col, dict) or not col.get("topic") or "count" not in col:
-                raise ValueError(f"{task_file}: mqtt-collect требует topic и count")
+                raise ValueError(f"{task_file}: mqtt-collect requires topic and count")
             if set(col) - {"topic", "count", "timeout_sec"}:
                 raise ValueError(
-                    f"{task_file}: неизвестные ключи mqtt-collect {sorted(set(col) - {'topic', 'count', 'timeout_sec'})}"
+                    f"{task_file}: unknown mqtt-collect keys {sorted(set(col) - {'topic', 'count', 'timeout_sec'})}"
                 )
             if (
                 isinstance(col["count"], bool)
                 or not isinstance(col["count"], int)
                 or col["count"] < 1
             ):
-                raise ValueError(f"{task_file}: mqtt-collect.count — целое >= 1")
+                raise ValueError(f"{task_file}: mqtt-collect.count must be an integer >= 1")
             ts = col.get("timeout_sec", 10)
             if isinstance(ts, bool) or not isinstance(ts, (int, float)) or ts <= 0:
-                raise ValueError(f"{task_file}: mqtt-collect.timeout_sec должен быть числом > 0")
+                raise ValueError(f"{task_file}: mqtt-collect.timeout_sec must be a number > 0")
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
-        raise ValueError(f"{task_file}: неизвестная мишень {target!r} (разрешены: {TASK_TARGETS})")
+        raise ValueError(f"{task_file}: unknown target {target!r} (allowed: {TASK_TARGETS})")
     renode = raw.get("renode", {})
     if not isinstance(renode, dict):
-        raise TypeError(f"{task_file}: renode должен быть словарём (platform/firmware/uart)")
+        raise TypeError(f"{task_file}: renode must be a mapping (platform/firmware/uart)")
     unknown_renode = set(renode) - RENODE_KEYS
     if unknown_renode:
         raise ValueError(
-            f"{task_file}: неизвестные ключи renode {sorted(unknown_renode)} "
-            f"(разрешены: {sorted(RENODE_KEYS)})"
+            f"{task_file}: unknown renode keys {sorted(unknown_renode)} "
+            f"(allowed: {sorted(RENODE_KEYS)})"
         )
     if target == "renode":
         missing = {"platform", "firmware"} - set(renode)
         if missing:
             raise ValueError(
-                f"{task_file}: для мишени renode в секции renode нужны platform и firmware "
-                f"(нет: {sorted(missing)})"
+                f"{task_file}: the renode target requires platform and firmware in the renode section "
+                f"(missing: {sorted(missing)})"
             )
         for key in ("platform", "firmware", "uart"):
             if key in renode and (not isinstance(renode[key], str) or not renode[key]):
-                raise ValueError(f"{task_file}: renode.{key} должен быть непустой строкой")
+                raise ValueError(f"{task_file}: renode.{key} must be a non-empty string")
     noise = raw.get("noise", {})
     if not isinstance(noise, dict):
-        raise TypeError(f"{task_file}: noise должен быть словарём (seed/faults)")
+        raise TypeError(f"{task_file}: noise must be a mapping (seed/faults)")
     unknown_noise = set(noise) - NOISE_KEYS
     if unknown_noise:
         raise ValueError(
-            f"{task_file}: неизвестные ключи noise {sorted(unknown_noise)} "
-            f"(разрешены: {sorted(NOISE_KEYS)})"
+            f"{task_file}: unknown noise keys {sorted(unknown_noise)} "
+            f"(allowed: {sorted(NOISE_KEYS)})"
         )
     if "seed" in noise and (
         isinstance(noise["seed"], bool) or not isinstance(noise["seed"], int)
     ):
-        raise ValueError(f"{task_file}: noise.seed должен быть целым числом")
+        raise ValueError(f"{task_file}: noise.seed must be an integer")
     faults = noise.get("faults", [])
     if not isinstance(faults, list) or not all(isinstance(f, dict) for f in faults):
-        raise ValueError(f"{task_file}: noise.faults должен быть списком словарей")
+        raise ValueError(f"{task_file}: noise.faults must be a list of mappings")
     for f in faults:
-        # disconnect ронял бы прогон (ConnectionLost не ловится в _run_unix),
-        # остальные действия шумной линии честно поддержаны
+        # disconnect would crash the run (ConnectionLost is not caught in _run_unix),
+        # the other noisy-line actions are honestly supported
         if f.get("action") not in {"drop", "corrupt", "delay"}:
             raise ValueError(
-                f"{task_file}: noise.faults: действие {f.get('action')!r} не поддерживается "
-                "(разрешены: drop, corrupt, delay)"
+                f"{task_file}: noise.faults: action {f.get('action')!r} is not supported "
+                "(allowed: drop, corrupt, delay)"
             )
     try:
-        [Fault(**f) for f in faults]  # валидация сценариев сбоев на этапе загрузки
+        [Fault(**f) for f in faults]  # validate the fault scenarios at load time
     except (TypeError, ValueError) as e:
         raise ValueError(f"{task_file}: noise.faults: {e}") from None
     if noise and target != "unix":
-        raise ValueError(f"{task_file}: noise поддерживается только мишенью unix")
+        raise ValueError(f"{task_file}: noise is only supported by the unix target")
     mqtt_section = raw.get("mqtt", {})
     if mqtt_section and target != "unix":
-        raise ValueError(f"{task_file}: секция mqtt поддерживается только мишенью unix")
+        raise ValueError(f"{task_file}: the mqtt section is only supported by the unix target")
     if MQTT_STEP_KEYS & {k for step in stimulus for k in step}:
         if target != "unix":
-            raise ValueError(f"{task_file}: mqtt-шаги поддерживаются только мишенью unix")
+            raise ValueError(f"{task_file}: mqtt steps are only supported by the unix target")
         if not isinstance(mqtt_section, dict) or not mqtt_section:
             raise ValueError(
-                f"{task_file}: для mqtt-шагов нужна непустая секция mqtt (ключи: {sorted(MQTT_KEYS)})"
+                f"{task_file}: mqtt steps require a non-empty mqtt section (keys: {sorted(MQTT_KEYS)})"
             )
     if mqtt_section:
         if not isinstance(mqtt_section, dict):
-            raise TypeError(f"{task_file}: секция mqtt должна быть словарём")
+            raise TypeError(f"{task_file}: the mqtt section must be a mapping")
         unknown_mqtt = set(mqtt_section) - MQTT_KEYS
         if unknown_mqtt:
             raise ValueError(
-                f"{task_file}: неизвестные ключи mqtt {sorted(unknown_mqtt)} "
-                f"(разрешены: {sorted(MQTT_KEYS)})"
+                f"{task_file}: unknown mqtt keys {sorted(unknown_mqtt)} "
+                f"(allowed: {sorted(MQTT_KEYS)})"
             )
     plant_section = raw.get("plant", {})
     if plant_section and target != "plant":
-        raise ValueError(f"{task_file}: секция plant поддерживается только мишенью plant")
+        raise ValueError(f"{task_file}: the plant section is only supported by the plant target")
     if target == "plant":
         if not isinstance(plant_section, dict):
-            raise TypeError(f"{task_file}: секция plant должна быть словарём")
+            raise TypeError(f"{task_file}: the plant section must be a mapping")
         if not plant_section:
-            raise ValueError(f"{task_file}: для мишени plant нужна непустая секция plant")
+            raise ValueError(f"{task_file}: the plant target requires a non-empty plant section")
         unknown_plant = set(plant_section) - PLANT_KEYS
         if unknown_plant:
             raise ValueError(
-                f"{task_file}: неизвестные ключи plant {sorted(unknown_plant)} "
-                f"(разрешены: {sorted(PLANT_KEYS)})"
+                f"{task_file}: unknown plant keys {sorted(unknown_plant)} "
+                f"(allowed: {sorted(PLANT_KEYS)})"
             )
         model = str(plant_section.get("model", "heater"))
         if model not in PLANT_MODELS:
             raise ValueError(
-                f"{task_file}: plant.model {model!r} не поддержан (разрешены: {PLANT_MODELS})"
+                f"{task_file}: plant.model {model!r} is not supported (allowed: {PLANT_MODELS})"
             )
         for key in ("K", "T", "duration", "setpoint"):
             if key not in plant_section:
-                raise ValueError(f"{task_file}: в секции plant обязателен ключ {key}")
+                raise ValueError(f"{task_file}: the plant section requires the key {key}")
         for key, value in plant_section.items():
             if key in ("model", "requirements", "disturbances"):
                 continue
             if key == "seed":
                 if isinstance(value, bool) or not isinstance(value, int):
-                    raise ValueError(f"{task_file}: plant.seed должен быть целым числом")
+                    raise ValueError(f"{task_file}: plant.seed must be an integer")
                 continue
             if isinstance(value, bool) or not isinstance(value, (int, float)):
-                # контракт загрузчика — любые ошибки формата как ValueError
-                raise ValueError(f"{task_file}: plant.{key} должен быть числом")  # noqa: TRY004
+                # loader contract - every format error is a ValueError
+                raise ValueError(f"{task_file}: plant.{key} must be a number")  # noqa: TRY004
         if plant_section["K"] <= 0:
-            raise ValueError(f"{task_file}: plant.K должен быть > 0")
+            raise ValueError(f"{task_file}: plant.K must be > 0")
         if plant_section["T"] <= 0:
-            raise ValueError(f"{task_file}: plant.T должен быть > 0")
+            raise ValueError(f"{task_file}: plant.T must be > 0")
         dt = float(plant_section.get("dt", 0.5))
         if dt <= 0 or dt > float(plant_section["duration"]):
-            raise ValueError(f"{task_file}: plant.dt должен быть > 0 и не больше duration")
+            raise ValueError(f"{task_file}: plant.dt must be > 0 and no greater than duration")
         if float(plant_section.get("u_min", 0.0)) >= float(plant_section.get("u_max", 1.0)):
-            raise ValueError(f"{task_file}: plant.u_min должен быть меньше u_max")
+            raise ValueError(f"{task_file}: plant.u_min must be less than u_max")
         if float(plant_section.get("noise_std", 0.0)) < 0:
-            raise ValueError(f"{task_file}: plant.noise_std должен быть >= 0")
+            raise ValueError(f"{task_file}: plant.noise_std must be >= 0")
         requirements = plant_section.get("requirements")
         if not isinstance(requirements, dict) or not requirements:
             raise ValueError(
-                f"{task_file}: plant.requirements — непустой словарь допусков "
+                f"{task_file}: plant.requirements must be a non-empty mapping of tolerances "
                 f"{sorted(PLANT_REQUIREMENT_KEYS)}"
             )
         unknown_req = set(requirements) - PLANT_REQUIREMENT_KEYS
         if unknown_req:
             raise ValueError(
-                f"{task_file}: неизвестные ключи plant.requirements {sorted(unknown_req)} "
-                f"(разрешены: {sorted(PLANT_REQUIREMENT_KEYS)})"
+                f"{task_file}: unknown plant.requirements keys {sorted(unknown_req)} "
+                f"(allowed: {sorted(PLANT_REQUIREMENT_KEYS)})"
             )
         for key, value in requirements.items():
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-                raise ValueError(f"{task_file}: plant.requirements.{key} должен быть числом > 0")
+                raise ValueError(f"{task_file}: plant.requirements.{key} must be a number > 0")
         disturbances = plant_section.get("disturbances", [])
         if not isinstance(disturbances, list):
-            raise TypeError(f"{task_file}: plant.disturbances должен быть списком словарей")
+            raise TypeError(f"{task_file}: plant.disturbances must be a list of mappings")
         if not all(isinstance(d, dict) for d in disturbances):
-            raise TypeError(f"{task_file}: plant.disturbances должен быть списком словарей")
+            raise TypeError(f"{task_file}: plant.disturbances must be a list of mappings")
         for d in disturbances:
             unknown_dist = set(d) - PLANT_DISTURBANCE_KEYS
             if unknown_dist:
                 raise ValueError(
-                    f"{task_file}: неизвестные ключи события disturbances {sorted(unknown_dist)} "
-                    f"(разрешены: {sorted(PLANT_DISTURBANCE_KEYS)})"
+                    f"{task_file}: unknown disturbances event keys {sorted(unknown_dist)} "
+                    f"(allowed: {sorted(PLANT_DISTURBANCE_KEYS)})"
                 )
             if "at" not in d or "ambient" not in d:
-                raise ValueError(f"{task_file}: в событии disturbances нужны at и ambient")
+                raise ValueError(f"{task_file}: a disturbances event requires at and ambient")
             if isinstance(d["at"], bool) or not isinstance(d["at"], (int, float)) or d["at"] < 0:
-                raise ValueError(f"{task_file}: disturbances.at должен быть числом >= 0")
+                raise ValueError(f"{task_file}: disturbances.at must be a number >= 0")
             if isinstance(d["ambient"], bool) or not isinstance(d["ambient"], (int, float)):
-                raise ValueError(f"{task_file}: disturbances.ambient должен быть числом")  # noqa: TRY004
+                raise ValueError(f"{task_file}: disturbances.ambient must be a number")  # noqa: TRY004
     tags = raw.get("tags", [])
     if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
-        raise ValueError(f"{task_file}: tags должен быть списком строк")
+        raise ValueError(f"{task_file}: tags must be a list of strings")
     if len(set(tags)) != len(tags):
-        raise ValueError(f"{task_file}: tags содержит дубликаты")
+        raise ValueError(f"{task_file}: tags contains duplicates")
     unknown_tags = set(tags) - set(CLASS_TAGS)
     if unknown_tags:
         raise ValueError(
-            f"{task_file}: неизвестные теги {sorted(unknown_tags)} (разрешены: {CLASS_TAGS})"
+            f"{task_file}: unknown tags {sorted(unknown_tags)} (allowed: {CLASS_TAGS})"
         )
     level = raw.get("level")
     if level is not None and (
         isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 5
     ):
-        raise ValueError(f"{task_file}: level должен быть целым числом 1..5")
+        raise ValueError(f"{task_file}: level must be an integer 1..5")
     return Task(
         name=name,
         description=str(raw.get("description", "")),
@@ -339,9 +341,9 @@ def load_task(task_dir: Path) -> Task:
 
 
 def load_tasks(tasks_dir: Path) -> list[Task]:
-    """Все задачи каталога (подкаталоги с task.yaml), по алфавиту имён."""
+    """All tasks of the directory (subdirectories with task.yaml), ordered by name."""
     if not tasks_dir.is_dir():
-        raise ValueError(f"каталог задач не найден: {tasks_dir}")
+        raise ValueError(f"tasks directory not found: {tasks_dir}")
     tasks = [
         load_task(d)
         for d in sorted(tasks_dir.iterdir())

@@ -1,5 +1,5 @@
-# Пилот мишени renode: только печать — у закреплённого litex-ELF нет GPIO и ввода.
-# Строки склеены из двух частей, чтобы эхо вставленного исходника не совпало с expect.
+# The renode target pilot: printing only - the pinned litex-ELF has no GPIO or input.
+# The lines are glued from two parts so the echo of the pasted source does not match expect.
 print("renode " + "alive")
 print("no " + "gpio here")
 print("bye " + "now")

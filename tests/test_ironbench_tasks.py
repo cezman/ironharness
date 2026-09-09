@@ -1,4 +1,4 @@
-"""Тесты загрузки задач ironbench из YAML."""
+"""Tests of loading ironbench tasks from YAML."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from ironbench.tasks import load_task, load_tasks
 
 VALID = """
 name: blink
-description: тестовая задача
+description: a test task
 timeout_sec: 15
 scenario: scenario.yaml
 expect:
@@ -39,7 +39,7 @@ def test_load_task_defaults(tmp_path):
     d = write_task(tmp_path, "name: t1\n")
     task = load_task(d)
     assert task.timeout_sec == 30
-    assert task.scenario is None  # нет scenario → раннер генерирует REPL-paste
+    assert task.scenario is None  # no scenario -> the runner generates REPL-paste
     assert task.entry == "main.py"
     assert task.expect == ()
     assert task.stimulus == ()
@@ -84,7 +84,7 @@ def test_load_tasks_sorted_and_skips_dirs_without_task(tmp_path):
 
 
 def test_load_tasks_missing_dir(tmp_path):
-    with pytest.raises(ValueError, match="не найден"):
+    with pytest.raises(ValueError, match="not found"):
         load_tasks(tmp_path / "nope")
 
 
@@ -96,14 +96,14 @@ def test_load_task_tags_and_level(tmp_path):
 
 
 def test_load_task_rejects_unknown_tag(tmp_path):
-    write_task(tmp_path, "name: aaa\ntags: [роботы]\n", dirname="aaa")
-    with pytest.raises(ValueError, match="неизвестные теги"):
+    write_task(tmp_path, "name: aaa\ntags: [robots]\n", dirname="aaa")
+    with pytest.raises(ValueError, match="unknown tags"):
         load_task(tmp_path / "aaa")
 
 
 def test_load_task_rejects_duplicate_tags(tmp_path):
     write_task(tmp_path, "name: aaa\ntags: [io, io]\n", dirname="aaa")
-    with pytest.raises(ValueError, match="дубликаты"):
+    with pytest.raises(ValueError, match="duplicates"):
         load_task(tmp_path / "aaa")
 
 
@@ -117,11 +117,11 @@ def test_golden_tasks_have_tags_and_levels():
     from pathlib import Path
 
     tasks = load_tasks(Path(__file__).parents[1] / "src" / "ironbench" / "tasks")
-    assert all(t.tags for t in tasks), "у всех золотых задач должен быть класс"
-    assert all(t.level is not None for t in tasks), "у всех золотых задач должен быть уровень"
+    assert all(t.tags for t in tasks), "every golden task must have a class"
+    assert all(t.level is not None for t in tasks), "every golden task must have a level"
 
 
-# --- золотые задачи репозитория: целостность описаний ---
+# --- repository golden tasks: description integrity ---
 
 
 def test_golden_tasks_all_load_and_include_expectations():
@@ -153,7 +153,7 @@ def test_golden_tasks_all_load_and_include_expectations():
 
 
 def test_wokwi_stimulus_controls_exist_in_diagram():
-    # set-control ссылается только на части из diagram.json задачи (ловит опечатки в id)
+    # set-control references only parts from the task's diagram.json (catches typos in ids)
     import json
     from pathlib import Path
 
@@ -168,11 +168,11 @@ def test_wokwi_stimulus_controls_exist_in_diagram():
             if "set-control" in step:
                 assert step["set-control"]["part-id"] in part_ids, task.name
                 checked += 1
-    assert checked >= 10  # задачи на кнопки/датчики реально покрыты
+    assert checked >= 10  # the button/sensor tasks are really covered
 
 
 def test_frame_corrupt_stimulus_checksums_are_honest():
-    # ретраи в стимуле обязаны нести корректный xor2, иначе эталон не решит задачу
+    # retries in the stimulus must carry a correct xor2, otherwise the reference will not solve the task
     import re
     from pathlib import Path
 
@@ -182,11 +182,11 @@ def test_frame_corrupt_stimulus_checksums_are_honest():
         raw = str(step.get("write-serial", ""))
         m = re.fullmatch(r"#(\w+):(\w+):([0-9a-f]{2})\r?", raw)
         if not m:
-            continue  # обрывок кадра без xor — законная часть сценария
+            continue  # a frame fragment without xor - a legitimate part of the scenario
         _fid, payload, x2 = m.groups()
         x = 0
         for ch in payload:
             x ^= ord(ch)
-        assert f"{x:02x}" == x2, f"битая сумма в стимуле: {raw!r}"
+        assert f"{x:02x}" == x2, f"bad checksum in the stimulus: {raw!r}"
         checked += 1
     assert checked >= 4

@@ -1,5 +1,5 @@
-# Меню: два вложенных подрежима (ввод имени, ввод чисел до пустой строки),
-# обработка неверной команды, конечное завершение по "3".
+# A menu: two nested submodes (name input, number input until an empty line),
+# handling of an invalid command, a finite exit on "3".
 while True:
     print("MENU 1=greet 2=sum 3=quit")
     cmd = input()

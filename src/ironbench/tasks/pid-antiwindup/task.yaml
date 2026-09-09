@@ -1,21 +1,21 @@
-# ТАУ-задача на интегральное насыщение: разгон долгое время идёт в насыщении
-# u=1, поэтому «наивный» интегратор (без anti-windup) успевает набрать огромный
-# запас и просаживает y далеко за уставку — ловится метрикой overshoot.
-# Эталон — ПИ с conditional integration (интегрируем, только пока не в насыщении
-# или пока ошибка выводит из насыщения).
+# A control-theory task on integral windup: the ramp-up spends a long time in the
+# u=1 saturation, so a "naive" integrator (without anti-windup) manages to build
+# up a huge reserve and drives y far past the setpoint - caught by the overshoot
+# metric. The reference is a PI with conditional integration (integrate only while
+# not in saturation, or while the error drives out of saturation).
 name: pid-antiwindup
 description: >-
-  Объект — нагреватель: апериодическое звено первого порядка. Установившаяся
-  температура y_oo = ambient + K*u, где ambient = 20°C, K = 60 (°C при u=1),
-  постоянная времени T = 30 c. Напиши ПИ-регулятор с защитой от интегрального
-  насыщения (anti-windup): main.py обязан определять функцию
-  control(t, y, setpoint) -> float. Её вызывают каждые 0.5 c симуляционного
-  времени: t — секунды от старта, y — измеренная температура, setpoint —
-  уставка 74°C. Возврат зажимается в [0, 1] (мощность нагревателя); интегральную
-  составляющую копи на каждом вызове как integ += Ki*(setpoint - y)*0.5.
-  Требования: y вошла в полосу ±1°C от уставки и осталась там не позже 140 c,
-  установившаяся ошибка не больше 1°C, перерегулирование не больше 5%
-  (поэтому интегратор обязан не «раскачиваться», пока актюатор в насыщении).
+  The plant is a heater: a first-order lag. The steady-state temperature is
+  y_oo = ambient + K*u, where ambient = 20 deg C, K = 60 (deg C at u=1), the time
+  constant T = 30 s. Write a PI-controller with anti-windup protection: main.py
+  must define the function control(t, y, setpoint) -> float. It is called every
+  0.5 s of simulation time: t - seconds since start, y - the measured
+  temperature, setpoint - the setpoint of 74 deg C. The return value is clamped
+  to [0, 1] (the heater power); accumulate the integral term on every call as
+  integ += Ki*(setpoint - y)*0.5. Requirements: y enters the +-1 deg C band
+  around the setpoint and stays there no later than 140 s, the steady-state
+  error is at most 1 deg C, the overshoot is at most 5% (so the integrator must
+  not "swing" while the actuator is saturated).
 entry: solution.py
 target: plant
 timeout_sec: 30

@@ -1,4 +1,4 @@
-"""CLI ironbench: `ironbench run/solve/list/report` — бенчмарк firmware-агентов."""
+"""ironbench CLI: `ironbench run/solve/list/report` - the firmware-agent benchmark."""
 
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ def _fmt_result(res) -> str:
         return f"PASS {res.task} ({res.duration_sec}s)"
     reasons = []
     if res.missed:
-        reasons.append(f"не найдено в serial: {', '.join(repr(p) for p in res.missed)}")
+        reasons.append(f"not found in serial: {', '.join(repr(p) for p in res.missed)}")
     if res.hit_fail:
-        reasons.append(f"запрещённый вывод: {', '.join(repr(p) for p in res.hit_fail)}")
+        reasons.append(f"forbidden output: {', '.join(repr(p) for p in res.hit_fail)}")
     if res.error:
         reasons.append(res.error)
     if res.exit_code not in (0, None):
@@ -37,52 +37,52 @@ def _fmt_result(res) -> str:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="ironbench", description="Бенчмарк firmware-агентов")
+    parser = argparse.ArgumentParser(prog="ironbench", description="Firmware-agent benchmark")
     parser.add_argument("--version", action="version", version=f"ironbench {__version__}")
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--tasks-dir", type=Path, default=DEFAULT_TASKS_DIR)
-    common.add_argument("--out", type=Path, default=Path(".ironbench"), help="каталог логов прогона")
+    common.add_argument("--out", type=Path, default=Path(".ironbench"), help="run logs directory")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", parents=[common], help="запустить задачи (эталонные)")
-    run.add_argument("--task", help="имя задачи (например, blink)")
-    run.add_argument("--all", action="store_true", help="запустить все задачи")
+    run = sub.add_parser("run", parents=[common], help="run tasks (reference solutions)")
+    run.add_argument("--task", help="task name (e.g. blink)")
+    run.add_argument("--all", action="store_true", help="run all tasks")
     run.add_argument(
         "--target",
         choices=TASK_TARGETS,
         default=None,
-        help="переопределить мишень (например, --target unix: локальный бесплатный прогон)",
+        help="override the target (e.g. --target unix: free local run)",
     )
     run.add_argument(
-        "--serial", action="store_true", help="печатать хвост serial-лога после задачи"
+        "--serial", action="store_true", help="print the tail of the serial log after each task"
     )
 
-    solve_p = sub.add_parser("solve", parents=[common], help="LLM-агент решает задачу")
-    solve_p.add_argument("--task", required=True, help="имя задачи")
-    solve_p.add_argument("--attempts", type=int, default=1, help="попыток на задачу (k)")
+    solve_p = sub.add_parser("solve", parents=[common], help="an LLM agent solves the task")
+    solve_p.add_argument("--task", required=True, help="task name")
+    solve_p.add_argument("--attempts", type=int, default=1, help="attempts per task (k)")
     solve_p.add_argument(
-        "--iterations", type=int, default=None, help="лимит итераций на попытку"
+        "--iterations", type=int, default=None, help="iteration limit per attempt"
     )
     solve_p.add_argument(
         "--target",
         choices=TASK_TARGETS,
         default=None,
-        help="переопределить мишень (например, --target unix: кампания без квоты Wokwi)",
+        help="override the target (e.g. --target unix: a campaign with no Wokwi quota)",
     )
 
-    rep = sub.add_parser("report", parents=[common], help="отчёт pass@k по solve-кампаниям")
+    rep = sub.add_parser("report", parents=[common], help="pass@k report over solve campaigns")
     rep.add_argument(
-        "--solve-dir", type=Path, default=None, help="каталог кампаний (по умолчанию <out>/solve)"
+        "--solve-dir", type=Path, default=None, help="campaigns directory (default <out>/solve)"
     )
 
-    sub.add_parser("list", parents=[common], help="показать доступные задачи")
+    sub.add_parser("list", parents=[common], help="list available tasks")
 
     args = parser.parse_args(argv)
     tasks = load_tasks(args.tasks_dir)
 
     if args.command == "list":
         for t in tasks:
-            meta = ", ".join(t.tags) + (f" · уровень {t.level}" if t.level else "")
+            meta = ", ".join(t.tags) + (f" · level {t.level}" if t.level else "")
             print(f"{t.name}" + (f" [{meta}]" if meta else "") + f": {t.description}")
         return 0
 
@@ -97,22 +97,22 @@ def main(argv=None) -> int:
             status = "PASS" if g["passed"] else "FAIL"
             print(
                 f"{status} {g['model']} / {g['task']}: {g['solved']}/{g['attempts']}"
-                f" (в среднем итераций: {g['avg_iterations']})"
+                f" (avg iterations: {g['avg_iterations']})"
             )
         for model, cells in report.get("class_profile", {}).items():
             parts = [f"{tag} {c['solved']}/{c['attempts']}" for tag, c in cells.items()]
-            print(f"профиль {model}: " + (", ".join(parts) if parts else "—"))
+            print(f"profile {model}: " + (", ".join(parts) if parts else "-"))
         print(f"pass@k: {report['pass_at_k']:.0%}")
-        print(f"отчёты: {json_path} и {html_path}")
+        print(f"reports: {json_path} and {html_path}")
         return 0
 
     if args.command == "solve":
         task = next((t for t in tasks if t.name == args.task), None)
         if task is None:
-            print(f"задача не найдена: {args.task} (доступно: {', '.join(t.name for t in tasks)})")
+            print(f"task not found: {args.task} (available: {', '.join(t.name for t in tasks)})")
             return 2
         if args.attempts < 1:
-            print("--attempts должен быть >= 1")
+            print("--attempts must be >= 1")
             return 2
         if args.target:
             task = dataclasses.replace(task, target=args.target)
@@ -121,19 +121,19 @@ def main(argv=None) -> int:
             cfg = dataclasses.replace(cfg, max_iterations=args.iterations)
         solve_dir = args.out / SOLVE_DIR_NAME
         results = agent_solve_results(task, cfg, attempts=args.attempts, solve_dir=solve_dir)
-        # семантика pass@k: успех кампании — задача решена хотя бы одной попыткой
+        # pass@k semantics: the campaign succeeds if the task was solved by at least one attempt
         return 0 if any(r.solved for r in results) else 1
 
     # run
     if args.task:
         selected = [t for t in tasks if t.name == args.task]
         if not selected:
-            print(f"задача не найдена: {args.task} (доступно: {', '.join(t.name for t in tasks)})")
+            print(f"task not found: {args.task} (available: {', '.join(t.name for t in tasks)})")
             return 2
     elif args.all:
         selected = tasks
     else:
-        print("укажите --task <имя> или --all")
+        print("specify --task <name> or --all")
         return 2
     if args.target:
         selected = [dataclasses.replace(t, target=args.target) for t in selected]
@@ -151,10 +151,11 @@ def main(argv=None) -> int:
 
 
 def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path):
-    """Кампания solve: попытки + запись results.jsonl + печать прогресса.
+    """A solve campaign: attempts + writing results.jsonl + progress printing.
 
-    results.jsonl живёт в каталоге задачи и перезаписывается: повторная кампания
-    по той же задаче заменяет её результаты в отчёте, а не дублирует.
+    results.jsonl lives in the task directory and is overwritten: a repeated
+    campaign on the same task replaces its results in the report instead of
+    duplicating them.
     """
     task_dir = solve_dir / task.name
     task_dir.mkdir(parents=True, exist_ok=True)
@@ -164,7 +165,7 @@ def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path):
         results = agent_solve(
             task, cfg, attempts=attempts, out_dir=task_dir, journal=journal
         )
-        with results_path.open("w", encoding="utf-8") as fh:  # перезапись: кампания по задаче заменяет её результаты
+        with results_path.open("w", encoding="utf-8") as fh:  # overwrite: a per-task campaign replaces its results
             for r in results:
                 fh.write(
                     json.dumps(
@@ -182,15 +183,15 @@ def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path):
                     + "\n"
                 )
     for r in results:
-        status = "SOLVED" if r.solved else "не решена"
+        status = "SOLVED" if r.solved else "not solved"
         print(
-            f"попытка {r.attempt}: {status} за {r.iterations} итер. ({r.duration_sec}s)"
-            + (f" — {r.error}" if r.error and not r.solved else "")
+            f"attempt {r.attempt}: {status} in {r.iterations} iterations ({r.duration_sec}s)"
+            + (f" - {r.error}" if r.error and not r.solved else "")
         )
     solved_count = sum(1 for r in results if r.solved)
     print(
-        f"итог {task.name} [{cfg.model}]: {solved_count}/{attempts}"
-        f" за {round(time.monotonic() - started, 1)}s, артефакты: {task_dir}"
+        f"summary {task.name} [{cfg.model}]: {solved_count}/{attempts}"
+        f" in {round(time.monotonic() - started, 1)}s, artifacts: {task_dir}"
     )
     return results
 

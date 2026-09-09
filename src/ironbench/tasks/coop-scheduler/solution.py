@@ -1,8 +1,8 @@
-# Кооперативный планировщик: ближайший дедлайн, короткий сон между делами,
-# дедлайн считается от предыдущего срабатывания (дрейф не накапливается).
+# Cooperative scheduler: the nearest deadline, a short sleep between duties;
+# a deadline is counted from the previous firing (drift does not accumulate).
 import time
 
-A_PERIOD = 500  # мс
+A_PERIOD = 500  # ms
 B_PERIOD = 1200
 HORIZON = 6000
 

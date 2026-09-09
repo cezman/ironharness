@@ -1,9 +1,9 @@
-# Описание задачи для ironbench: см. AGENTS.md / skills ironbench-task.
+# Task description for ironbench: see AGENTS.md / ironbench-task skill.
 name: sensor-poll
 description: >-
-  Датчик DHT22 подключён к GPIO4 (питание 3V3, земля GND). Прошивка при старте печатает
-  "dht ready", затем каждые 2 секунды опрашивает датчик и печатает температуру строкой
-  "temp: <число>". Ошибку одиночного чтения (OSError) не считать фатальной — продолжать опрос.
+  A DHT22 sensor is connected to GPIO4 (power 3V3, ground GND). On startup the firmware
+  prints "dht ready", then polls the sensor every 2 seconds and prints the temperature
+  as "temp: <number>". Do not treat a single read failure (OSError) as fatal - keep polling.
 entry: solution.py
 timeout_sec: 30
 tags: [data]

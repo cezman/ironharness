@@ -1,21 +1,22 @@
-# Сетевая задача: прошивка сама говорит по MQTT с брокером (mqtt_sim рядом в WSL2).
-# Харнесс — второй участник обмена: собирает публикации в serial-лог (строки
-# "mqtt: <topic> <payload>", expect работают и на них) и шлёт retained-команду.
-# Самый высокий уровень: агент пишет собственный мини-MQTT-клиент по проводу.
+# A network task: the firmware itself speaks MQTT with a broker (mqtt_sim nearby
+# in WSL2). The harness is the second party of the exchange: it collects the
+# publications into the serial log (lines "mqtt: <topic> <payload>", expect works
+# on those too) and sends a retained command. The highest level: the agent writes
+# its own mini-MQTT client from scratch over TCP.
 name: mqtt-device
 description: >-
-  Прошивка — MQTT-устройство. Адрес брокера задан в переменных окружения
-  IRONBENCH_MQTT_HOST (127.0.0.1) и IRONBENCH_MQTT_PORT. Реализуй по TCP
-  мини-клиент MQTT 3.1.1 (без библиотек: CONNECT/CONNACK, SUBSCRIBE/SUBACK,
-  PUBLISH QoS0, разбор входящих PUBLISH). Подключись с client id "dev1",
-  подпиской на топик "dev1/cmd" (QoS 0) и после CONNACK+SUBACK напечатай
-  "mqtt ready". Дальше в цикле 12 итераций с паузой ~0.5 c: публиковать
-  в топик "dev1/value" строку счётчика (первая публикация "1", каждая
-  следующая на 1 больше), прибавляя текущий offset. Входящее сообщение
-  в "dev1/cmd" формата "add <целое>" (QoS 0) увеличивает offset на <целое>;
-  при каждом применении печатать "applied". После 12-й публикации напечатать
-  "mqtt done <offset>" и завершиться. Всё общение с брокером — по MQTT,
-  print — только указанные строки в serial.
+  The firmware is an MQTT device. The broker address is given by the environment
+  variables IRONBENCH_MQTT_HOST (127.0.0.1) and IRONBENCH_MQTT_PORT. Implement a
+  mini MQTT 3.1.1 client over TCP (no libraries: CONNECT/CONNACK,
+  SUBSCRIBE/SUBACK, PUBLISH QoS0, parsing incoming PUBLISH). Connect with client
+  id "dev1", a subscription to the topic "dev1/cmd" (QoS 0), and after
+  CONNACK+SUBACK print "mqtt ready". Then loop for 12 iterations with a ~0.5 s
+  pause: publish the counter string to the topic "dev1/value" (the first
+  publication "1", each next one greater by 1), adding the current offset. An
+  incoming message in "dev1/cmd" of the form "add <integer>" (QoS 0) increases
+  the offset by <integer>; print "applied" each time it is applied. After the
+  12th publication print "mqtt done <offset>" and exit. All communication with
+  the broker goes over MQTT; print only the specified lines to serial.
 entry: solution.py
 target: unix
 timeout_sec: 25
@@ -32,7 +33,7 @@ expect:
 fail:
   - 'Traceback'
 stimulus:
-  # харнесс собирает первые публикации (offset=0), затем шлёт retained-команду
+  # the harness collects the first publications (offset=0), then sends the retained command
   - mqtt-collect: {topic: dev1/value, count: 3, timeout_sec: 15}
   - mqtt-publish: {topic: dev1/cmd, payload: "add 40", retain: true}
   - mqtt-collect: {topic: dev1/value, count: 3, timeout_sec: 15}

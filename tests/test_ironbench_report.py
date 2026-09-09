@@ -1,4 +1,4 @@
-"""Тесты отчёта ironbench (pass@k, JSON + HTML)."""
+"""Tests of the ironbench report (pass@k, JSON + HTML)."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def test_build_report_pass_at_k(tmp_path):
         ],
     )
     report = build_report(tmp_path)
-    assert report["pass_at_k"] == 0.5  # решена хотя бы одна пара из двух
+    assert report["pass_at_k"] == 0.5  # at least one pair of the two was solved
     assert report["tasks"] == ["a", "b"]
 
 
@@ -90,18 +90,18 @@ def test_class_profile_aggregates_by_tag():
         {"model": "m", "task": "blink", "solved": True},
         {"model": "m", "task": "protocol-retry", "solved": False},
         {"model": "m", "task": "frame-corrupt", "solved": True},
-        {"model": "m", "task": "секретная-задача", "solved": True},  # без мета — мимо профиля
+        {"model": "m", "task": "secret-task", "solved": True},  # no meta - outside the profile
     ]
     profile = class_profile(records, meta)
     assert profile["m"]["io"] == {"attempts": 1, "solved": 1, "success_rate": 1.0}
-    # protocol-retry с двумя тегами попадает в оба класса
+    # protocol-retry with two tags lands in both classes
     assert profile["m"]["resilience"]["attempts"] == 2
     assert profile["m"]["resilience"]["success_rate"] == 0.5
-    assert "секретная-задача" not in json.dumps(profile)
+    assert "secret-task" not in json.dumps(profile)
 
 
 def test_report_profile_missing_meta_is_compatible(tmp_path):
-    # старая кампания без карты тегов: отчёт строится, профиль пустой
+    # an old campaign without a tag map: the report builds, the profile is empty
     write_results(tmp_path, [{"model": "m", "task": "x", "attempt": 1, "solved": True}])
     report = build_report(tmp_path)
     assert report["class_profile"] == {}
@@ -124,7 +124,7 @@ def test_report_html_renders_profile_table(tmp_path):
     }
     json_path, html_path = write_report(solve_dir, tmp_path / "out", task_meta)
     html = html_path.read_text(encoding="utf-8")
-    assert "Профиль по классам" in html
+    assert "Class profile" in html
     assert "resilience" in html and "0/1 (0%)" in html
     report = json.loads(json_path.read_text(encoding="utf-8"))
     assert report["class_profile"]["m"]["io"]["solved"] == 1

@@ -1,6 +1,6 @@
-# Кадры "#<id>:<payload>:<xor2>\n"; xor2 — XOR байтов payload, 2 hex-знака.
-# Линия рвёт и склеивает кадры: досинхронизация по '#' — сегменты до следующего
-# '#' или конца строки; строка без '#' — один nak.
+# Frames "#<id>:<payload>:<xor2>\n"; xor2 is the XOR of the payload bytes, 2 hex digits.
+# The line tears and glues frames: resynchronize on '#' - segments up to the next
+# '#' or the end of the line; a line without '#' - one nak.
 while True:
     rest = input()
     started = False

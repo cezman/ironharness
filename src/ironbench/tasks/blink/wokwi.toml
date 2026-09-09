@@ -1,6 +1,6 @@
-# wokwi.toml — дескриптор проекта для wokwi-cli (симуляция в облаке Wokwi).
-# MicroPython в CLI-режиме требует явную прошивку: elf/firmware указывают на .bin
-# (закреплён v1.27.0 из wokwi/wokwi-vscode-micropython — воспроизводимость прогонов).
+# wokwi.toml - the project descriptor for wokwi-cli (a simulation in the Wokwi cloud).
+# MicroPython in CLI mode requires an explicit firmware: elf/firmware point to a .bin
+# (v1.27.0 from wokwi/wokwi-vscode-micropython is pinned - run reproducibility).
 [wokwi]
 version = 1
 elf = "ESP32_GENERIC-20251209-v1.27.0.bin"
