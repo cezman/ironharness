@@ -167,7 +167,8 @@ def test_plant_controller_crash_is_result_not_infra(tmp_path):
     assert not res.passed
     assert "controller crashed" in res.error
     assert "controller crashed" in res.serial_log.read_text("utf-8")  # feedback to the agent
-    assert not runner_module.is_infra_error(res.error)
+    assert not runner_module.is_infra_error(res)
+    assert res.error_kind == "run"
 
 
 def test_plant_controller_sys_exit_is_result(tmp_path):
@@ -180,7 +181,8 @@ def test_plant_controller_sys_exit_is_result(tmp_path):
     assert "controller crashed" in (res.error or "")
     assert "sensor not found" not in (res.error or "")  # only in the feedback log
     assert "sensor not found" in res.serial_log.read_text("utf-8")
-    assert not runner_module.is_infra_error(res.error)
+    assert not runner_module.is_infra_error(res)
+    assert res.error_kind == "run"
 
 
 def test_plant_missing_control_function(tmp_path):
@@ -188,7 +190,8 @@ def test_plant_missing_control_function(tmp_path):
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
     assert "no control" in res.error
-    assert not runner_module.is_infra_error(res.error)
+    assert not runner_module.is_infra_error(res)
+    assert res.error_kind == "run"
 
 
 def test_plant_hung_controller_hits_wall_limit(tmp_path, monkeypatch):
@@ -197,7 +200,8 @@ def test_plant_hung_controller_hits_wall_limit(tmp_path, monkeypatch):
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
     assert "wall limit" in res.error
-    assert not runner_module.is_infra_error(res.error)
+    assert not runner_module.is_infra_error(res)
+    assert res.error_kind == "timeout"
 
 
 def test_plant_missing_entry_is_infra(tmp_path):
@@ -205,7 +209,8 @@ def test_plant_missing_entry_is_infra(tmp_path):
     (task.directory / "solution.py").unlink()
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert runner_module.is_infra_error(res.error)
+    assert runner_module.is_infra_error(res)
+    assert res.error_kind == "infra"
 
 
 def test_plant_fail_pattern_still_applies(tmp_path):

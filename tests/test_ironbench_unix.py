@@ -134,7 +134,33 @@ def test_unix_set_control_rejected_upfront(tmp_path):
     assert not res.passed
     assert "set-control" in (res.error or "")
     # the refusal is incurable for the agent - the solve loop must exit immediately, not burn iterations
-    assert runner_module.is_infra_error(res.error)
+    assert runner_module.is_infra_error(res)
+    assert res.error_kind == "infra"
+
+
+def test_run_error_with_infra_like_text_is_not_infra(tmp_path):
+    # IH-15: firmware text that merely CONTAINS infra-like phrases ("not
+    # found") is a run result of the agent's code - solve must keep iterating
+    # instead of early-exiting on the environment.
+    task = make_unix_task(tmp_path, expect=("boot ok",))
+    fw = tmp_path / "fw.py"
+    fw.write_text(
+        "import sys\nprint('boot ok')\nprint('config not found')\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    res = run_task(task, out_dir=tmp_path / "out", unix_cmd=[sys.executable, str(fw)])
+    assert not res.passed
+    assert res.error_kind == "run"
+    assert not runner_module.is_infra_error(res)
+
+
+def test_missing_entry_is_kind_infra(tmp_path):
+    task = make_unix_task(tmp_path, expect=("boot ok",))
+    (task.directory / "solution.py").unlink()
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert not res.passed
+    assert res.error_kind == "infra"
+    assert runner_module.is_infra_error(res)
 
 
 def test_unix_journal_records_start_and_result(tmp_path):
