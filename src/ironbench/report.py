@@ -270,5 +270,5 @@ def render_leaderboard(report: dict, generated: str | None = None) -> str:
     return LEADERBOARD_TEMPLATE.format(
         tag_head=tag_head,
         rows="\n".join(rows),
-        generated=generated or datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+        generated=generated or datetime.now(UTC).strftime("%Y-%m-%d UTC"),
     )

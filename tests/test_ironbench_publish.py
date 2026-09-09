@@ -117,6 +117,26 @@ def test_publish_unreachable_remote(tmp_path):
         publish_report({}, "<html></html>", repo=src)
 
 
+def test_publish_preserves_unrelated_files(tmp_path, source_repo):
+    src, origin = source_repo
+    publish_report(sample_report(tmp_path), "<html>v1</html>", repo=src)
+    # someone (e.g. Pages config) put a foreign file on the branch
+    seed = tmp_path / "seed"
+    assert git("clone", "--depth", "1", "-b", "gh-pages", origin.as_posix(), str(seed)).returncode == 0
+    (seed / "CNAME").write_text("bench.example.com", encoding="utf-8")
+    assert git("-C", str(seed), "config", "user.name", "tester").returncode == 0
+    assert git("-C", str(seed), "config", "user.email", "tester@example.com").returncode == 0
+    assert git("-C", str(seed), "add", "CNAME").returncode == 0
+    assert git("-C", str(seed), "commit", "-m", "seed cname").returncode == 0
+    assert git("-C", str(seed), "push", "origin", "HEAD:gh-pages").returncode == 0
+    # the next publish keeps it and updates our own files
+    publish_report(sample_report(tmp_path, solved_uart=True), "<html>v2</html>", repo=src)
+    cname = git("--git-dir", str(origin), "show", "refs/heads/gh-pages:CNAME").stdout
+    assert cname == "bench.example.com"
+    html = git("--git-dir", str(origin), "show", "refs/heads/gh-pages:index.html").stdout
+    assert "<html>v2</html>" in html
+
+
 def test_cli_report_publish(tmp_path, source_repo, capsys, monkeypatch):
     src, origin = source_repo
     write_results(
@@ -125,7 +145,10 @@ def test_cli_report_publish(tmp_path, source_repo, capsys, monkeypatch):
     )
     monkeypatch.chdir(src)
     rc = cli_main(
-        ["report", "--out", str(tmp_path / "out"), "--solve-dir", str(tmp_path / "solve"), "--publish"]
+        [
+            "report", "--out", str(tmp_path / "out"), "--solve-dir", str(tmp_path / "solve"),
+            "--publish", "--remote", "origin", "--pages-branch", "gh-pages",
+        ]
     )
     assert rc == 0
     assert "published: origin/gh-pages" in capsys.readouterr().out

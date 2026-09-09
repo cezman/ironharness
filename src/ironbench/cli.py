@@ -125,7 +125,7 @@ def main(argv=None) -> int:
                     remote=args.remote,
                     branch=args.pages_branch,
                 )
-            except PublishError as exc:
+            except (PublishError, OSError) as exc:
                 print(f"publish failed: {exc}")
                 return 1
             print(f"published: {args.remote}/{args.pages_branch} @ {sha[:12]}")
