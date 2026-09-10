@@ -13,6 +13,7 @@ from io_core.journal import JsonlJournal
 from ironbench import __version__
 from ironbench.agent import resolve_llm_config
 from ironbench.agent import solve as agent_solve
+from ironbench.journal_view import write_view
 from ironbench.publish import PublishError, publish_report
 from ironbench.report import render_leaderboard, write_report
 from ironbench.runner import clean_runs, run_task
@@ -98,6 +99,25 @@ def main(argv=None) -> int:
         "--keep", type=int, default=1, help="run dirs to keep per task (default 1)"
     )
 
+    jv = sub.add_parser(
+        "journal",
+        parents=[common],
+        help="self-contained HTML timeline of a JSONL operation journal",
+    )
+    jv.add_argument(
+        "journal",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="journal file (default <out>/journal.jsonl)",
+    )
+    jv.add_argument(
+        "--out-file",
+        type=Path,
+        default=None,
+        help="output HTML (default next to the journal: <journal>.view.html)",
+    )
+
     args = parser.parse_args(argv)
     tasks = load_tasks(args.tasks_dir)
 
@@ -168,6 +188,29 @@ def main(argv=None) -> int:
             print(f"clean refused: {exc}")
             return 2
         print(f"removed {removed} run dir(s) under {args.out} (kept {args.keep} per task)")
+        return 0
+
+    if args.command == "journal":
+        journal_path = args.journal or (args.out / "journal.jsonl")
+        if not journal_path.is_file():
+            print(f"journal not found: {journal_path}")
+            return 2
+        out_file = args.out_file or journal_path.with_name(journal_path.name + ".view.html")
+        try:
+            _, view = write_view(journal_path, out_file)
+        except ValueError as exc:
+            print(f"journal view refused: {exc}")
+            return 2
+        notes = []
+        if view["skipped_lines"]:
+            notes.append(f"{view['skipped_lines']} unparseable line(s) skipped")
+        if view["omitted_events"]:
+            notes.append(f"{view['omitted_events']} middle event(s) omitted")
+        print(
+            f"journal view: {view['shown_events']} event(s) shown"
+            + (f" ({'; '.join(notes)})" if notes else "")
+            + f" -> {out_file}"
+        )
         return 0
 
     # run
