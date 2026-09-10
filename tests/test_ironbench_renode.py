@@ -231,7 +231,8 @@ def test_renode_nopaste_is_infra_error(tmp_path, monkeypatch):
     res = run_fake_renode(tmp_path, task, "nopaste")
     assert not res.passed
     assert "paste mode" in (res.error or "")
-    assert is_infra_error(res.error)
+    assert is_infra_error(res)
+    assert res.error_kind == "infra"
 
 
 def test_renode_no_listener_is_infra_error(tmp_path, monkeypatch):
@@ -240,7 +241,8 @@ def test_renode_no_listener_is_infra_error(tmp_path, monkeypatch):
     res = run_fake_renode(tmp_path, task, "nolisten")
     assert not res.passed
     assert "failed to connect" in (res.error or "")
-    assert is_infra_error(res.error)
+    assert is_infra_error(res)
+    assert res.error_kind == "infra"
 
 
 def test_renode_hang_repl_deadline(tmp_path, monkeypatch):

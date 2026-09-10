@@ -277,9 +277,10 @@ def solve_attempt(
         if result.passed:
             solved = True
             break
-        if is_infra_error(result.error):
+        if is_infra_error(result):
             # the environment is broken (no Renode/firmware/CLI) - the LLM cannot fix
-            # it, further iterations would only burn tokens
+            # it, further iterations would only burn tokens; the structured
+            # error_kind comes from the runner, never from parsing firmware/CLI text
             error = f"environment not ready, attempt stopped: {result.error}"
             break
         messages.append({"role": "assistant", "content": response})

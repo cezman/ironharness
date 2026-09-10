@@ -181,6 +181,13 @@ def generate_paste_scenario(task: Task) -> str:
     return yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
 
 
+# error_kind values for TaskResult (structured classification, IH-15)
+ERROR_NONE = "none"
+ERROR_INFRA = "infra"
+ERROR_TIMEOUT = "timeout"
+ERROR_RUN = "run"
+
+
 @dataclasses.dataclass(frozen=True)
 class TaskResult:
     """Result of a single task run."""
@@ -193,6 +200,11 @@ class TaskResult:
     missed: tuple[str, ...] = ()
     hit_fail: tuple[str, ...] = ()
     error: str | None = None
+    # structured classification (IH-15): "none" (no error), "infra"
+    # (environment-level, the agent cannot fix it), "timeout" (wall limit),
+    # "run" (a run result of the agent's code - crash, cheat, bad exit).
+    # Solve decisions (early exit) must read THIS field, never parse error text.
+    error_kind: str = ERROR_NONE
 
 
 def _check_patterns(
@@ -353,15 +365,25 @@ def run_task(
         serial_log=None,
         missed=tuple(task.expect),
         error=f"unknown target {task.target!r}; checks were not run",
+        error_kind=ERROR_INFRA,
     )
     _journal_result(journal, result)
     return result
 
 
-def is_infra_error(error: str | None) -> bool:
-    """An environment-level infrastructure failure (the agent cannot fix it) -
-    used for an early exit from the solve loop, so LLM iterations are not
-    burned on a hopeless error."""
+def is_infra_error(result_or_error: TaskResult | str | None) -> bool:
+    """True when a run failed at the environment level (the agent cannot fix
+    it) - used for an early exit from the solve loop, so LLM iterations are
+    not burned on a hopeless environment.
+
+    TaskResult inputs are classified by the structured error_kind the runner
+    set while running the task. The raw-string path is legacy (kept for
+    caller-supplied messages) and matches runner-generated phrases only -
+    never rely on it for firmware/CLI text.
+    """
+    if isinstance(result_or_error, TaskResult):
+        return result_or_error.error_kind == ERROR_INFRA
+    error = result_or_error
     if not error:
         return False
     marks = (
@@ -400,12 +422,14 @@ def _run_wokwi(
     start = time.monotonic()
     exit_code: int | None = None
     error: str | None = None
+    error_kind = ERROR_NONE
     stage = scenario_name = None
     try:
         stage, scenario_name = _stage_task(task, run_dir)
     except (OSError, ValueError) as e:
         # missing entry/firmware, broken wokwi.toml - a clean FAIL instead of a crash
         error = f"failed to prepare task: {e}"
+        error_kind = ERROR_INFRA
     if stage is not None:
         cmd = [
             *cli_cmd,
@@ -436,10 +460,13 @@ def _run_wokwi(
             exit_code = proc.returncode
             if proc.returncode not in OK_EXIT_CODES:
                 error = (proc.stderr or proc.stdout or "").strip()[-500:] or None
+                error_kind = ERROR_INFRA
         except subprocess.TimeoutExpired:
             error = f"runner wall-clock timeout ({wall_timeout} s)"
+            error_kind = ERROR_TIMEOUT
         except FileNotFoundError:
             error = f"wokwi-cli not found: {cli}"
+            error_kind = ERROR_INFRA
 
     duration = round(time.monotonic() - start, 2)
     serial_text = (
@@ -456,6 +483,7 @@ def _run_wokwi(
         missed=missed,
         hit_fail=hit_fail,
         error=error,
+        error_kind=error_kind,
     )
     _journal_result(journal, result)
     return result
@@ -823,6 +851,7 @@ def _run_renode(
             serial_log=None,
             missed=tuple(task.expect),
             error="set-control is not supported by the renode target (Wokwi buttons)",
+            error_kind=ERROR_INFRA,
         )
         _journal_result(journal, result)
         return result
@@ -834,6 +863,7 @@ def _run_renode(
     start = time.monotonic()
     exit_code: int | None = None
     error: str | None = None
+    error_kind = ERROR_NONE
     serial_text = ""
     proc = None
     try:
@@ -871,15 +901,24 @@ def _run_renode(
                 time.sleep(0.2)
         with sock:
             serial_text, error = _drive_repl(sock, task, time.monotonic() + wall_timeout)
+        if error:
+            # _drive_repl errors are environment failures (no REPL, no paste
+            # mode, unsupported step) except the anti-cheat verdict, which is
+            # a property of the agent's code
+            error_kind = ERROR_RUN if "anti-cheat" in error else ERROR_INFRA
         exit_code = 0 if error is None else None
     except ValueError as e:
         error = f"failed to prepare task: {e}"
+        error_kind = ERROR_INFRA
     except ConnectionError as e:
         error = f"failed to connect: {e}"
+        error_kind = ERROR_INFRA
     except FileNotFoundError as e:
         error = f"not found: {e.filename or e}"
+        error_kind = ERROR_INFRA
     except OSError as e:
         error = f"I/O error while starting Renode: {e}"
+        error_kind = ERROR_INFRA
     finally:
         if proc is not None:
             _reap(proc)
@@ -899,6 +938,7 @@ def _run_renode(
         missed=missed,
         hit_fail=hit_fail,
         error=error,
+        error_kind=error_kind,
     )
     _journal_result(journal, result)
     return result
@@ -1081,6 +1121,7 @@ def _run_unix(
             serial_log=None,
             missed=tuple(task.expect),
             error="set-control is not supported by the unix target (Wokwi buttons/sensors)",
+            error_kind=ERROR_INFRA,
         )
         _journal_result(journal, result)
         return result
@@ -1091,6 +1132,7 @@ def _run_unix(
     start = time.monotonic()
     exit_code: int | None = None
     error: str | None = None
+    error_kind = ERROR_NONE
     serial_text = ""
     proc = None
     mqtt_client: MqttTransport | None = None
@@ -1204,6 +1246,7 @@ def _run_unix(
                                 f"anti-cheat: {needle!r} was printed before the "
                                 "stimulus asked for it (pre-printed output)"
                             )
+                            error_kind = ERROR_RUN
                             break
                         if time.monotonic() >= deadline or box["eof"]:
                             break  # no answer at all - an honest miss
@@ -1284,6 +1327,7 @@ def _run_unix(
                     "step - expected output must be produced in response to the "
                     "stimulus"
                 )
+                error_kind = ERROR_RUN
             # keep reading: until all literal expects are collected, EOF, or the
             # deadline (an infinite firmware loop is normal, like --timeout in wokwi)
             while time.monotonic() < deadline and not box["eof"]:
@@ -1312,6 +1356,7 @@ def _run_unix(
             serial_text = box["text"]
             if exit_code not in (0, None):
                 error = f"micropython exited with code {exit_code}"
+                error_kind = ERROR_RUN
         finally:
             if proc.stdin is not None:
                 try:
@@ -1320,12 +1365,16 @@ def _run_unix(
                     pass
     except ValueError as e:
         error = f"failed to prepare task: {e}"
+        error_kind = ERROR_INFRA
     except ConnectionError as e:
         error = f"failed to connect: {e}"
+        error_kind = ERROR_INFRA
     except FileNotFoundError as e:
         error = f"not found: {e.filename or e}"
+        error_kind = ERROR_INFRA
     except OSError as e:
         error = f"I/O error while starting micropython: {e}"
+        error_kind = ERROR_INFRA
     finally:
         if proc is not None:
             _reap(proc)
@@ -1351,6 +1400,7 @@ def _run_unix(
         missed=missed,
         hit_fail=hit_fail,
         error=error,
+        error_kind=error_kind,
     )
     _journal_result(journal, result)
     return result
@@ -1391,6 +1441,7 @@ def _run_real(
             serial_log=None,
             missed=tuple(task.expect),
             error=unsupported,
+            error_kind=ERROR_INFRA,
         )
         _journal_result(journal, result)
         return result
@@ -1409,6 +1460,7 @@ def _run_real(
                     "IRONBENCH_REAL_PORT is not set — live-hardware runs are opt-in "
                     "(set the env var to the board's COM/tty port)"
                 ),
+                error_kind=ERROR_INFRA,
             )
             _journal_result(journal, result)
             return result
@@ -1426,6 +1478,7 @@ def _run_real(
     wall_timeout = task.timeout_sec * 2 + WALL_GRACE_SEC
     start = time.monotonic()
     error: str | None = None
+    error_kind = ERROR_NONE
     serial_text = ""
     repl: RealRepl | None = None
     try:
@@ -1454,6 +1507,7 @@ def _run_real(
                         f"anti-cheat: {needle!r} was printed before the stimulus "
                         "asked for it (pre-printed output)"
                     )
+                    error_kind = ERROR_RUN
                     break
                 repl.wait_for(needle, deadline)
             elif "write-serial" in step:
@@ -1470,6 +1524,7 @@ def _run_real(
         serial_text = repl.output()
     except (OSError, ConnectionError, ValueError, AssertionError) as e:
         error = f"failed to talk to the board: {e}"
+        error_kind = ERROR_INFRA
     finally:
         if repl is not None:
             repl.close()
@@ -1487,6 +1542,7 @@ def _run_real(
         missed=missed,
         hit_fail=hit_fail,
         error=error,
+        error_kind=error_kind,
     )
     _journal_result(journal, result)
     return result
@@ -1518,6 +1574,7 @@ def _run_plant(
     start = time.monotonic()
     exit_code: int | None = None
     error: str | None = None
+    error_kind = ERROR_NONE
     report: dict | None = None
     try:
         entry = task.directory / task.entry
@@ -1563,10 +1620,13 @@ def _run_plant(
                 f"plant worker exited with code {proc.returncode}: "
                 + (proc.stderr or proc.stdout or "").strip()[-300:]
             )
+            error_kind = ERROR_INFRA
     except subprocess.TimeoutExpired:
         error = f"the plant run exceeded the wall limit ({wall_timeout} s) - controller stuck in a loop?"
+        error_kind = ERROR_TIMEOUT
     except FileNotFoundError as e:
         error = f"not found: {e.filename or e}"
+        error_kind = ERROR_INFRA
 
     if error is None:
         if result_file.is_file():
@@ -1574,10 +1634,13 @@ def _run_plant(
                 report = json.loads(result_file.read_text(encoding="utf-8"))
             except (OSError, ValueError) as e:
                 error = f"failed to parse the plant worker result.json: {e}"
+                error_kind = ERROR_INFRA
         else:
             error = "the plant worker left no result.json"
+            error_kind = ERROR_INFRA
     if report is not None and not isinstance(report, dict):
         error = "plant worker result.json is not a JSON object"
+        error_kind = ERROR_INFRA
         report = None
     if report is not None and report.get("run_id") != run_id:
         # A file at the result path that this run did not request is hostile
@@ -1586,12 +1649,14 @@ def _run_plant(
             f"plant result.json is not from this run "
             f"(run_id {report.get('run_id')!r} != {run_id!r})"
         )
+        error_kind = ERROR_INFRA
         report = None
     if report and report.get("error"):
         # error carries only the headline: the full traceback stays in the log
         # (feedback to the agent), and the agent's exception text must not leak
         # into is_infra_error
         error = report["error"].splitlines()[0]
+        error_kind = ERROR_RUN
 
     serial_text = (
         serial_log.read_text(encoding="utf-8", errors="replace") if serial_log.is_file() else ""
@@ -1609,6 +1674,7 @@ def _run_plant(
         missed=missed,
         hit_fail=hit_fail,
         error=error,
+        error_kind=error_kind,
     )
     _journal_result(journal, result)
     return result

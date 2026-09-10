@@ -15,7 +15,7 @@ from ironbench.agent import (
     solve_attempt,
     validate_endpoint,
 )
-from ironbench.runner import TaskResult
+from ironbench.runner import ERROR_INFRA, ERROR_RUN, TaskResult
 from ironbench.tasks import load_task
 
 TASKS_DIR = Path(__file__).resolve().parents[1] / "src" / "ironbench" / "tasks"
@@ -128,7 +128,8 @@ def test_solve_attempt_hits_iteration_limit(tmp_path):
 
 def test_solve_attempt_stops_on_infra_error(tmp_path):
     # a broken environment (no Renode/CLI/firmware) is not fixed by LLM iterations -
-    # the loop must exit immediately instead of burning attempts up to the limit
+    # the loop must exit immediately instead of burning attempts up to the limit.
+    # IH-15: the decision reads the structured error_kind, not the error text.
     task = make_task()
     cfg = SolveConfig(base_url="http://x", api_key="k", model="m", max_iterations=3)
 
@@ -140,6 +141,7 @@ def test_solve_attempt_stops_on_infra_error(tmp_path):
             duration_sec=0.1,
             serial_log=None,
             error="not found: Renode socket :3456",
+            error_kind=ERROR_INFRA,
         )
 
     res = solve_attempt(
@@ -148,6 +150,34 @@ def test_solve_attempt_stops_on_infra_error(tmp_path):
     assert not res.solved
     assert res.iterations == 1
     assert "environment not ready" in (res.error or "")
+
+
+def test_solve_attempt_continues_on_run_error_looking_like_infra(tmp_path):
+    # IH-15 regression pin: firmware text that merely CONTAINS infra-like
+    # phrases ("not found") must not trigger the early exit - only the
+    # runner's structured infra classification may.
+    task = make_task()
+    cfg = SolveConfig(base_url="http://x", api_key="k", model="m", max_iterations=2)
+
+    def runner(work_task, *, out_dir, journal=None):
+        return TaskResult(
+            task=work_task.name,
+            passed=False,
+            exit_code=1,
+            duration_sec=0.1,
+            serial_log=None,
+            error="micropython exited with code 1: module not found",
+            error_kind=ERROR_RUN,
+        )
+
+    responses = iter([GOOD_RESPONSE, GOOD_RESPONSE])
+
+    def llm(cfg, msgs):
+        return next(responses)
+
+    res = solve_attempt(task, cfg, out_dir=tmp_path, llm=llm, runner=runner)
+    assert res.iterations == 2  # no early exit: the loop kept iterating
+    assert "environment not ready" not in (res.error or "")
 
 
 def test_solve_attempt_asks_again_without_code_block(tmp_path):
