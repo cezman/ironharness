@@ -83,7 +83,7 @@ pid-antiwindup, system-id), and a **live board** (`--target real`: MicroPython
 REPL over USB-UART, opt-in via `IRONBENCH_REAL_PORT=COM4`). The same task can
 be run on a simulator and on hardware — that contrast is what `real` is for.
 Every task has a class (io/data/protocol/fsm/control/
-resilience) and a level 1–5; `ironbench report` shows a model's profile across
+resilience/debug) and a level 1–5; `ironbench report` shows a model's profile across
 classes, not a single number. LLM config — environment variables: `LLM_BASE_URL`
 (default: local LM Studio), `LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT`.
 

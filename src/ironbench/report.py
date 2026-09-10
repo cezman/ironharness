@@ -7,7 +7,7 @@ at least one of k attempts", k = the number of attempts for that pair.
 
 Taxonomy: when a map of task metadata (class tags + level from task.yaml) is
 given, the report gains a per-class profile - the model's success rate on each
-class (io/data/protocol/fsm/control/resilience) instead of a single pass@k
+class (io/data/protocol/fsm/control/resilience/debug) instead of a single pass@k
 number. A task with several tags lands in each of them; tasks without metadata
 (deleted, or the map was not passed) are not part of the profile.
 """
