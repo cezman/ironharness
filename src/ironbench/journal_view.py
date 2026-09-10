@@ -208,13 +208,23 @@ def _as_str(value) -> str:
 def _sanitize(value):
     """Non-finite floats become strings: json.dumps would emit bare NaN/
     Infinity, which Python accepts but a browser's JSON.parse rejects - the
-    whole dynamic view would silently die client-side."""
-    if isinstance(value, float) and not math.isfinite(value):
-        return str(value)
-    if isinstance(value, dict):
-        return {k: _sanitize(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_sanitize(v) for v in value]
+    whole dynamic view would silently die client-side. Iterative on purpose:
+    hostile payloads can be nested deeper than the interpreter stack (json's
+    C scanner handles them fine, plain recursion would not)."""
+    stack = [value]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            items = node.items()
+        elif isinstance(node, list):
+            items = enumerate(node)
+        else:
+            continue
+        for key, val in items:
+            if isinstance(val, float) and not math.isfinite(val):
+                node[key] = str(val)
+            elif isinstance(val, (dict, list)):
+                stack.append(val)
     return value
 
 

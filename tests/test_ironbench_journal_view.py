@@ -122,6 +122,24 @@ def test_non_finite_floats_do_not_kill_the_page(tmp_path):
     assert view["rows"][0]["p"]["v"] == "nan" and view["rows"][0]["p"]["w"] == "inf"
 
 
+def test_deeply_nested_payload_survives(tmp_path):
+    # _sanitize is iterative: a payload nested deeper than the interpreter
+    # stack must not raise RecursionError (json's C scanner handles it fine)
+    leaf: dict = {"v": float("nan")}
+    for _ in range(2000):
+        leaf = {"d": leaf}
+    journal = write_journal(
+        tmp_path, [{"ts": 1.0, "seq": 1, "actor": "a", "kind": "op", "deep": leaf}]
+    )
+    assert cli_main(["journal", str(journal)]) == 0
+    out_file = tmp_path / "journal.jsonl.view.html"
+    view = read_view_data(out_file.read_text(encoding="utf-8"))
+    node = view["rows"][0]["p"]["deep"]
+    for _ in range(2000):
+        node = node["d"]
+    assert node["v"] == "nan"
+
+
 def test_row_time_survives_extreme_timestamps(tmp_path):
     # F5 regression: pre-epoch ts (OSError on Windows), overflow ts and
     # non-numeric ts must not crash the view - the row keeps a string time
