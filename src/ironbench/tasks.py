@@ -76,8 +76,10 @@ SHIM_NAMES = ("machine",)
 EVENTS_KEYS = frozenset({"pattern", "count_min", "period_ms"})
 
 # Benchmark taxonomy: the class tag is the core skill of the task, level is the
-# difficulty step 1..5. The report shows the model's per-class profile, not one number
-CLASS_TAGS = ("io", "data", "protocol", "fsm", "control", "resilience")
+# difficulty step 1..5. The report shows the model's per-class profile, not one number.
+# debug = the firmware is given with a planted bug; the symptom report + the fixed
+# behavior spec are in the description, the agent must localize and fix the bug.
+CLASS_TAGS = ("io", "data", "protocol", "fsm", "control", "resilience", "debug")
 
 
 @dataclasses.dataclass(frozen=True)

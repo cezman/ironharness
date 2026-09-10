@@ -1,0 +1,74 @@
+# Debug class (IH-7): see debug-ringbuf/task.yaml for the class conventions.
+name: debug-hysteresis
+description: |-
+  A firmware job, not a from-scratch build: the heater controller below is
+  deployed and misbehaves. Spec (how it must behave): on startup print
+  "ctl ready", then in an infinite loop read lines "t <number>" - room
+  temperature readings, one per line. Number the readings from 1 and answer
+  every reading with exactly "k=<n> heater=<on|off>" reporting the current
+  relay state. Control law with hysteresis: the heater starts off, switches
+  on when the reading is at or below 18.0, switches off when it is at or
+  above 22.0; readings inside the band (strictly between 18.0 and 22.0) must
+  change nothing - the relay keeps its previous state. Nothing else in the
+  answer.
+
+  Field symptom: the relay does not hold its state inside the comfort band -
+  it drops to off right after a reading strictly between the thresholds, so
+  the heater short-cycles instead of coasting. Find the bug in the code below
+  and fix it.
+
+  ```python
+  # The deployed controller: the relay does not hold its state in the comfort band.
+  LOW = 18.0
+  HIGH = 22.0
+
+  print("ctl ready")
+  k = 0
+  heater = False
+
+  while True:
+      line = input()
+      if not line.startswith("t "):
+          continue
+      t = float(line[2:])
+      k += 1
+      if t <= LOW:
+          heater = True
+      elif t >= HIGH:
+          heater = False
+      else:
+          heater = False
+      state = "on" if heater else "off"
+      print(f"k={k} heater={state}")
+  ```
+
+  Send the complete fixed program (full main.py code, not a diff).
+entry: solution.py
+target: unix
+timeout_sec: 10
+tags: [debug, control]
+level: 4
+expect:
+  - 'ctl ready'
+  - 'k=1 heater=on'
+  - 'k=2 heater=on'
+  - 'k=3 heater=off'
+  - 'k=4 heater=off'
+  - 'k=5 heater=on'
+  - 'k=6 heater=on'
+fail:
+  - 'Traceback'
+stimulus:
+  - delay: 100ms
+  - write-serial: "t 17.5\r"    # <= 18.0      -> on
+  - wait-serial: "k=1 heater=on"
+  - write-serial: "t 20.0\r"    # in band      -> holds on
+  - wait-serial: "k=2 heater=on"
+  - write-serial: "t 25.0\r"    # >= 22.0      -> off
+  - wait-serial: "k=3 heater=off"
+  - write-serial: "t 21.5\r"    # in band      -> holds off
+  - wait-serial: "k=4 heater=off"
+  - write-serial: "t 18.0\r"    # boundary     -> on
+  - wait-serial: "k=5 heater=on"
+  - write-serial: "t 19.9\r"    # in band      -> holds on
+  - wait-serial: "k=6 heater=on"

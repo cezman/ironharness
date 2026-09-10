@@ -160,7 +160,16 @@ def test_dump_and_stay_alive_cheater_fails_with_anchor(tmp_path):
 # --- golden unix solutions must survive the anti-cheat (offline via WSL) ---
 
 
-GOLDEN_UNIX = ["coop-scheduler", "frame-corrupt", "noisy-frames", "uart-menu", "watchdog"]
+GOLDEN_UNIX = [
+    "coop-scheduler",
+    "debug-hysteresis",
+    "debug-pinlock",
+    "debug-ringbuf",
+    "frame-corrupt",
+    "noisy-frames",
+    "uart-menu",
+    "watchdog",
+]
 
 
 @pytest.mark.parametrize("name", GOLDEN_UNIX)

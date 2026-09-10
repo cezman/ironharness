@@ -1,0 +1,59 @@
+# Debug class (IH-7): the buggy firmware ships in buggy.py and is embedded in
+# the description (the solve loop never reads files - the description is the
+# agent's only input). The reference is the fixed firmware; the shipped bug
+# must fail the task (tests/test_ironbench_debug.py).
+name: debug-ringbuf
+description: |-
+  A firmware job, not a from-scratch build: the program below is deployed in
+  the field and misbehaves. Spec (how it must behave): on startup print
+  "agg ready", then in an infinite loop read lines "s <integer>" - one sensor
+  sample per line. Keep the last 4 samples in a sliding window; answer every
+  sample with "avg <n>", where <n> is the integer mean (floor division) of
+  exactly the samples received so far - with fewer than 4 samples, the mean of
+  just those. No zero padding, and nothing else in the answer.
+
+  Field symptom: the first averages come out far lower than expected, as if
+  invisible zero samples were averaged in; from roughly the fourth sample on
+  the values look correct again. Find the bug in the code below and fix it.
+
+  ```python
+  # The deployed aggregator: the first averages come out far lower than expected.
+  print("agg ready")
+  buf = [0] * 4
+
+  while True:
+      line = input()
+      if not line.startswith("s "):
+          continue
+      buf.append(int(line[2:]))
+      buf.pop(0)
+      print("avg", sum(buf) // len(buf))
+  ```
+
+  Send the complete fixed program (full main.py code, not a diff).
+entry: solution.py
+target: unix
+timeout_sec: 10
+tags: [debug]
+level: 4
+expect:
+  - 'agg ready'
+  - 'avg 8'
+  - 'avg 12'
+  - 'avg 18'
+  - 'avg 16'
+  - 'avg 24'
+fail:
+  - 'Traceback'
+stimulus:
+  - delay: 100ms
+  - write-serial: "s 8\r"      # [8]            -> avg 8
+  - wait-serial: "avg 8"
+  - write-serial: "s 16\r"     # [8,16]         -> avg 12
+  - wait-serial: "avg 12"
+  - write-serial: "s 32\r"     # [8,16,32]      -> avg 18
+  - wait-serial: "avg 18"
+  - write-serial: "s 8\r"      # [8,16,32,8]    -> avg 16
+  - wait-serial: "avg 16"
+  - write-serial: "s 40\r"     # [16,32,8,40]   -> avg 24
+  - wait-serial: "avg 24"

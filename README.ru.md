@@ -78,7 +78,7 @@ uv run ironbench report                            # pass@k: report.json + repor
 Задачи — ESP32/MicroPython в Wokwi (headless `wokwi-cli`), Renode, MicroPython unix-port
 (бесплатные локальные прогоны) и plant-мишень (замкнутая петля «объект + регулятор» в
 Python, оценка по метрикам переходной характеристики: p-regulator, pid-antiwindup,
-system-id). У каждой задачи класс (io/data/protocol/fsm/control/resilience) и уровень
+system-id). У каждой задачи класс (io/data/protocol/fsm/control/resilience/debug) и уровень
 1–5; `ironbench report` показывает профиль модели по классам, а не одно число.
 LLM-конфиг — переменные окружения: `LLM_BASE_URL` (по умолчанию локальный LM Studio),
 `LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT`.

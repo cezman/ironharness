@@ -1,0 +1,79 @@
+# Debug class (IH-7): see debug-ringbuf/task.yaml for the class conventions.
+name: debug-pinlock
+description: |-
+  A firmware job, not a from-scratch build: the access pad below is deployed
+  and misbehaves. Spec (how it must behave): on startup print "pad ready",
+  then in an infinite loop serve lines: "code <pin>" - an access attempt -
+  and "lock" - relock. The correct PIN is 4829. A correct code answers
+  "unlock <pin>", opens the pad and clears the tamper counter. A wrong code
+  answers "deny <pin>"; while the pad is locked it also counts a strike, and
+  on the third strike the pad prints "alarm" (exactly once, it stays locked).
+  "lock" answers "locked" and closes an open pad; it does NOT forgive
+  strikes - only a correct code does. A wrong code while the pad is open
+  answers "deny" but is not counted (the counter is a lock tamper counter).
+  Nothing else in the answers.
+
+  Field symptom: the pad alarms even when there was a successful unlock
+  between the wrong attempts - one wrong code after a relock can trip the
+  alarm as if old attempts were still counted. Find the bug in the code below
+  and fix it.
+
+  ```python
+  # The deployed pad: the alarm can trip even right after a successful unlock.
+  PIN = "4829"
+
+  print("pad ready")
+  state = "locked"
+  strikes = 0
+
+  while True:
+      line = input()
+      parts = line.split()
+      if not parts:
+          continue
+      if parts[0] == "code" and len(parts) == 2:
+          if parts[1] == PIN:
+              print("unlock", parts[1])
+              state = "unlocked"
+          else:
+              print("deny", parts[1])
+              if state == "locked":
+                  strikes += 1
+                  if strikes == 3:
+                      print("alarm")
+      elif parts[0] == "lock":
+          print("locked")
+          state = "locked"
+  ```
+
+  Send the complete fixed program (full main.py code, not a diff).
+entry: solution.py
+target: unix
+timeout_sec: 10
+tags: [debug, fsm]
+level: 5
+expect:
+  - 'pad ready'
+  - 'deny 1111'
+  - 'deny 2222'
+  - 'unlock 4829'
+  - 'locked'
+  - 'deny 3333'
+  - 'deny 4444'
+fail:
+  - 'Traceback'
+  - 'alarm'
+stimulus:
+  - delay: 100ms
+  - write-serial: "code 1111\r"    # strike 1
+  - wait-serial: "deny 1111"
+  - write-serial: "code 2222\r"    # strike 2
+  - wait-serial: "deny 2222"
+  - write-serial: "code 4829\r"    # success: strikes must reset to 0
+  - wait-serial: "unlock 4829"
+  - write-serial: "lock\r"         # relock (does not forgive strikes either way)
+  - wait-serial: "locked"
+  - write-serial: "code 3333\r"    # fixed: strike 1; buggy: strike 3 -> alarm
+  - wait-serial: "deny 3333"
+  - write-serial: "code 4444\r"    # fixed: strike 2; buggy: strike 4
+  - wait-serial: "deny 4444"
