@@ -1,0 +1,27 @@
+# The honest blink: GPIO toggling on the unix target through the harness-provided
+# machine shim. The shim logs every pin transition as "PIN <id> <value> <t_ms>" and
+# the events section scores the transition count AND the timing - printing the
+# expected strings does not produce well-timed events, so it cannot pass.
+name: blink-unix
+description: >-
+  An ESP32 blinks a LED on GPIO2 using the machine module: Pin(2, Pin.OUT),
+  toggled every 500 ms, 10 toggles total (5 on/off cycles), then the script
+  exits. main.py must import machine, create the pin and toggle it with
+  time.sleep(0.5) between toggles. The harness provides the machine module
+  (a shim) and records every pin transition; the scoring checks that at least
+  10 transitions happened and that every interval between consecutive
+  transitions is within 350..650 ms - a script that merely prints strings
+  cannot pass.
+entry: solution.py
+target: unix
+shim: machine
+timeout_sec: 12
+tags: [io]
+level: 1
+expect: []
+fail:
+  - 'Traceback'
+events:
+  - pattern: '^PIN 2 [01] '
+    count_min: 10
+    period_ms: [350, 650]

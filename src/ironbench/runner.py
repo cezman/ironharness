@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import itertools
 import json
 import os
 import random
@@ -82,6 +83,53 @@ REPL_PROMPT = ">>>"
 # Shared directory of pinned firmware: do not duplicate a bin into the task
 # directory; the runner stages it per the elf/firmware links in wokwi.toml
 FIRMWARE_DIR = Path(__file__).resolve().parent / "tasks" / "_firmware"
+
+# Harness-provided shim modules for the unix target (e.g. machine.py), staged
+# next to the entry when a task declares `shim: <name>` (see tasks.SHIM_NAMES)
+SHIMS_DIR = Path(__file__).resolve().parent / "shims"
+
+
+def _check_events(serial_text: str, events: tuple[dict, ...]) -> tuple[str, ...]:
+    """Timing-aware scoring over shim event lines (IH-16): for every event
+    spec, the count of matched lines (whose trailing token is a millisecond
+    timestamp) and every consecutive interval between them must satisfy the
+    declared bounds. A cheater printing bare expected strings produces no
+    parseable events and fails the count.
+
+    Accepted residual: a cheater that SIMULATES the shim line format with
+    well-timed fake timestamps passes - the scoring trusts the firmware's
+    stdout, like all unix scoring. True verification needs out-of-band GPIO
+    observation (real-target read-back); anchoring event lines to the box
+    chunk stamps would at least tie them to wall-clock ingestion."""
+    missed: list[str] = []
+    for ev in events:
+        stamps: list[float] = []
+        for line in serial_text.splitlines():
+            m = re.search(ev["pattern"], line)
+            if not m:
+                continue
+            tail = line[m.end():].split()
+            if not tail:
+                continue
+            try:
+                stamps.append(float(tail[-1]))
+            except ValueError:
+                continue
+        name = f"events[{ev['pattern']}]"
+        if len(stamps) < ev["count_min"]:
+            missed.append(f"{name}: {len(stamps)} events < required {ev['count_min']}")
+            continue
+        period = ev.get("period_ms")
+        if period:
+            for a, b in itertools.pairwise(stamps):
+                delta = b - a
+                if not period[0] <= delta <= period[1]:
+                    missed.append(
+                        f"{name}: period {delta:.0f}ms outside "
+                        f"[{period[0]:g}, {period[1]:g}]"
+                    )
+                    break
+    return tuple(missed)
 
 # --- renode target ---
 
@@ -582,9 +630,22 @@ def _tar_of(path: Path, arcname: str) -> bytes:
     return buf.getvalue()
 
 
-def _push_to_wsl(blob: bytes, remote_dir: str, marker: str) -> None:
+def _tar_pairs(items: list[tuple[Path, str]]) -> bytes:
+    """Several files as one tar.gz blob (unix target: entry + shim module)."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for path, arcname in items:
+            tar.add(path, arcname=arcname)
+    return buf.getvalue()
+
+
+def _push_to_wsl(blob: bytes, remote_dir: str, marker: str, *, clean: bool = False) -> None:
     """tar.gz blob into WSL stdin (via communicate: the wsl.exe relay is only
-    reliable that way); the marker in stdout confirms the extraction."""
+    reliable that way); the marker in stdout confirms the extraction.
+    clean=True wipes the remote dir first - for per-run dirs whose stale
+    files (e.g. a leftover machine.py from a removed `shim:`) must not leak
+    into the next run. Never use it on shared directories."""
+    rm_part = "rm -rf {remote_dir} && " if clean else ""
     try:
         proc = subprocess.run(
             [
@@ -594,7 +655,7 @@ def _push_to_wsl(blob: bytes, remote_dir: str, marker: str) -> None:
                 "--",
                 "bash",
                 "-c",
-                f"mkdir -p {remote_dir} && tar -xzf - -C {remote_dir} && echo {marker}",
+                f"{rm_part}mkdir -p {remote_dir} && tar -xzf - -C {remote_dir} && echo {marker}",
             ],
             input=blob,
             capture_output=True,
@@ -1166,9 +1227,29 @@ def _run_unix(
                         mqtt_subscribed.add(topic)
         if unix_cmd is None:
             remote_dir = f"{RENODE_REMOTE_ROOT}/{task.name}-unix"
-            _push_to_wsl(
-                _tar_of(task.directory / task.entry, task.entry), remote_dir, "STAGE-PUSHED"
-            )
+            if task.shim:
+                # entry + shim travel together: sys.path[0] is the script dir,
+                # so machine.py next to the entry resolves `import machine`;
+                # the remote dir is cleaned first - a stale machine.py from a
+                # run with a shim must not leak into a shim-less re-run
+                _push_to_wsl(
+                    _tar_pairs(
+                        [
+                            (task.directory / task.entry, task.entry),
+                            (SHIMS_DIR / f"{task.shim}.py", f"{task.shim}.py"),
+                        ]
+                    ),
+                    remote_dir,
+                    "STAGE-PUSHED",
+                    clean=True,
+                )
+            else:
+                _push_to_wsl(
+                    _tar_of(task.directory / task.entry, task.entry),
+                    remote_dir,
+                    "STAGE-PUSHED",
+                    clean=True,
+                )
             env_prefix = (
                 f"IRONBENCH_MQTT_HOST=127.0.0.1 IRONBENCH_MQTT_PORT={mqtt_port} "
                 if task.mqtt
@@ -1176,6 +1257,12 @@ def _run_unix(
             )
             cmd = _unix_cmd(f"{remote_dir}/{task.entry}", env_prefix)
         else:
+            if task.shim:
+                # injected commands run the entry in place: the shim goes next
+                # to it and overwrites any same-named file - the harness shim
+                # is authoritative for a shim-declaring task (task dirs here
+                # are per-run temporary directories in tests)
+                shutil.copy2(SHIMS_DIR / f"{task.shim}.py", task.directory / f"{task.shim}.py")
             cmd = [unix_cmd] if isinstance(unix_cmd, str) else list(unix_cmd)
         if journal:
             journal("task_start", {"task": task.name})
@@ -1390,6 +1477,7 @@ def _run_unix(
     serial_log.write_text(serial_text, encoding="utf-8")
     duration = round(time.monotonic() - start, 2)
     missed, hit_fail = _check_patterns(serial_text, task.expect, task.fail)
+    missed = missed + _check_events(serial_text, task.events)
     passed = not missed and not hit_fail and error is None
     result = TaskResult(
         task=task.name,
