@@ -14,6 +14,13 @@ Configuration via environment:
     IRONHARNESS_MAX_CONNECTIONS — ceiling on simultaneously open transports per
                          session (unset = unlimited; denial = PolicyViolation,
                          journaled)
+    IRONHARNESS_TRANSPORT_DEADLINE — per-transport operation deadline in seconds
+                         since open (default 600; 0/off disables). A long-lived
+                         session hitting it gets OperationTimeout on the next
+                         operation - re-open the transport.
+    IRONHARNESS_TRANSPORT_RATE — max_calls/window_seconds (e.g. "100/60");
+                         unset = no rate limit. Applies to serial/modbus/mqtt
+                         operations through the session.
 """
 
 from __future__ import annotations

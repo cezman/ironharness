@@ -107,6 +107,44 @@ def test_close_transport_removes_name(session):
     with pytest.raises(KeyError):
         session.serial_read("s", 1)
     session.serial_open("s", "loop://", timeout=0.5)  # имя освободилось
+    session.close_transport("s")
+    assert session._kinds == {}  # IH-17: kind-реестр синхронен с реестром транспортов
+
+
+def test_modbus_ops_respect_deadline(session, monkeypatch):
+    # IH-17: лимиты действуют и на forwarded-операции (modbus_read идёт через
+    # __getattr__ обёртки), а не только на serial write/read
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_DEADLINE", "1")
+    with ModbusSimServer(port=0, registers=[0] * 64) as srv:
+        session.modbus_open("m", "127.0.0.1", port=srv.port)
+        assert session.modbus_read("m", 0) == [0]  # внутри дедлайна
+        time.sleep(1.3)
+        with pytest.raises(OperationTimeout):
+            session.modbus_read("m", 0)
+
+
+def test_modbus_ops_respect_rate(session, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_RATE", "2/60")
+    with ModbusSimServer(port=0, registers=[0] * 64) as srv:
+        session.modbus_open("m", "127.0.0.1", port=srv.port)
+        assert session.modbus_read("m", 0) == [0]
+        assert session.modbus_read("m", 0) == [0]
+        with pytest.raises(RateLimitExceeded):
+            session.modbus_read("m", 0)
+
+
+def test_mqtt_ops_respect_rate(session, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_RATE", "2/60")
+    broker = MqttSimBroker()
+    port = broker.start()
+    try:
+        session.mqtt_open("q", "127.0.0.1", port=port)
+        session.mqtt_publish("q", "dev/t", "a")
+        session.mqtt_publish("q", "dev/t", "b")
+        with pytest.raises(RateLimitExceeded):
+            session.mqtt_publish("q", "dev/t", "c")
+    finally:
+        broker.stop()
 
 
 # --- IH-11: журнал атрибутирует операции соединениям, реплей по-соединений ---

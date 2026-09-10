@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -32,8 +33,9 @@ def parse_transport_deadline(raw: str | None) -> float | None:
     if raw.strip().lower() in ("0", "off"):
         return None
     seconds = float(raw)
-    if seconds <= 0:
-        raise ValueError(f"{TRANSPORT_DEADLINE_ENV} must be > 0, or 0/off to disable")
+    if not math.isfinite(seconds) or seconds <= 0:
+        # nan/inf would silently disable the deadline comparison
+        raise ValueError(f"{TRANSPORT_DEADLINE_ENV} must be a finite number > 0, or 0/off")
     return seconds
 
 
@@ -46,8 +48,8 @@ def parse_transport_rate(raw: str | None) -> tuple[int, float] | None:
     if not sep:
         raise ValueError(f"{TRANSPORT_RATE_ENV} must be max_calls/window_seconds, got {raw!r}")
     max_calls, per_seconds = int(max_s), float(per_s)
-    if max_calls < 1 or per_seconds <= 0:
-        raise ValueError(f"{TRANSPORT_RATE_ENV} must be max_calls >= 1 and window > 0")
+    if not (1 <= max_calls <= 10**9) or not math.isfinite(per_seconds) or per_seconds <= 0:
+        raise ValueError(f"{TRANSPORT_RATE_ENV} must be max_calls >= 1 and a finite window > 0")
     return max_calls, per_seconds
 
 
@@ -80,9 +82,9 @@ class RateLimiter:
 
 
 class RateLimitedTransport:
-    """Пропускает операции I/O через RateLimiter; open/close не лимитируются.
-    Всё прочее (modbus_read, mqtt_*, ...) пробрасывается в обёрнутый транспорт
-    через __getattr__ - обёртки прозрачны для любого вида транспорта (IH-17)."""
+    """Пропускает операции I/O через RateLimiter: write/read/read_line напрямую,
+    любой другой вызываемый атрибут (modbus_read, mqtt_publish, ...) - через
+    форвардинг с тем же лимитом. open/close не лимитируются."""
 
     def __init__(self, transport: Any, limiter: RateLimiter) -> None:
         self._t = transport
@@ -91,19 +93,21 @@ class RateLimitedTransport:
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
-        return getattr(self._t, name)
+        attr = getattr(self._t, name)
+        if not callable(attr):
+            return attr
 
-    def write(self, data: bytes) -> int:
-        self._limiter.acquire()
-        return self._t.write(data)
+        def forwarded(*args: Any, **kwargs: Any) -> Any:
+            self._limiter.acquire()
+            return attr(*args, **kwargs)
 
-    def read(self, size: int = 1) -> bytes:
-        self._limiter.acquire()
-        return self._t.read(size)
+        return forwarded
 
-    def read_line(self, max_len: int = 256) -> bytes:
-        self._limiter.acquire()
-        return self._t.read_line(max_len)
+    def open(self) -> None:
+        self._t.open()
+
+    def close(self) -> None:
+        self._t.close()
 
     def __enter__(self) -> Self:
         self._t.open()
@@ -115,7 +119,9 @@ class RateLimitedTransport:
 
 class DeadlineTransport:
     """Роняет операции OperationTimeout, когда истёк дедлайн с момента open().
-    Неопределённые атрибуты пробрасываются в обёрнутый транспорт (IH-17)."""
+    write/read/read_line и любой другой вызываемый атрибут (modbus_read,
+    mqtt_publish, ...) проходят проверку дедлайна через форвардинг; open/close
+    не проверяются (IH-17)."""
 
     def __init__(self, transport: Any, seconds: float, clock: Clock = time.monotonic) -> None:
         self._t = transport
@@ -126,7 +132,15 @@ class DeadlineTransport:
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
-        return getattr(self._t, name)
+        attr = getattr(self._t, name)
+        if not callable(attr):
+            return attr
+
+        def forwarded(*args: Any, **kwargs: Any) -> Any:
+            self._check()
+            return attr(*args, **kwargs)
+
+        return forwarded
 
     def _check(self) -> None:
         assert self._started is not None, "transport is not open"
@@ -139,18 +153,6 @@ class DeadlineTransport:
 
     def close(self) -> None:
         self._t.close()
-
-    def write(self, data: bytes) -> int:
-        self._check()
-        return self._t.write(data)
-
-    def read(self, size: int = 1) -> bytes:
-        self._check()
-        return self._t.read(size)
-
-    def read_line(self, max_len: int = 256) -> bytes:
-        self._check()
-        return self._t.read_line(max_len)
 
     def __enter__(self) -> Self:
         self.open()

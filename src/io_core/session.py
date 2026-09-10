@@ -102,13 +102,15 @@ class Session:
 
         return hook
 
-    def _apply_limits(self, t):
+    def _apply_limits(self, t: Any) -> Any:
         """Wraps a fresh transport in the configured deadline/rate limits -
         the 'transports always have timeouts and quotas' convention for the
         standard session (IH-17). Deadline is on by default (600 s,
         IRONHARNESS_TRANSPORT_DEADLINE to reconfigure or 0/off to disable);
         the rate limiter only when IRONHARNESS_TRANSPORT_RATE=max/window is
-        set. Env is re-read per open, like the access policy."""
+        set. Env is re-read per open, like the access policy. The deadline
+        counts from open(): a long-lived session hitting it gets
+        OperationTimeout and must re-open the transport."""
         deadline = parse_transport_deadline(os.environ.get(TRANSPORT_DEADLINE_ENV))
         if deadline is not None:
             t = DeadlineTransport(t, deadline)
@@ -291,6 +293,7 @@ class Session:
         with self._lock:
             t = self._get(name)  # a friendly "not open" error, not a bare KeyError
             del self._transports[name]
+            del self._kinds[name]  # keep the two registries in lockstep
         t.close()
 
     def close(self) -> None:
