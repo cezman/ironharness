@@ -1,4 +1,5 @@
 # The deployed aggregator: the first averages come out far lower than expected.
+print("agg ready")
 buf = [0] * 4
 
 while True:

@@ -8,6 +8,7 @@ regression (GOLDEN_UNIX)."""
 from __future__ import annotations
 
 import dataclasses
+import re
 from pathlib import Path
 
 import pytest
@@ -32,10 +33,10 @@ def test_debug_tasks_exist():
 @pytest.mark.parametrize("task", DEBUG_TASKS, ids=lambda t: t.name)
 def test_buggy_listing_is_embedded_in_description(task):
     # Description integrity: the agent must see the deployed code it is asked
-    # to fix, byte-for-byte inside the ```python fence.
+    # to fix, byte-for-byte as the single ```python fence of the description.
     listing = (task.directory / "buggy.py").read_text(encoding="utf-8").rstrip("\n")
-    assert "```python" in task.description
-    assert listing in task.description, f"{task.name}: buggy.py drifted from the description"
+    fences = re.findall(r"```python\n(.*?)\n```", task.description, re.DOTALL)
+    assert fences == [listing], f"{task.name}: buggy.py drifted from the description"
 
 
 @pytest.mark.parametrize("task", DEBUG_TASKS, ids=lambda t: t.name)
