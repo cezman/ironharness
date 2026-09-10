@@ -2,6 +2,13 @@
 
 [English](README.md) | [Русский](README.ru.md)
 
+[![tests](https://github.com/cezman/ironharness/actions/workflows/tests.yml/badge.svg)](https://github.com/cezman/ironharness/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/ironharness)](https://pypi.org/project/ironharness/)
+[![Python](https://img.shields.io/pypi/pyversions/ironharness)](https://pypi.org/project/ironharness/)
+[![License](https://img.shields.io/pypi/l/ironharness)](LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Benchmark reports](https://img.shields.io/badge/benchmark%20reports-gh--pages-2ea44f)](https://cezman.github.io/ironharness/)
+
 > harness — «упряжь»: впрягаем LLM-агентов в железо.
 
 Агентский харнесс для I/O и прошивок. Два модуля:
@@ -16,7 +23,7 @@
 ## Быстрый старт
 
 ```bash
-uvx ironharness-mcp                  # MCP-сервер без установки
+uvx --from ironharness ironharness-mcp   # MCP-сервер без установки
 ```
 
 Из исходников:
@@ -49,7 +56,7 @@ ironharness даёт «руки»: транспорты, песочницу, ж�
   "mcpServers": {
     "ironharness": {
       "command": "uvx",
-      "args": ["ironharness-mcp"]
+      "args": ["--from", "ironharness", "ironharness-mcp"]
     }
   }
 }
