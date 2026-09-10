@@ -6,14 +6,19 @@ import time
 import pytest
 
 from io_core import (
+    DeadlineTransport,
     ModbusSimServer,
+    OperationTimeout,
     PolicyViolation,
+    RateLimitExceeded,
     ReplayMismatch,
     ReplaySession,
     SandboxViolation,
+    SerialTransport,
     Session,
     read_events,
 )
+from io_core.limits import parse_transport_deadline, parse_transport_rate
 from io_core.mqtt_sim import MqttSimBroker
 
 
@@ -102,6 +107,44 @@ def test_close_transport_removes_name(session):
     with pytest.raises(KeyError):
         session.serial_read("s", 1)
     session.serial_open("s", "loop://", timeout=0.5)  # имя освободилось
+    session.close_transport("s")
+    assert session._kinds == {}  # IH-17: kind-реестр синхронен с реестром транспортов
+
+
+def test_modbus_ops_respect_deadline(session, monkeypatch):
+    # IH-17: лимиты действуют и на forwarded-операции (modbus_read идёт через
+    # __getattr__ обёртки), а не только на serial write/read
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_DEADLINE", "1")
+    with ModbusSimServer(port=0, registers=[0] * 64) as srv:
+        session.modbus_open("m", "127.0.0.1", port=srv.port)
+        assert session.modbus_read("m", 0) == [0]  # внутри дедлайна
+        time.sleep(1.3)
+        with pytest.raises(OperationTimeout):
+            session.modbus_read("m", 0)
+
+
+def test_modbus_ops_respect_rate(session, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_RATE", "2/60")
+    with ModbusSimServer(port=0, registers=[0] * 64) as srv:
+        session.modbus_open("m", "127.0.0.1", port=srv.port)
+        assert session.modbus_read("m", 0) == [0]
+        assert session.modbus_read("m", 0) == [0]
+        with pytest.raises(RateLimitExceeded):
+            session.modbus_read("m", 0)
+
+
+def test_mqtt_ops_respect_rate(session, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_RATE", "2/60")
+    broker = MqttSimBroker()
+    port = broker.start()
+    try:
+        session.mqtt_open("q", "127.0.0.1", port=port)
+        session.mqtt_publish("q", "dev/t", "a")
+        session.mqtt_publish("q", "dev/t", "b")
+        with pytest.raises(RateLimitExceeded):
+            session.mqtt_publish("q", "dev/t", "c")
+    finally:
+        broker.stop()
 
 
 # --- IH-11: журнал атрибутирует операции соединениям, реплей по-соединений ---
@@ -238,3 +281,73 @@ def test_session_close_survives_a_bad_port(session, monkeypatch):
     assert session._transports == {}  # registry cleared, "good" not abandoned
     with pytest.raises(ValueError):
         session.journal("late", {})  # the journal is closed too
+
+
+# --- IH-17: the convention 'transports always have timeouts and quotas' is
+# --- enforced by the standard session itself (deadline on by default) ---
+
+
+def test_default_deadline_wraps_transports(session):
+    session.serial_open("s", "loop://", timeout=0.5)
+    wrapped = session._transports["s"]
+    assert isinstance(wrapped, DeadlineTransport)  # deadline on by default
+    # operations still work through the wrapper (getattr forwarding)
+    session.serial_write("s", "cafe")
+    assert session.serial_read("s", 2) == "cafe"
+
+
+def test_deadline_expires_produces_timeout(session, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_DEADLINE", "1")
+    session.serial_open("s", "loop://", timeout=0.5)
+    time.sleep(1.3)
+    with pytest.raises(OperationTimeout):
+        session.serial_read("s", 1)
+
+
+def test_deadline_disabled_by_env(session, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_DEADLINE", "off")
+    session.serial_open("s", "loop://", timeout=0.5)
+    assert type(session._transports["s"]) is SerialTransport
+
+
+def test_deadline_garbage_env_fails_loud(session, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_DEADLINE", "-5")
+    with pytest.raises(ValueError):
+        session.serial_open("s", "loop://", timeout=0.5)
+
+
+def test_rate_limit_env_enforced(session, monkeypatch):
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_RATE", "3/60")
+    session.serial_open("s", "loop://", timeout=0.5)
+    for _ in range(3):
+        session.serial_write("s", "00")
+    with pytest.raises(RateLimitExceeded):
+        session.serial_write("s", "00")
+
+
+def test_rate_limit_env_unset_means_no_limit(session):
+    session.serial_open("s", "loop://", timeout=0.5)
+    for _ in range(10):
+        session.serial_write("s", "00")  # no exception without the env
+
+
+def test_parse_transport_deadline_and_rate():
+    assert parse_transport_deadline(None) == 600.0
+    assert parse_transport_deadline("") == 600.0
+    assert parse_transport_deadline("30") == 30.0
+    assert parse_transport_deadline("off") is None
+    assert parse_transport_deadline("0") is None
+    with pytest.raises(ValueError):
+        parse_transport_deadline("-1")
+    with pytest.raises(ValueError):
+        parse_transport_deadline("nan")  # a nan comparison silently disables the deadline
+    with pytest.raises(ValueError):
+        parse_transport_deadline("inf")
+    assert parse_transport_rate(None) is None
+    assert parse_transport_rate("100/60") == (100, 60.0)
+    with pytest.raises(ValueError):
+        parse_transport_rate("100")
+    with pytest.raises(ValueError):
+        parse_transport_rate("0/60")
+    with pytest.raises(ValueError):
+        parse_transport_rate("1/inf")

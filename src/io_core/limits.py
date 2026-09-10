@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -15,6 +16,41 @@ from typing import Any, Self
 from io_core.errors import OperationTimeout, RateLimitExceeded
 
 Clock = Callable[[], float]
+
+TRANSPORT_DEADLINE_ENV = "IRONHARNESS_TRANSPORT_DEADLINE"
+TRANSPORT_RATE_ENV = "IRONHARNESS_TRANSPORT_RATE"
+DEFAULT_TRANSPORT_DEADLINE_SEC = 600.0
+
+
+def parse_transport_deadline(raw: str | None) -> float | None:
+    """Deadline for transport operations in seconds.
+
+    None/empty -> the default (600 s); "0" or "off" -> disabled; otherwise a
+    positive number of seconds. Garbage raises ValueError (fail loud).
+    """
+    if raw is None or not raw.strip():
+        return DEFAULT_TRANSPORT_DEADLINE_SEC
+    if raw.strip().lower() in ("0", "off"):
+        return None
+    seconds = float(raw)
+    if not math.isfinite(seconds) or seconds <= 0:
+        # nan/inf would silently disable the deadline comparison
+        raise ValueError(f"{TRANSPORT_DEADLINE_ENV} must be a finite number > 0, or 0/off")
+    return seconds
+
+
+def parse_transport_rate(raw: str | None) -> tuple[int, float] | None:
+    """Parses IRONHARNESS_TRANSPORT_RATE as 'max_calls/window_seconds'
+    (e.g. "100/60"). None/empty -> no rate limiting; garbage -> ValueError."""
+    if raw is None or not raw.strip():
+        return None
+    max_s, sep, per_s = raw.partition("/")
+    if not sep:
+        raise ValueError(f"{TRANSPORT_RATE_ENV} must be max_calls/window_seconds, got {raw!r}")
+    max_calls, per_seconds = int(max_s), float(per_s)
+    if not (1 <= max_calls <= 10**9) or not math.isfinite(per_seconds) or per_seconds <= 0:
+        raise ValueError(f"{TRANSPORT_RATE_ENV} must be max_calls >= 1 and a finite window > 0")
+    return max_calls, per_seconds
 
 
 class RateLimiter:
@@ -46,23 +82,32 @@ class RateLimiter:
 
 
 class RateLimitedTransport:
-    """Пропускает операции I/O через RateLimiter; open/close не лимитируются."""
+    """Пропускает операции I/O через RateLimiter: write/read/read_line напрямую,
+    любой другой вызываемый атрибут (modbus_read, mqtt_publish, ...) - через
+    форвардинг с тем же лимитом. open/close не лимитируются."""
 
     def __init__(self, transport: Any, limiter: RateLimiter) -> None:
         self._t = transport
         self._limiter = limiter
 
-    def write(self, data: bytes) -> int:
-        self._limiter.acquire()
-        return self._t.write(data)
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        attr = getattr(self._t, name)
+        if not callable(attr):
+            return attr
 
-    def read(self, size: int = 1) -> bytes:
-        self._limiter.acquire()
-        return self._t.read(size)
+        def forwarded(*args: Any, **kwargs: Any) -> Any:
+            self._limiter.acquire()
+            return attr(*args, **kwargs)
 
-    def read_line(self, max_len: int = 256) -> bytes:
-        self._limiter.acquire()
-        return self._t.read_line(max_len)
+        return forwarded
+
+    def open(self) -> None:
+        self._t.open()
+
+    def close(self) -> None:
+        self._t.close()
 
     def __enter__(self) -> Self:
         self._t.open()
@@ -73,13 +118,29 @@ class RateLimitedTransport:
 
 
 class DeadlineTransport:
-    """Роняет операции OperationTimeout, когда истёк дедлайн с момента open()."""
+    """Роняет операции OperationTimeout, когда истёк дедлайн с момента open().
+    write/read/read_line и любой другой вызываемый атрибут (modbus_read,
+    mqtt_publish, ...) проходят проверку дедлайна через форвардинг; open/close
+    не проверяются (IH-17)."""
 
     def __init__(self, transport: Any, seconds: float, clock: Clock = time.monotonic) -> None:
         self._t = transport
         self._seconds = seconds
         self._clock = clock
         self._started: float | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        attr = getattr(self._t, name)
+        if not callable(attr):
+            return attr
+
+        def forwarded(*args: Any, **kwargs: Any) -> Any:
+            self._check()
+            return attr(*args, **kwargs)
+
+        return forwarded
 
     def _check(self) -> None:
         assert self._started is not None, "transport is not open"
@@ -92,18 +153,6 @@ class DeadlineTransport:
 
     def close(self) -> None:
         self._t.close()
-
-    def write(self, data: bytes) -> int:
-        self._check()
-        return self._t.write(data)
-
-    def read(self, size: int = 1) -> bytes:
-        self._check()
-        return self._t.read(size)
-
-    def read_line(self, max_len: int = 256) -> bytes:
-        self._check()
-        return self._t.read_line(max_len)
 
     def __enter__(self) -> Self:
         self.open()
