@@ -1293,8 +1293,9 @@ def _run_unix(
                 for line in iter(proc.stdout.readline, b""):
                     # the ingestion stamp powers the anti-cheat: a chunk cannot
                     # be ingested before it was printed, so "first occurrence
-                    # of the needle stamped at or before the stimulus write"
-                    # proves the string was printed unprompted
+                    # of the needle stamped strictly before the stimulus write"
+                    # proves the string was printed unprompted (a same-tick
+                    # stamp is unknowable order - see _first_answer_stamp)
                     _box_append(line.decode("utf-8", "replace"))
             except OSError:
                 pass
