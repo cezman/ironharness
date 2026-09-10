@@ -339,9 +339,15 @@ def test_parse_transport_deadline_and_rate():
     assert parse_transport_deadline("0") is None
     with pytest.raises(ValueError):
         parse_transport_deadline("-1")
+    with pytest.raises(ValueError):
+        parse_transport_deadline("nan")  # a nan comparison silently disables the deadline
+    with pytest.raises(ValueError):
+        parse_transport_deadline("inf")
     assert parse_transport_rate(None) is None
     assert parse_transport_rate("100/60") == (100, 60.0)
     with pytest.raises(ValueError):
         parse_transport_rate("100")
     with pytest.raises(ValueError):
         parse_transport_rate("0/60")
+    with pytest.raises(ValueError):
+        parse_transport_rate("1/inf")
