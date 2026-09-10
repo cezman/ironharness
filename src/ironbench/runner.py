@@ -1135,7 +1135,7 @@ def _stop_broker_proc(proc: subprocess.Popen | None, wsl_pid: int | None) -> Non
 
 def _first_answer_stamp(box, needle: str, since: float | None) -> float | None:
     """Ingestion stamp of the chunk holding the first occurrence of `needle`,
-    or None when it is not printed yet / was printed unprompted (stamped at or
+    or None when it is not printed yet / was printed unprompted (stamped
     before `since`; since=None = no stimulus write happened yet)."""
     with box["lock"]:
         pos = box["text"].find(needle)
@@ -1150,7 +1150,13 @@ def _first_answer_stamp(box, needle: str, since: float | None) -> float | None:
                 break
     if stamp_hit is None or since is None:
         return None
-    return stamp_hit if stamp_hit > since else None
+    # Only a strictly-earlier stamp condemns: an ingestion stamp EQUAL to the
+    # trigger stamp means write -> firmware read -> echo -> ingest completed
+    # within one monotonic clock tick (field-proven on coarse-clock Windows
+    # CI, where a legal fast answer was condemned as pre-printed). Same-tick
+    # order is unknowable, so the benefit of the doubt goes to the agent; the
+    # dump-and-exit cheater stays covered by the zero-waits rule.
+    return stamp_hit if stamp_hit >= since else None
 
 
 def _run_unix(
@@ -1287,8 +1293,9 @@ def _run_unix(
                 for line in iter(proc.stdout.readline, b""):
                     # the ingestion stamp powers the anti-cheat: a chunk cannot
                     # be ingested before it was printed, so "first occurrence
-                    # of the needle stamped at or before the stimulus write"
-                    # proves the string was printed unprompted
+                    # of the needle stamped strictly before the stimulus write"
+                    # proves the string was printed unprompted (a same-tick
+                    # stamp is unknowable order - see _first_answer_stamp)
                     _box_append(line.decode("utf-8", "replace"))
             except OSError:
                 pass
@@ -1319,11 +1326,12 @@ def _run_unix(
                     needle = str(step["wait-serial"])
                     # anti-cheat (IH-14): the answer must be emitted after the
                     # stimulus write asked for it (see _first_answer_stamp).
-                    # Deterministic in the condemning direction (a chunk cannot
-                    # be ingested before it was printed); the justifying
-                    # direction is theoretically spoofable within the pipe lag
-                    # (sub-millisecond, not attacker-controlled) - zero-waits
-                    # covers the exit case.
+                    # A strictly-earlier ingestion stamp condemns
+                    # deterministically (a chunk cannot be ingested before it
+                    # was printed); a same-tick stamp is unknowable order, not
+                    # evidence - condemning it produced field false-positives
+                    # on coarse-clock CI. The exit case is covered by
+                    # zero-waits below.
                     while True:
                         stamp = _first_answer_stamp(box, needle, last_trigger_stamp)
                         if stamp is not None:
