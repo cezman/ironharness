@@ -94,11 +94,15 @@ classes, not a single number. LLM config — environment variables: `LLM_BASE_UR
 - **Task code runs unsandboxed**: locally executed task code - plant controllers
   (`python -m ironbench.plant`) and firmware on the unix/real targets - runs as
   local processes with your user's rights (wokwi firmware runs in the Wokwi
-  cloud instead). A process boundary bounds hangs and crashes only - it is not
-  a filesystem or network sandbox. Plant controllers get a throwaway working
+  cloud instead). A process boundary bounds hangs and crashes only - it is not a
+  filesystem or network sandbox. Plant controllers get a throwaway working
   directory (relative writes stay inside the run artifacts), but they can read
   or write anything the user can. Only run tasks from authors you trust; for
   hostile code use a VM or a container.
+- **Known measurement caveat**: the firmware's serial output is fed back into
+  the solving model's prompt as feedback. It cannot flip the PASS/FAIL verdict
+  (scoring is done by the runner), but a model can be steered by its own
+  firmware's output - an accepted distortion of the benchmark.
 - Transports are not restricted to specific hosts/ports by default — the operator
   (you) decides what the agent may reach, optionally via the access policy below;
   every operation is journaled for audit. Flash/erase failures are journaled with
