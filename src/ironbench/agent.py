@@ -228,8 +228,9 @@ class AttemptResult:
     # same vocabulary as TaskResult.error_kind: "none" (solved, or the last run
     # was clean but the checks missed), "infra" (environment/LLM-server failure),
     # "timeout", "run" (a verdict on the agent's code - crash, cheat, or the LLM
-    # never produced runnable code). Machine-readable for results.jsonl and the
-    # report - consumers must not parse the free-form error text.
+    # never produced runnable code). Machine-readable for the campaign data
+    # (results.jsonl) and the journal - consumers must not parse the free-form
+    # error text.
     error_kind: str = ERROR_NONE
 
 
