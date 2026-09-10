@@ -29,7 +29,15 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from ironbench.runner import find_env_file, is_infra_error, load_env_file, run_task
+from ironbench.runner import (
+    ERROR_INFRA,
+    ERROR_NONE,
+    ERROR_RUN,
+    find_env_file,
+    is_infra_error,
+    load_env_file,
+    run_task,
+)
 from ironbench.tasks import Task
 
 SYSTEM_PROMPT = (
@@ -216,6 +224,13 @@ class AttemptResult:
     duration_sec: float
     work_dir: Path
     error: str | None = None
+    # structured classification of WHY the attempt ended the way it did (IH-22),
+    # same vocabulary as TaskResult.error_kind: "none" (solved, or the last run
+    # was clean but the checks missed), "infra" (environment/LLM-server failure),
+    # "timeout", "run" (a verdict on the agent's code - crash, cheat, or the LLM
+    # never produced runnable code). Machine-readable for results.jsonl and the
+    # report - consumers must not parse the free-form error text.
+    error_kind: str = ERROR_NONE
 
 
 def solve_attempt(
@@ -244,14 +259,18 @@ def solve_attempt(
     solved = False
     error: str | None = None
     iterations = 0
+    llm_failed = False  # the loop stopped on the LLM side, not on a run verdict
+    run_kind: str | None = None  # error_kind of the last runner verdict; None = never ran
     while iterations < cfg.max_iterations:
         iterations += 1
         try:
             response = llm(cfg, messages)
         except (OSError, ValueError, LookupError, TypeError) as e:
             # network/HTTP/broken LLM server response (incl. an empty "choices") -
-            # an attempt error, not a runner crash
+            # an attempt error, not a runner crash; for the agent this is
+            # environment-level (it cannot fix the server)
             error = f"LLM error: {e}"
+            llm_failed = True
             break
         code = extract_code(response)
         if code is None:
@@ -268,6 +287,7 @@ def solve_attempt(
         if journal:
             journal("iteration", {"task": task.name, "attempt": attempt, "n": iterations})
         result = runner(work_task, out_dir=attempt_dir, journal=journal)
+        run_kind = result.error_kind
         # iteration artifacts: the code and serial output are saved before the next move overwrites them
         (attempt_dir / f"iter-{iterations}.main.py").write_text(code, encoding="utf-8")
         if result.serial_log and result.serial_log.is_file():
@@ -297,6 +317,20 @@ def solve_attempt(
     if error is None and not solved:
         error = f"iteration limit ({cfg.max_iterations}) exhausted"
 
+    # Attempt-level classification (IH-22): a loop-side LLM failure is infra;
+    # otherwise the last runner verdict carries (including "none" - the
+    # firmware ran clean but the checks did not pass); a failure with no
+    # verdict at all (the LLM never produced runnable code) is a run-level
+    # fault of the agent's output.
+    if solved:
+        error_kind = ERROR_NONE
+    elif llm_failed:
+        error_kind = ERROR_INFRA
+    elif run_kind is not None:
+        error_kind = run_kind
+    else:
+        error_kind = ERROR_RUN
+
     duration = round(time.monotonic() - start, 2)
     return AttemptResult(
         task=task.name,
@@ -306,6 +340,7 @@ def solve_attempt(
         duration_sec=duration,
         work_dir=work_dir,
         error=error,
+        error_kind=error_kind,
     )
 
 
@@ -338,6 +373,7 @@ def solve(
                     "model": cfg.model,
                     "duration_sec": r.duration_sec,
                     "error": r.error,
+                    "error_kind": r.error_kind,
                 },
             )
     return results

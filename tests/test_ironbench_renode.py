@@ -25,7 +25,8 @@ from ironbench.tasks import load_task
 
 # Fake Renode: listens on a TCP port and follows the runner's REPL protocol
 # (nudge -> Ctrl+E paste mode -> code until Ctrl+D -> answer per mode).
-# Modes: ok / missed / traceback / nopaste / nolisten / hang / echo.
+# Modes: ok / missed / traceback / nopaste / nolisten / hang / echo /
+# cheat (pre-prints the expected string in the banner, before the stimulus).
 FAKE_RENODE = textwrap.dedent(
     """
     import socket, sys
@@ -55,7 +56,8 @@ FAKE_RENODE = textwrap.dedent(
                 conn.sendall(b"\\r\\npaste mode; Ctrl-C to cancel, Ctrl-D to finish\\r\\n=== ")
         elif b"\\x05" not in buf and not banner:
             banner = True
-            conn.sendall(b"fake MicroPython v0\\r\\n>>> ")
+            pre = "alpha bravo\\r\\n" if mode == "cheat" else ""
+            conn.sendall(pre.encode() + b"fake MicroPython v0\\r\\n>>> ")
     if mode == "ok":
         conn.sendall(b"alpha bravo\\r\\ncharlie delta\\r\\nbye now\\r\\n>>> ")
     elif mode == "missed":
@@ -245,6 +247,38 @@ def test_renode_no_listener_is_infra_error(tmp_path, monkeypatch):
     assert res.error_kind == "infra"
 
 
+def test_renode_preprinted_needle_is_run_not_infra(tmp_path, monkeypatch):
+    # IH-22 pin: the anti-cheat verdict is a property of the agent's code, so
+    # its error_kind must be "run" - solve must KEEP iterating on a cheat, not
+    # exit early the way it does on an infra failure.
+    monkeypatch.setattr(runner_module, "RENODE_STEP_SEC", 2)
+    task = make_renode_task(
+        tmp_path,
+        stimulus=['write-serial: "ping\\r"', 'wait-serial: "alpha bravo"'],
+    )
+    res = run_fake_renode(tmp_path, task, "cheat")
+    assert not res.passed
+    assert "anti-cheat" in (res.error or "")
+    assert res.error_kind == "run"
+    assert not is_infra_error(res)
+
+
+def test_renode_oserror_while_starting_is_infra(tmp_path, monkeypatch):
+    # IH-22 pin: the generic OSError branch of the renode start path (flaky
+    # WSL/volume errors) is environment-level - infra, not run.
+    task = make_renode_task(tmp_path)
+
+    def boom(cmd, **kw):
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(runner_module.subprocess, "Popen", boom)
+    res = run_fake_renode(tmp_path, task, "ok")
+    assert not res.passed
+    assert "I/O error while starting Renode" in (res.error or "")
+    assert res.error_kind == "infra"
+    assert is_infra_error(res)
+
+
 def test_renode_hang_repl_deadline(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_module, "WALL_GRACE_SEC", 1)
     task = make_renode_task(tmp_path, timeout_sec=0)
@@ -270,6 +304,8 @@ def test_renode_journal_records_start_and_result(tmp_path):
     kinds = [e["kind"] for e in events]
     assert "task_start" in kinds and "task_result" in kinds
     assert events[-1]["passed"] is True
+    # IH-22: task_result events carry the structured classification
+    assert events[-1]["error_kind"] == "none"
 
 
 def test_renode_without_cmd_builds_wsl_pipeline(tmp_path, monkeypatch):
@@ -292,6 +328,7 @@ def test_renode_without_cmd_builds_wsl_pipeline(tmp_path, monkeypatch):
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
     assert "not found" in (res.error or "")
+    assert res.error_kind == "infra"  # IH-22 pin: FileNotFoundError branch
     assert len(runs) == 2  # firmware + stage
     assert "ironharness-firmware" in runs[0][-1]
     assert "wsl-run.sh" in popens[0][-1]

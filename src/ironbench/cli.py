@@ -223,6 +223,7 @@ def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path):
                             "model": cfg.model,
                             "duration_sec": r.duration_sec,
                             "error": r.error,
+                            "error_kind": r.error_kind,
                         },
                         ensure_ascii=False,
                     )
