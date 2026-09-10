@@ -12,7 +12,6 @@ fast responder must keep passing - the anchor must not punish quick answers.
 from __future__ import annotations
 
 import dataclasses
-import shutil
 import sys
 import textwrap
 from pathlib import Path
@@ -140,8 +139,16 @@ def test_legal_fast_responder_passes(tmp_path):
 def test_dump_and_exit_cheater_fails_with_zero_waits(tmp_path):
     res = run_synthetic(tmp_path, DUMP_EXIT)
     assert not res.passed
-    assert "exited before the first wait-serial" in (res.error or "")
-    assert res.error_kind == "run"  # a cheat verdict, not an environment failure
+    # Two verdicts are both valid here and the reader-thread timing decides
+    # which one lands: "pre-printed" when the dump chunks were ingested before
+    # the wait, "exited before the first wait-serial" when EOF won the race.
+    # Pin the machine-readable kind and the verdict family, not the wording.
+    assert res.error_kind == "run"
+    assert (res.error or "").startswith("anti-cheat:")
+    assert (
+        "pre-printed output" in (res.error or "")
+        or "exited before the first wait-serial" in (res.error or "")
+    )
 
 
 def test_dump_and_stay_alive_cheater_fails_with_anchor(tmp_path):
@@ -156,11 +163,12 @@ def test_dump_and_stay_alive_cheater_fails_with_anchor(tmp_path):
 GOLDEN_UNIX = ["coop-scheduler", "frame-corrupt", "noisy-frames", "uart-menu", "watchdog"]
 
 
-@pytest.mark.skipif(shutil.which("wsl") is None, reason="needs WSL micropython")
 @pytest.mark.parametrize("name", GOLDEN_UNIX)
-def test_golden_unix_survives_anticheat(name, tmp_path):
+def test_golden_unix_survives_anticheat(name, tmp_path, wsl_unix_ready):
     # Regression guard for the anti-cheat: the real golden solutions answer the
     # stimulus and must keep passing with the anchor active.
+    if not wsl_unix_ready:
+        pytest.skip("needs a WSL distro with micropython")
     task = load_task(TASKS_DIR / name)
     res = run_task(task, out_dir=tmp_path / name)
     assert res.passed, (res.error, res.missed)

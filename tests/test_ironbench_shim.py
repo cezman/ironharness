@@ -10,7 +10,6 @@ WSL-guarded like the other golden unix tasks.
 from __future__ import annotations
 
 import importlib.util
-import shutil
 import sys
 import textwrap
 from pathlib import Path
@@ -251,8 +250,9 @@ def test_non_numeric_tail_is_not_an_event(tmp_path):
     assert any("events" in m for m in res.missed)
 
 
-@pytest.mark.skipif(shutil.which("wsl") is None, reason="needs WSL micropython")
-def test_golden_blink_unix_passes(tmp_path):
+def test_golden_blink_unix_passes(tmp_path, wsl_unix_ready):
+    if not wsl_unix_ready:
+        pytest.skip("needs a WSL distro with micropython")
     task = load_task(TASKS_DIR / "blink-unix")
     res = run_task(task, out_dir=tmp_path / "out")
     assert res.passed, (res.error, res.missed)

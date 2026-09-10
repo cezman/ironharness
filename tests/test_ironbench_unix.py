@@ -163,6 +163,24 @@ def test_missing_entry_is_kind_infra(tmp_path):
     assert runner_module.is_infra_error(res)
 
 
+def test_first_answer_stamp_same_tick_is_genuine():
+    # CI field failure (windows runners): a legal fast answer can be ingested
+    # within the same monotonic clock tick as the stimulus write. Same-tick
+    # order is unknowable - the benefit of the doubt goes to the agent; only a
+    # strictly-earlier stamp condemns as pre-printed.
+    import threading
+
+    box = {
+        "text": "echo: hi\n",
+        "chunks": [(100.0, "echo: hi\n")],
+        "lock": threading.Lock(),
+    }
+    assert runner_module._first_answer_stamp(box, "echo: hi", 100.0) == 100.0
+    assert runner_module._first_answer_stamp(box, "echo: hi", 101.0) is None
+    assert runner_module._first_answer_stamp(box, "echo: hi", 99.0) == 100.0
+    assert runner_module._first_answer_stamp(box, "echo: never", 100.0) is None
+
+
 def test_unexecutable_unix_cmd_is_kind_infra(tmp_path):
     # Popen fails outright (a directory is not executable): an environment
     # failure the agent cannot fix - classified infra, not "run"/"none".
