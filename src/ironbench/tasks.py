@@ -63,6 +63,17 @@ PLANT_DISTURBANCE_KEYS = frozenset({"at", "ambient"})
 # serial log as "mqtt: <topic> <payload>" - so expect/fail patterns work on MQTT too.
 MQTT_KEYS = frozenset({"client_id"})
 
+# The shim section (unix target): the runner stages a harness-provided module
+# (e.g. machine.py, see ironbench/shims/) next to the entry so `import machine`
+# resolves to the shim. The shim logs hardware events to stdout with timestamps.
+SHIM_NAMES = ("machine",)
+
+# The events section (unix target): timing-aware scoring over shim event lines.
+# pattern matches an event line; its trailing number is the event timestamp (ms).
+# count_min = minimum number of matched events; period_ms = [lo, hi] bounds for
+# every consecutive interval between matched events.
+EVENTS_KEYS = frozenset({"pattern", "count_min", "period_ms"})
+
 # Benchmark taxonomy: the class tag is the core skill of the task, level is the
 # difficulty step 1..5. The report shows the model's per-class profile, not one number
 CLASS_TAGS = ("io", "data", "protocol", "fsm", "control", "resilience")
@@ -91,6 +102,8 @@ class Task:
     noise: dict = dataclasses.field(default_factory=dict)
     plant: dict = dataclasses.field(default_factory=dict)
     mqtt: dict = dataclasses.field(default_factory=dict)
+    shim: str = ""
+    events: tuple[dict, ...] = ()
     tags: tuple[str, ...] = ()
     level: int | None = None
 
@@ -106,8 +119,9 @@ def load_task(task_dir: Path) -> Task:
     name = raw.get("name")
     if not name or not isinstance(name, str):
         raise ValueError(f"{task_file}: the required field name (string) is missing")
-    expect = raw.get("expect", [])
-    fail = raw.get("fail", [])
+    # `key:` with no items parses as None - an empty section, not an error
+    expect = raw.get("expect") or []
+    fail = raw.get("fail") or []
     if not isinstance(expect, list) or not all(isinstance(p, str) for p in expect):
         raise ValueError(f"{task_file}: expect must be a list of strings")
     if not isinstance(fail, list) or not all(isinstance(p, str) for p in fail):
@@ -245,6 +259,38 @@ def load_task(task_dir: Path) -> Task:
                 f"{task_file}: unknown mqtt keys {sorted(unknown_mqtt)} "
                 f"(allowed: {sorted(MQTT_KEYS)})"
             )
+    shim = str(raw.get("shim", ""))
+    if shim and target != "unix":
+        raise ValueError(f"{task_file}: the shim is only supported by the unix target")
+    if shim and shim not in SHIM_NAMES:
+        raise ValueError(f"{task_file}: unknown shim {shim!r} (allowed: {sorted(SHIM_NAMES)})")
+    events = raw.get("events", [])
+    if events and target != "unix":
+        raise ValueError(f"{task_file}: the events section is only supported by the unix target")
+    if not isinstance(events, list) or not all(isinstance(e, dict) for e in events):
+        raise ValueError(f"{task_file}: events must be a list of mappings")
+    for ev in events:
+        unknown_ev = set(ev) - EVENTS_KEYS
+        if unknown_ev:
+            raise ValueError(
+                f"{task_file}: unknown events keys {sorted(unknown_ev)} "
+                f"(allowed: {sorted(EVENTS_KEYS)})"
+            )
+        if not isinstance(ev.get("pattern"), str) or not ev["pattern"]:
+            raise ValueError(f"{task_file}: events.pattern must be a non-empty string")
+        count_min = ev.get("count_min")
+        if isinstance(count_min, bool) or not isinstance(count_min, int) or count_min < 1:
+            raise ValueError(f"{task_file}: events.count_min must be an integer >= 1")
+        period = ev.get("period_ms")
+        if period is not None:
+            if (
+                not isinstance(period, list)
+                or len(period) != 2
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in period)
+            ):
+                raise ValueError(f"{task_file}: events.period_ms must be [lo, hi] numbers")
+            if not 0 < period[0] < period[1]:
+                raise ValueError(f"{task_file}: events.period_ms must satisfy 0 < lo < hi")
     plant_section = raw.get("plant", {})
     if plant_section and target != "plant":
         raise ValueError(f"{task_file}: the plant section is only supported by the plant target")
@@ -351,6 +397,8 @@ def load_task(task_dir: Path) -> Task:
         noise=dict(noise),
         plant=dict(plant_section),
         mqtt=dict(mqtt_section),
+        shim=shim,
+        events=tuple(events),
         tags=tuple(tags),
         level=level,
     )
