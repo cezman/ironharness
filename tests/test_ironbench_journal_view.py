@@ -10,6 +10,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from io_core.journal import JsonlJournal
 from ironbench.cli import main as cli_main
 from ironbench.journal_view import build_view, write_view
@@ -69,7 +71,7 @@ def test_unparseable_lines_counted_not_dropped(tmp_path):
 
 
 def test_hostile_payload_stays_inert(tmp_path):
-    hostile = '</script><img src=x onerror=alert(1)><script>alert(2)</script>'
+    hostile = '</script><img src=x onerror=alert(1)><script>alert(2)</script><!-- <script>'
     journal = write_journal(
         tmp_path, [{"ts": 1.0, "seq": 1, "actor": "a", "kind": "read", "conn": "esp", "data_hex": hostile}]
     )
@@ -78,11 +80,77 @@ def test_hostile_payload_stays_inert(tmp_path):
     # the data block survived: exactly the two real </script> closers (the
     # ih-data block and the viewer script), nothing opened by journal text
     assert html_text.count("</script") == 2
-    # the hostile sequence cannot appear unescaped in the file
+    # the hostile sequences cannot appear unescaped in the file
     assert "</script><img" not in html_text
-    # and the JSON round-trips to the original payload text ( \/ decodes to / )
+    assert "<!-- <script>" not in html_text
+    # and the JSON round-trips to the original payload text ( \/ and \u0021 decode)
     view = read_view_data(html_text)
     assert view["rows"][0]["p"]["data_hex"] == hostile
+
+
+def test_token_in_source_name_is_never_expanded(tmp_path):
+    # F1 regression: a journal NAME containing a template token must not get
+    # expanded into the page (token expansion = HTML injection into title/h1)
+    journal = tmp_path / "evil__DATA_JSON____SUMMARY__.jsonl"
+    journal.write_text(
+        json.dumps(
+            {"ts": 1.0, "seq": 1, "actor": "a", "kind": "read", "x": "<!-- <script>alert(1)</script>"}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    out_file, _ = write_view(journal, tmp_path / "view.html")
+    html_text = out_file.read_text(encoding="utf-8")
+    head = html_text[: DATA_RE.search(html_text).start()]
+    assert "evil__DATA_JSON____SUMMARY__.jsonl" in head  # the name itself, escaped
+    # the payload is data, not markup: its script text stays inside the blob
+    assert "alert(1)" not in head
+    assert html_text.count("</script") == 2
+    view = read_view_data(html_text)
+    assert view["rows"][0]["p"]["x"] == "<!-- <script>alert(1)</script>"
+
+
+def test_non_finite_floats_do_not_kill_the_page(tmp_path):
+    # F3 regression: bare NaN/Infinity from json.dumps is invalid JSON for a
+    # browser's JSON.parse - the dynamic view would silently die client-side
+    journal = write_journal(
+        tmp_path,
+        [{"ts": 1.0, "seq": 1, "actor": "a", "kind": "op", "v": float("nan"), "w": float("inf")}],
+    )
+    out_file, _ = write_view(journal, tmp_path / "view.html")
+    view = read_view_data(out_file.read_text(encoding="utf-8"))
+    assert view["rows"][0]["p"]["v"] == "nan" and view["rows"][0]["p"]["w"] == "inf"
+
+
+def test_row_time_survives_extreme_timestamps(tmp_path):
+    # F5 regression: pre-epoch ts (OSError on Windows), overflow ts and
+    # non-numeric ts must not crash the view - the row keeps a string time
+    journal = write_journal(
+        tmp_path,
+        [
+            {"ts": -1.0, "seq": 1, "actor": "a", "kind": "op"},
+            {"ts": 1e30, "seq": 2, "actor": "a", "kind": "op"},
+            {"ts": "junk", "seq": 3, "actor": "a", "kind": "op"},
+        ],
+    )
+    view = build_view(journal)
+    assert all(isinstance(r["time"], str) for r in view["rows"])
+    # rows sorted by ts with junk falling back to 0.0: [-1.0, junk, 1e30]
+    assert view["rows"][1]["time"] == ""  # non-numeric ts: no time, row kept
+    assert view["rows"][2]["time"] == "1e+30"  # overflow: raw value kept
+    out_file, _ = write_view(journal, tmp_path / "view.html")
+    assert "3 event(s)" in out_file.read_text(encoding="utf-8")
+
+
+def test_view_refuses_to_overwrite_the_journal(tmp_path):
+    # F2 regression: --out-file equal to the journal must not destroy the
+    # journal (the artifact "no log = didn't happen" protects)
+    journal = write_journal(tmp_path, [{"ts": 1.0, "seq": 1, "actor": "a", "kind": "op"}])
+    before = journal.read_bytes()
+    with pytest.raises(ValueError):
+        write_view(journal, journal)
+    assert cli_main(["journal", str(journal), "--out-file", str(journal)]) == 2
+    assert journal.read_bytes() == before
 
 
 def test_truncation_keeps_head_and_tail_and_states_it(tmp_path):

@@ -196,7 +196,11 @@ def main(argv=None) -> int:
             print(f"journal not found: {journal_path}")
             return 2
         out_file = args.out_file or journal_path.with_name(journal_path.name + ".view.html")
-        _, view = write_view(journal_path, out_file)
+        try:
+            _, view = write_view(journal_path, out_file)
+        except ValueError as exc:
+            print(f"journal view refused: {exc}")
+            return 2
         notes = []
         if view["skipped_lines"]:
             notes.append(f"{view['skipped_lines']} unparseable line(s) skipped")

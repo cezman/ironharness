@@ -3,11 +3,16 @@ operation journal - the "thin viewer over artifacts" allowed by the 2026-09-07
 product decision. No server, no external assets: one HTML file opens offline.
 
 Trust boundary: journal payloads carry firmware/agent-controlled text (serial
-data, file names, LLM error strings). Two mechanisms keep it inert: the events
-travel to the page as JSON inside a <script type="application/json"> block with
-every "</" sequence escaped to "<\\/" (so the block can never terminate early),
-and the table is rendered client-side through textContent only - nothing from
-the journal is ever interpreted as HTML.
+data, file names, LLM error strings). Mechanisms that keep it inert: the events
+travel to the page as JSON inside a <script type="application/json"> block
+where neither "</" (an end tag could terminate the block early) nor "<!--"
+(script-data double-escape could make the real closer fail) survives - both
+are rewritten in a JSON-compatible, round-tripping way; the table renders
+client-side through textContent only; template tokens are substituted
+section-by-section so a value containing a token string can never be expanded
+by a later pass. The client JS is dependency-free and is not executed by
+pytest - its correctness is pinned by structure tests plus manual browser
+review rounds.
 
 Unparseable lines are counted and stated in the header, never silently dropped
 ("no log = didn't happen"). Past MAX_EVENTS the middle of the journal is
@@ -19,6 +24,8 @@ from __future__ import annotations
 
 import html
 import json
+import math
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -198,6 +205,19 @@ def _as_str(value) -> str:
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
 
 
+def _sanitize(value):
+    """Non-finite floats become strings: json.dumps would emit bare NaN/
+    Infinity, which Python accepts but a browser's JSON.parse rejects - the
+    whole dynamic view would silently die client-side."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _sanitize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize(v) for v in value]
+    return value
+
+
 def build_view(journal: Path, *, max_events: int = MAX_EVENTS, now: float | None = None) -> dict:
     """The view model: normalized rows (file order, stable-sorted by ts),
     facets for the filters, and honest counters for skipped/omitted lines."""
@@ -218,7 +238,9 @@ def build_view(journal: Path, *, max_events: int = MAX_EVENTS, now: float | None
                 "actor": _as_str(e.get("actor", "?")),
                 "kind": _as_str(e.get("kind", "?")),
                 "conn": _as_str(e["conn"]) if "conn" in e else "",
-                "p": {k: v for k, v in e.items() if k not in SERVICE_KEYS and k != "conn"},
+                "p": _sanitize(
+                    {k: v for k, v in e.items() if k not in SERVICE_KEYS and k != "conn"}
+                ),
             }
         )
     stamps = [e["ts"] for e in events if isinstance(e.get("ts"), (int, float))]
@@ -259,19 +281,35 @@ def _summary_html(view: dict) -> str:
 
 
 def render_html(view: dict) -> str:
-    """The self-contained page. Data embedding invariant: no "</" sequence may
-    survive inside the JSON blob, or the script block could terminate early
-    and journal text would become markup."""
-    blob = json.dumps(view, ensure_ascii=False, default=str).replace("</", "<\\/")
-    return (
-        VIEW_TEMPLATE.replace("__SOURCE__", html.escape(view["source"]))
-        .replace("__SUMMARY__", _summary_html(view))
-        .replace("__DATA_JSON__", blob)
-    )
+    """The self-contained page. Token substitution is single-pass over the
+    template: substituted values are never rescanned, so a source/payload
+    value that happens to contain a token string cannot be expanded later
+    (token expansion = HTML injection). Data embedding invariant: the JSON
+    blob may contain neither "</" (an end tag could terminate the block
+    early) nor "<!--" (script-data double-escape could make the real closer
+    fail) - both are rewritten in a JSON-compatible, round-tripping way."""
+    values = {
+        "SOURCE": html.escape(view["source"]),
+        "SUMMARY": _summary_html(view),
+    }
+    blob = json.dumps(view, ensure_ascii=False, default=str)
+    blob = blob.replace("</", "<\\/").replace("<!--", "<\\u0021--")
+    parts: list[str] = []
+    pos = 0
+    for m in re.finditer(r"__(SOURCE|SUMMARY|DATA_JSON)__", VIEW_TEMPLATE):
+        parts.append(VIEW_TEMPLATE[pos : m.start()])
+        parts.append(blob if m.group(1) == "DATA_JSON" else values[m.group(1)])
+        pos = m.end()
+    parts.append(VIEW_TEMPLATE[pos:])
+    return "".join(parts)
 
 
 def write_view(journal: Path, out_file: Path, *, max_events: int = MAX_EVENTS) -> tuple[Path, dict]:
-    """The view HTML next to the journal; returns (out_file, view)."""
+    """The view HTML next to the journal; returns (out_file, view). Refuses to
+    overwrite the journal itself: the view must never destroy the artifact it
+    renders ("no log = didn't happen")."""
+    if out_file.exists() and out_file.resolve() == journal.resolve():
+        raise ValueError(f"refusing to overwrite the journal with its view: {out_file}")
     view = build_view(journal, max_events=max_events)
     out_file.parent.mkdir(parents=True, exist_ok=True)
     out_file.write_text(render_html(view), encoding="utf-8")
