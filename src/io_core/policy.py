@@ -63,6 +63,13 @@ def parse_allowed_hosts(raw: str | None) -> tuple[tuple[str, int | None], ...]:
         part = part.strip()
         if not part:
             continue
+        if part.count(":") > 1:
+            # an IPv6 literal would be silently split into a bogus host:port
+            # that never matches - reject it loudly instead
+            raise ValueError(
+                f"{ALLOWED_HOSTS_ENV}: IPv6 literals are not supported "
+                f"(got {part!r}); use an IPv4 address or a hostname"
+            )
         host, sep, port = part.rpartition(":")
         if not sep:
             entries.append((part.casefold(), None))

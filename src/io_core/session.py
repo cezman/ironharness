@@ -16,6 +16,15 @@ from typing import Any
 from io_core.errors import PolicyViolation
 from io_core.file_sandbox import FileSandbox
 from io_core.journal import JsonlJournal
+from io_core.limits import (
+    TRANSPORT_DEADLINE_ENV,
+    TRANSPORT_RATE_ENV,
+    DeadlineTransport,
+    RateLimitedTransport,
+    RateLimiter,
+    parse_transport_deadline,
+    parse_transport_rate,
+)
 from io_core.modbus_transport import ModbusTransport
 from io_core.mqtt_transport import MqttTransport
 from io_core.policy import MAX_CONNECTIONS_ENV, AccessPolicy, parse_max_connections
@@ -50,6 +59,7 @@ class Session:
         self.journal = JsonlJournal(journal_path, actor=actor)
         self.sandbox = FileSandbox(sandbox_root, on_event=self.journal)
         self._transports: dict[str, Any] = {}
+        self._kinds: dict[str, str] = {}
         self._lock = threading.RLock()
 
     def _check_free(self, name: str) -> None:
@@ -92,6 +102,22 @@ class Session:
 
         return hook
 
+    def _apply_limits(self, t):
+        """Wraps a fresh transport in the configured deadline/rate limits -
+        the 'transports always have timeouts and quotas' convention for the
+        standard session (IH-17). Deadline is on by default (600 s,
+        IRONHARNESS_TRANSPORT_DEADLINE to reconfigure or 0/off to disable);
+        the rate limiter only when IRONHARNESS_TRANSPORT_RATE=max/window is
+        set. Env is re-read per open, like the access policy."""
+        deadline = parse_transport_deadline(os.environ.get(TRANSPORT_DEADLINE_ENV))
+        if deadline is not None:
+            t = DeadlineTransport(t, deadline)
+        rate = parse_transport_rate(os.environ.get(TRANSPORT_RATE_ENV))
+        if rate is not None:
+            max_calls, per_seconds = rate
+            t = RateLimitedTransport(t, RateLimiter(max_calls, per_seconds))
+        return t
+
     # --- serial ---
 
     def serial_open(
@@ -104,11 +130,14 @@ class Session:
             self._check_kind("serial")
             self._check_free(name)
             self._check_connection_limit()
-            t = SerialTransport(
-                port, baudrate=baudrate, timeout=timeout, on_event=self._journal_for(name)
+            t = self._apply_limits(
+                SerialTransport(
+                    port, baudrate=baudrate, timeout=timeout, on_event=self._journal_for(name)
+                )
             )
             t.open()
             self._transports[name] = t
+            self._kinds[name] = "serial"
 
     def serial_write(self, name: str, data_hex: str) -> int:
         return self._get(name).write(bytes.fromhex(data_hex))
@@ -134,15 +163,18 @@ class Session:
             self._check_kind("modbus")
             self._check_free(name)
             self._check_connection_limit()
-            t = ModbusTransport(
-                host,
-                port=port,
-                device_id=device_id,
-                timeout=timeout,
-                on_event=self._journal_for(name),
+            t = self._apply_limits(
+                ModbusTransport(
+                    host,
+                    port=port,
+                    device_id=device_id,
+                    timeout=timeout,
+                    on_event=self._journal_for(name),
+                )
             )
             t.open()
             self._transports[name] = t
+            self._kinds[name] = "modbus"
 
     def modbus_read(self, name: str, address: int, count: int = 1) -> list[int]:
         return self._get(name).read_holding(address, count)
@@ -169,15 +201,18 @@ class Session:
             self._check_kind("mqtt")
             self._check_free(name)
             self._check_connection_limit()
-            t = MqttTransport(
-                host,
-                port=port,
-                client_id=client_id,
-                timeout=timeout,
-                on_event=self._journal_for(name),
+            t = self._apply_limits(
+                MqttTransport(
+                    host,
+                    port=port,
+                    client_id=client_id,
+                    timeout=timeout,
+                    on_event=self._journal_for(name),
+                )
             )
             t.open()
             self._transports[name] = t
+            self._kinds[name] = "mqtt"
 
     def mqtt_publish(self, name: str, topic: str, payload: str, *, qos: int = 0, retain: bool = False) -> None:
         self._get(name).publish(topic, payload, qos=qos, retain=retain)
@@ -232,12 +267,15 @@ class Session:
 
     def _close_typed(self, name: str, cls: type, kind: str) -> None:
         # the name is freed before close(): a failing close must not leave a
-        # half-closed transport occupying the name
+        # half-closed transport occupying the name. The kind is tracked in a
+        # registry (not isinstance): since IH-17 the registry holds limit
+        # wrappers, not bare transports
         with self._lock:
             t = self._get(name)
-            if not isinstance(t, cls):
+            if self._kinds.get(name) != kind:
                 raise KeyError(f"transport {name!r} is not a {kind} transport")
             del self._transports[name]
+            del self._kinds[name]
             t.close()
 
     def serial_close(self, name: str) -> None:
@@ -264,6 +302,7 @@ class Session:
         with self._lock:
             transports = list(self._transports.values())
             self._transports.clear()
+            self._kinds.clear()
         for t in transports:
             try:
                 t.close()

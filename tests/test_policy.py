@@ -269,3 +269,12 @@ def test_parse_max_connections():
         parse_max_connections("two")
     with pytest.raises(ValueError):
         parse_max_connections("-1")
+
+
+def test_allowed_hosts_rejects_ipv6_literal():
+    # an IPv6 literal would be silently split into a bogus host:port that never
+    # matches - rejected loudly instead (IH-15 review follow-up)
+    from io_core.policy import parse_allowed_hosts
+
+    with pytest.raises(ValueError, match="IPv6"):
+        parse_allowed_hosts("fd00::1")
