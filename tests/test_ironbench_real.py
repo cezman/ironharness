@@ -14,7 +14,7 @@ import yaml
 
 from ironbench import realhw
 from ironbench.realhw import RealRepl
-from ironbench.runner import run_task
+from ironbench.runner import is_infra_error, run_task
 from ironbench.tasks import load_task
 
 ECHO_ENTRY = (
@@ -156,6 +156,32 @@ def test_real_target_transport_exception_is_infra(tmp_path):
     res = run_task(task, out_dir=tmp_path / "out", real_transport=Dead())
     assert not res.passed
     assert "failed to talk to the board" in (res.error or "")
+    assert res.error_kind == "infra"  # IH-22 pin: board I/O is environment-level
+
+
+def test_real_target_preprinted_needle_is_run_not_infra(tmp_path):
+    # IH-22 pin: the anti-cheat verdict on the real target is a property of the
+    # agent's code (error_kind "run"), so solve must keep iterating instead of
+    # exiting early as it would on an infra failure. The cheater is modeled at
+    # the firmware level: the expected line prints right at code start (boot()
+    # clears the buffer before staging, so a transport-level pre-print would
+    # not reach the run output).
+    class PrePrinter(FakeBoard):
+        def write(self, data: bytes) -> int:
+            if b"\x04" in data and self._paste_buf:  # Ctrl+D runs the staged code
+                self._emit("echo: pre-hack\r\n")
+            return super().write(data)
+
+    task = make_real_task(
+        tmp_path,
+        stimulus=('write-serial: "go\\n"', 'wait-serial: "echo: pre-hack"'),
+        expect=("echo ready",),
+    )
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=PrePrinter())
+    assert not res.passed
+    assert "anti-cheat" in (res.error or "")
+    assert res.error_kind == "run"
+    assert not is_infra_error(res)
 
 
 def test_task_yaml_roundtrip():

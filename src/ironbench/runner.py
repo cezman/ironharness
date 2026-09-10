@@ -364,6 +364,7 @@ def _journal_result(journal, result: TaskResult) -> None:
                 "missed": list(result.missed),
                 "hit_fail": list(result.hit_fail),
                 "error": result.error,
+                "error_kind": result.error_kind,
             },
         )
 
