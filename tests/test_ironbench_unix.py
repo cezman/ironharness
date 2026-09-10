@@ -163,6 +163,16 @@ def test_missing_entry_is_kind_infra(tmp_path):
     assert runner_module.is_infra_error(res)
 
 
+def test_unexecutable_unix_cmd_is_kind_infra(tmp_path):
+    # Popen fails outright (a directory is not executable): an environment
+    # failure the agent cannot fix - classified infra, not "run"/"none".
+    task = make_unix_task(tmp_path, expect=("boot ok",))
+    res = run_task(task, out_dir=tmp_path / "out", unix_cmd=str(tmp_path))
+    assert not res.passed
+    assert res.error_kind == "infra"
+    assert runner_module.is_infra_error(res)
+
+
 def test_unix_journal_records_start_and_result(tmp_path):
     task = make_unix_task(tmp_path)
     jpath = tmp_path / "j.jsonl"

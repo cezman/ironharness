@@ -97,6 +97,7 @@ def test_fail_on_cli_error_exit(tmp_path):
     res = run_fake(tmp_path, task, {"FAKE_EXIT": "1"})
     assert not res.passed
     assert res.exit_code == 1
+    assert res.error_kind == "infra"
 
 
 def test_timeout_exit_with_full_patterns_passes(tmp_path):
@@ -123,6 +124,7 @@ def test_wall_clock_timeout_kills_run(tmp_path, monkeypatch):
     assert not res.passed
     assert res.exit_code is None
     assert "timeout" in (res.error or "")
+    assert res.error_kind == "timeout"
 
 
 def test_missing_cli_reports_error(tmp_path):
@@ -130,6 +132,7 @@ def test_missing_cli_reports_error(tmp_path):
     res = run_task(task, out_dir=tmp_path / "out", cli_path="no-such-cli-xyz")
     assert not res.passed
     assert "not found" in (res.error or "")
+    assert res.error_kind == "infra"
 
 
 def test_missing_entry_file_is_clean_fail(tmp_path, monkeypatch):
@@ -138,6 +141,7 @@ def test_missing_entry_file_is_clean_fail(tmp_path, monkeypatch):
     res = run_fake(tmp_path, task, {})
     assert not res.passed
     assert "prepare task" in (res.error or "")
+    assert res.error_kind == "infra"
 
 
 def test_check_patterns_regex():
@@ -312,6 +316,7 @@ def test_real_target_without_port_is_infra_fail(tmp_path, monkeypatch):
     assert res.exit_code is None
     assert "IRONBENCH_REAL_PORT" in (res.error or "")
     assert res.missed == task.expect  # the checks never ran
+    assert res.error_kind == "infra"
 
 
 def test_renode_target_without_section_is_clean_fail(tmp_path, monkeypatch):

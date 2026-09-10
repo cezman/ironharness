@@ -918,6 +918,7 @@ def _run_renode(
         error_kind = ERROR_INFRA
     except OSError as e:
         error = f"I/O error while starting Renode: {e}"
+        error_kind = ERROR_INFRA
     finally:
         if proc is not None:
             _reap(proc)
@@ -1373,6 +1374,7 @@ def _run_unix(
         error_kind = ERROR_INFRA
     except OSError as e:
         error = f"I/O error while starting micropython: {e}"
+        error_kind = ERROR_INFRA
     finally:
         if proc is not None:
             _reap(proc)

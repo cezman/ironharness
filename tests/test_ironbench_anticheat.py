@@ -141,6 +141,7 @@ def test_dump_and_exit_cheater_fails_with_zero_waits(tmp_path):
     res = run_synthetic(tmp_path, DUMP_EXIT)
     assert not res.passed
     assert "exited before the first wait-serial" in (res.error or "")
+    assert res.error_kind == "run"  # a cheat verdict, not an environment failure
 
 
 def test_dump_and_stay_alive_cheater_fails_with_anchor(tmp_path):
