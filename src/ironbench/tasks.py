@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from pathlib import Path
 
 import yaml
@@ -264,7 +265,7 @@ def load_task(task_dir: Path) -> Task:
         raise ValueError(f"{task_file}: the shim is only supported by the unix target")
     if shim and shim not in SHIM_NAMES:
         raise ValueError(f"{task_file}: unknown shim {shim!r} (allowed: {sorted(SHIM_NAMES)})")
-    events = raw.get("events", [])
+    events = raw.get("events") or []
     if events and target != "unix":
         raise ValueError(f"{task_file}: the events section is only supported by the unix target")
     if not isinstance(events, list) or not all(isinstance(e, dict) for e in events):
@@ -291,6 +292,13 @@ def load_task(task_dir: Path) -> Task:
                 raise ValueError(f"{task_file}: events.period_ms must be [lo, hi] numbers")
             if not 0 < period[0] < period[1]:
                 raise ValueError(f"{task_file}: events.period_ms must satisfy 0 < lo < hi")
+    # compile every regex at load time: an invalid pattern must be an authoring
+    # error (ValueError with the path), not a runner crash at scoring time
+    for p in (*expect, *fail, *(ev["pattern"] for ev in events)):
+        try:
+            re.compile(p)
+        except re.error as e:
+            raise ValueError(f"{task_file}: invalid regex {p!r}: {e}") from e
     plant_section = raw.get("plant", {})
     if plant_section and target != "plant":
         raise ValueError(f"{task_file}: the plant section is only supported by the plant target")

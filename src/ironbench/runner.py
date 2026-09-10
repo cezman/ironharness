@@ -94,7 +94,13 @@ def _check_events(serial_text: str, events: tuple[dict, ...]) -> tuple[str, ...]
     spec, the count of matched lines (whose trailing token is a millisecond
     timestamp) and every consecutive interval between them must satisfy the
     declared bounds. A cheater printing bare expected strings produces no
-    parseable events and fails the count."""
+    parseable events and fails the count.
+
+    Accepted residual: a cheater that SIMULATES the shim line format with
+    well-timed fake timestamps passes - the scoring trusts the firmware's
+    stdout, like all unix scoring. True verification needs out-of-band GPIO
+    observation (real-target read-back); anchoring event lines to the box
+    chunk stamps would at least tie them to wall-clock ingestion."""
     missed: list[str] = []
     for ev in events:
         stamps: list[float] = []
@@ -633,9 +639,13 @@ def _tar_pairs(items: list[tuple[Path, str]]) -> bytes:
     return buf.getvalue()
 
 
-def _push_to_wsl(blob: bytes, remote_dir: str, marker: str) -> None:
+def _push_to_wsl(blob: bytes, remote_dir: str, marker: str, *, clean: bool = False) -> None:
     """tar.gz blob into WSL stdin (via communicate: the wsl.exe relay is only
-    reliable that way); the marker in stdout confirms the extraction."""
+    reliable that way); the marker in stdout confirms the extraction.
+    clean=True wipes the remote dir first - for per-run dirs whose stale
+    files (e.g. a leftover machine.py from a removed `shim:`) must not leak
+    into the next run. Never use it on shared directories."""
+    rm_part = "rm -rf {remote_dir} && " if clean else ""
     try:
         proc = subprocess.run(
             [
@@ -645,7 +655,7 @@ def _push_to_wsl(blob: bytes, remote_dir: str, marker: str) -> None:
                 "--",
                 "bash",
                 "-c",
-                f"mkdir -p {remote_dir} && tar -xzf - -C {remote_dir} && echo {marker}",
+                f"{rm_part}mkdir -p {remote_dir} && tar -xzf - -C {remote_dir} && echo {marker}",
             ],
             input=blob,
             capture_output=True,
@@ -1219,7 +1229,9 @@ def _run_unix(
             remote_dir = f"{RENODE_REMOTE_ROOT}/{task.name}-unix"
             if task.shim:
                 # entry + shim travel together: sys.path[0] is the script dir,
-                # so machine.py next to the entry resolves `import machine`
+                # so machine.py next to the entry resolves `import machine`;
+                # the remote dir is cleaned first - a stale machine.py from a
+                # run with a shim must not leak into a shim-less re-run
                 _push_to_wsl(
                     _tar_pairs(
                         [
@@ -1229,10 +1241,14 @@ def _run_unix(
                     ),
                     remote_dir,
                     "STAGE-PUSHED",
+                    clean=True,
                 )
             else:
                 _push_to_wsl(
-                    _tar_of(task.directory / task.entry, task.entry), remote_dir, "STAGE-PUSHED"
+                    _tar_of(task.directory / task.entry, task.entry),
+                    remote_dir,
+                    "STAGE-PUSHED",
+                    clean=True,
                 )
             env_prefix = (
                 f"IRONBENCH_MQTT_HOST=127.0.0.1 IRONBENCH_MQTT_PORT={mqtt_port} "
@@ -1243,7 +1259,9 @@ def _run_unix(
         else:
             if task.shim:
                 # injected commands run the entry in place: the shim goes next
-                # to it (task dirs in tests are per-run temporary directories)
+                # to it and overwrites any same-named file - the harness shim
+                # is authoritative for a shim-declaring task (task dirs here
+                # are per-run temporary directories in tests)
                 shutil.copy2(SHIMS_DIR / f"{task.shim}.py", task.directory / f"{task.shim}.py")
             cmd = [unix_cmd] if isinstance(unix_cmd, str) else list(unix_cmd)
         if journal:

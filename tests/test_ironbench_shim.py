@@ -146,6 +146,10 @@ def test_shim_and_events_validation(tmp_path):
     )
     cases = [
         ("shim: machine\n", "only supported by the unix target"),  # no target -> wokwi
+        (
+            "events:\n  - pattern: 'x'\n    count_min: 2\n",
+            "events section is only supported by the unix target",
+        ),
         ("target: unix\nshim: gpio\n", "unknown shim"),
         ("target: unix\nevents:\n  - count_min: 2\n", "events.pattern"),
         (
@@ -156,6 +160,14 @@ def test_shim_and_events_validation(tmp_path):
             "target: unix\nevents:\n  - pattern: 'x'\n    count_min: 2\n    period_ms: [5, 5]\n",
             "0 < lo < hi",
         ),
+        (
+            "target: unix\nexpect:\n  - '([unterminated'\nevents:\n  - pattern: 'x'\n    count_min: 1\n",
+            "invalid regex",
+        ),
+        (
+            "target: unix\nevents:\n  - pattern: '([bad'\n    count_min: 1\n",
+            "invalid regex",
+        ),
     ]
     for extra, expected in cases:
         d = tmp_path / "t"
@@ -164,6 +176,79 @@ def test_shim_and_events_validation(tmp_path):
         (d / "solution.py").write_text("print('x')\n", encoding="utf-8")
         with pytest.raises(ValueError, match=expected):
             load_task(d)
+
+
+def test_empty_events_section_parses_as_empty(tmp_path):
+    # 'events:' with no items is an empty section (the `or []` convention),
+    # not a confusing 'must be a list' error.
+    d = tmp_path / "t"
+    d.mkdir()
+    (d / "task.yaml").write_text(
+        textwrap.dedent(
+            """
+        name: v
+        description: fake
+        entry: solution.py
+        target: unix
+        timeout_sec: 5
+        expect: []
+        events:
+        """
+        ),
+        encoding="utf-8",
+    )
+    task = load_task(d)
+    assert task.events == ()
+
+
+def test_multiple_event_specs_are_both_enforced(tmp_path):
+    entry = (
+        "from machine import Pin\n"
+        "import time\n"
+        "pin = Pin(2, Pin.OUT)\n"
+        "for _ in range(8):\n"
+        "    pin.toggle()\n"
+        "    time.sleep(0.06)\n"
+    )
+    d = tmp_path / "t"
+    d.mkdir()
+    lines = [
+        "name: multi-spec",
+        "description: fake",
+        "entry: solution.py",
+        "target: unix",
+        "shim: machine",
+        "timeout_sec: 10",
+        "expect: []",
+        "events:",
+        "  - pattern: '^PIN 2 [01] '",  # satisfied: 8 events in period
+        "    count_min: 8",
+        "    period_ms: [30, 120]",
+        "  - pattern: '^PIN 2 [01] '",  # violated: demands twice as many
+        "    count_min: 16",
+        "    period_ms: [30, 120]",
+    ]
+    (d / "task.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (d / "solution.py").write_text(entry, encoding="utf-8")
+    task = load_task(d)
+    res = run_local(tmp_path, task)
+    assert not res.passed
+    assert sum("16" in m for m in res.missed) == 1  # only the second spec failed
+
+
+def test_non_numeric_tail_is_not_an_event(tmp_path):
+    # A matched line without a parseable trailing timestamp is not an event:
+    # printing the expected strings plus junk cannot satisfy the count.
+    entry = (
+        "print('boot')\n"
+        "for _ in range(8):\n"
+        "    print('PIN 2 1 X')\n"  # the pattern matches, the tail is junk
+        "    print('PIN 2 0 Y')\n"
+    )
+    task = make_shim_task(tmp_path, entry, expect=())
+    res = run_local(tmp_path, task)
+    assert not res.passed
+    assert any("events" in m for m in res.missed)
 
 
 @pytest.mark.skipif(shutil.which("wsl") is None, reason="needs WSL micropython")
