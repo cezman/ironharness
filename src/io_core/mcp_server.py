@@ -134,6 +134,40 @@ def serial_close(name: str) -> str:
     return f"ok: serial {name!r} closed"
 
 
+# --- serial background reader (IH-18): tail + expect-style waits ---
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
+def serial_reader_start(name: str, max_bytes: int = 65536) -> dict:
+    """Starts a background reader on an open serial port: keeps draining the
+    device into a bounded buffer (drop-oldest) so output printed between tool
+    calls is not lost. While it runs, serial_read/serial_read_line are refused
+    - use serial_tail/serial_read_until."""
+    return get_session().serial_reader_start(name, max_bytes=max_bytes)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
+def serial_reader_stop(name: str) -> dict:
+    """Stops the background reader of the named serial port (returns final buffer stats)."""
+    return get_session().serial_reader_stop(name)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True))
+def serial_tail(name: str, size: int = 4096) -> dict:
+    """The newest data received by the background reader (non-destructive):
+    {"data_hex", "text", "dropped"} - dropped > 0 means older bytes were
+    evicted by the buffer bound."""
+    return get_session().serial_tail(name, size)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
+def serial_read_until(name: str, pattern: str, timeout: float = 10.0) -> dict:
+    """Waits until the pattern (utf-8 text) appears in fresh reader data and
+    consumes the buffer up to the end of the match: {"found", "data_hex",
+    "text"}. found=false on timeout (text = whatever is unconsumed)."""
+    return get_session().serial_read_until(name, pattern, timeout)
+
+
 # --- modbus ---
 
 
