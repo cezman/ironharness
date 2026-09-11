@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import Any, Self
 
@@ -104,3 +105,26 @@ class SerialTransport:
             raise
         self._emit("read_line", {"data_hex": data.hex(), "bytes": len(data)})
         return data
+
+    def reset(self, *, pulse_sec: float = 0.1, settle_sec: float = 2.0) -> None:
+        """Управляемый сброс платы импульсом RTS (IH-19).
+
+        Классическая обвязка ESP32: RTS через транзисторную пару тянет EN
+        (reset), DTR тянет IO0 (boot mode). Импульс RTS вниз при отпущенном
+        DTR перезапускает чип в нормальный flash-boot — чистое состояние
+        между попытками solve или после зависания REPL. open() сброс НЕ
+        делает (idle-фикс 9e836d7: открытие порта не должно пиновать плату);
+        сброс — только по явному вызову. ptys/сокеты без modem-линий дадут
+        OSError — отказ честно журналируется и пробрасывается.
+        """
+        assert self._serial is not None, "port is not open"
+        try:
+            self._serial.dtr = False  # IO0 high: normal boot, не download mode
+            self._serial.rts = True  # EN low: удерживаем чип в сбросе
+            time.sleep(pulse_sec)
+            self._serial.rts = False  # EN high: чип стартует
+        except OSError as e:
+            self._emit("reset_failed", {"error": str(e)})
+            raise
+        time.sleep(settle_sec)  # boot-тишина: вывод стартующей прошивки пойдёт в ридер/чтения
+        self._emit("reset", {"pulse_sec": pulse_sec, "settle_sec": settle_sec})

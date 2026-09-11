@@ -38,7 +38,7 @@ uv run ironharness-mcp               # MCP-сервер (stdio; или: python -
 
 ## Инструменты агента (MCP)
 
-`echo` · `serial_open/write/read/read_line/close` · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (фоновый ридер: вывод устройства между вызовами инструментов буферизуется, а не теряется) · `modbus_open/read/write/close` ·
+`echo` · `serial_open/write/read/read_line/close` · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (фоновый ридер: вывод устройства между вызовами инструментов буферизуется, а не теряется) · `serial_reset` (RTS-pulse board reset between solve attempts) · `modbus_open/read/write/close` ·
 `mqtt_open/publish/subscribe/read/close` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
 
 Все операции автоматически пишутся в JSONL-журнал (`$IRONHARNESS_HOME/journal.jsonl`,
