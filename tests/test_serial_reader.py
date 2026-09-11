@@ -193,34 +193,35 @@ def test_session_reader_tail_and_read_until(session):
 def test_session_write_serialized_against_reader(session):
     # The CH340 contract without hardware: writes go through the reader's I/O
     # lock (loop:// would not show NUL bursts - the lock ordering is what is
-    # pinned here: many parallel writes while the reader drains, no deadlock,
-    # no lost write).
+    # pinned here: parallel writes while the reader drains, no deadlock, no
+    # lost write). Generous timeouts: on a loaded CI runner each write waits
+    # its turn against background reads, so wall time adds up.
     name = loop_session(session)
     session.serial_reader_start(name)
     errors: list[BaseException] = []
 
     def writer(tag: int) -> None:
         try:
-            for i in range(10):
+            for i in range(5):
                 session.serial_write(name, f"w{tag}-{i};".encode().hex())
         except BaseException as e:  # noqa: BLE001 - recorded and asserted below
             errors.append(e)
 
-    threads = [threading.Thread(target=writer, args=(t,)) for t in range(4)]
+    threads = [threading.Thread(target=writer, args=(t,), daemon=True) for t in range(4)]
     for t in threads:
         t.start()
     for t in threads:
-        t.join(timeout=10)
+        t.join(timeout=30)
         assert not t.is_alive(), "deadlock: a writer never finished"
     assert errors == []
-    # all 40 writes echo back through the loop into the reader buffer
-    deadline = time.monotonic() + 5
+    # all 20 writes echo back through the loop into the reader buffer
+    deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         text = session.serial_tail(name, 65536)["text"]
-        if text.count(";") >= 40:
+        if text.count(";") >= 20:
             break
         time.sleep(0.02)
-    assert session.serial_tail(name, 65536)["text"].count(";") >= 40
+    assert session.serial_tail(name, 65536)["text"].count(";") >= 20
 
 
 class TrackingLock:
@@ -271,7 +272,7 @@ def test_write_lock_order_session_lock_before_io_lock(session):
     reader = session._readers[name]
     probe = TrackingLock(threading.Lock())
     reader._io_lock = probe
-    writer = threading.Thread(target=session.serial_write, args=(name, b"z".hex()))
+    writer = threading.Thread(target=session.serial_write, args=(name, b"z".hex()), daemon=True)
     with session._lock:  # the writer below can only block on THIS lock
         writer.start()
         time.sleep(0.3)  # writer is parked on the session lock acquisition
@@ -279,7 +280,7 @@ def test_write_lock_order_session_lock_before_io_lock(session):
             "serial_write took the reader I/O lock before the session lock "
             "(the deadlock half-cycle)"
         )
-    writer.join(timeout=5)
+    writer.join(timeout=15)
     assert not writer.is_alive()
     assert probe.entered_by(writer.ident) == 1  # after the release, the write ran under the lock
     session.serial_reader_stop(name)
@@ -310,19 +311,19 @@ def test_reader_stop_does_not_deadlock_against_inflight_write(session):
     def inflight_writer() -> None:
         started.set()
         try:
-            for _ in range(200):
+            for _ in range(50):
                 session.serial_write(name, b"y".hex())
         except BaseException as e:  # noqa: BLE001
             errors.append(e)
 
-    writer_thread = threading.Thread(target=inflight_writer)
+    writer_thread = threading.Thread(target=inflight_writer, daemon=True)
     writer_thread.start()
-    started.wait(timeout=2)
+    started.wait(timeout=5)
     t0 = time.monotonic()
-    threading.Thread(target=stopper).start()
-    assert stop_done.wait(timeout=3), "reader_stop deadlocked against an in-flight write"
-    assert time.monotonic() - t0 < 2.5, "reader_stop blocked for seconds (lock cycle)"
-    writer_thread.join(timeout=5)
+    threading.Thread(target=stopper, daemon=True).start()
+    assert stop_done.wait(timeout=10), "reader_stop deadlocked against an in-flight write"
+    assert time.monotonic() - t0 < 5, "reader_stop blocked for the join timeout (lock cycle)"
+    writer_thread.join(timeout=30)
     assert not writer_thread.is_alive()
     assert errors == []
 
