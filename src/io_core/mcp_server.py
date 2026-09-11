@@ -21,6 +21,16 @@ Configuration via environment:
     IRONHARNESS_TRANSPORT_RATE — max_calls/window_seconds (e.g. "100/60");
                          unset = no rate limit. Applies to serial/modbus/mqtt
                          operations through the session.
+
+Stdout hygiene (IH-20): over stdio the wire must carry only JSON-RPC. The
+SDK's stdio_server diverts fd 1 to stderr while serving (the protocol is
+written to a private duplicate of the real stdout), so on the normal serving
+path stray prints and library logging do not reach the wire (the claim is
+best-effort: a non-fd-backed stdout serves in place without diversion); the
+SDK's own logging is wired to stderr. Regression tests in
+tests/test_mcp_stdio.py pin this end-to-end: every byte the client reads
+from the child's stdout must parse as a JSON-RPC message, and a deliberately
+noisy handler must land on stderr.
 """
 
 from __future__ import annotations
@@ -30,6 +40,7 @@ import threading
 from pathlib import Path
 
 from mcp.server import MCPServer
+from mcp.types import ToolAnnotations
 
 from io_core.session import Session
 
@@ -65,41 +76,58 @@ def reset_session() -> None:
         _session = None
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
 def echo(text: str) -> str:
     """Returns the text back. Service tool to verify the MCP setup works."""
     return text
 
 
+# Tool annotation conventions (IH-20), applied explicitly to every tool:
+# - readOnlyHint=True only where nothing is consumed or mutated: echo,
+#   file_read/file_list (sandbox), esp_image_info (parses a file), and
+#   modbus_read (an FC3 query - the device answers, its state is untouched).
+#   serial_read/serial_read_line/mqtt_read are deliberately NOT readOnly:
+#   they drain a stream/queue - a replay loses data for later reads.
+# - destructiveHint=True for esp_flash/esp_erase (real hardware),
+#   file_delete, and file_write (an overwrite is not an additive update);
+#   plain state writes stay destructiveHint=False.
+# - openWorldHint=True on the tools that reach outside the process
+#   (connects, I/O over ports/hosts/brokers); the close/subscribe tools
+#   leave it unset (the spec default is true anyway).
+# - idempotentHint is left unset everywhere on purpose: nothing here is
+#   idempotent (a repeated *_open on the same name is an error, not a
+#   no-op - Session refuses "already open").
+
+
 # --- serial (binary data as hex strings, JSON-friendly) ---
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
 def serial_open(name: str, port: str, baudrate: int = 115200, timeout: float = 1.0) -> str:
     """Opens a named serial port (COM3, /dev/ttyUSB0, loop:// for tests)."""
     get_session().serial_open(name, port, baudrate=baudrate, timeout=timeout)
     return f"ok: serial {name!r} -> {port}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
 def serial_write(name: str, data_hex: str) -> int:
     """Writes bytes to the serial port; data_hex is a hex string (e.g. 48656c6c6f)."""
     return get_session().serial_write(name, data_hex)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
 def serial_read(name: str, size: int = 64) -> str:
     """Reads up to size bytes from the serial port; returns a hex string ("" — timeout)."""
     return get_session().serial_read(name, size)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
 def serial_read_line(name: str, max_len: int = 256) -> str:
     """Reads one \\n-terminated line; returns a hex string."""
     return get_session().serial_read_line(name, max_len)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
 def serial_close(name: str) -> str:
     """Closes the named serial port and releases it for other applications."""
     get_session().serial_close(name)
@@ -109,27 +137,27 @@ def serial_close(name: str) -> str:
 # --- modbus ---
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
 def modbus_open(name: str, host: str, port: int = 502, device_id: int = 1) -> str:
     """Opens a named Modbus TCP connection."""
     get_session().modbus_open(name, host, port=port, device_id=device_id)
     return f"ok: modbus {name!r} -> {host}:{port}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True))
 def modbus_read(name: str, address: int, count: int = 1) -> list[int]:
     """Reads count holding registers starting at address."""
     return get_session().modbus_read(name, address, count)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
 def modbus_write(name: str, address: int, values: list[int]) -> str:
     """Writes holding registers: one value -> FC6, several -> FC16."""
     get_session().modbus_write(name, address, values)
     return f"ok: wrote {len(values)} register(s) at address {address}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
 def modbus_close(name: str) -> str:
     """Closes the named Modbus TCP connection."""
     get_session().modbus_close(name)
@@ -139,34 +167,34 @@ def modbus_close(name: str) -> str:
 # --- mqtt ---
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
 def mqtt_open(name: str, host: str, port: int = 1883, client_id: str = "", timeout: float = 3.0) -> str:
     """Opens a named MQTT connection to a broker. Plaintext TCP (no TLS/auth) — for bench use."""
     get_session().mqtt_open(name, host, port=port, client_id=client_id, timeout=timeout)
     return f"ok: mqtt {name!r} -> {host}:{port}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
 def mqtt_publish(name: str, topic: str, payload: str, qos: int = 0, retain: bool = False) -> str:
     """Publishes a message to a topic (payload is text)."""
     get_session().mqtt_publish(name, topic, payload, qos=qos, retain=retain)
     return f"ok: published to {topic!r}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
 def mqtt_subscribe(name: str, topic: str, qos: int = 0) -> str:
     """Subscribes to a topic (wildcards allowed: sensors/#, +/temperature)."""
     get_session().mqtt_subscribe(name, topic, qos=qos)
     return f"ok: subscribed to {topic!r}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
 def mqtt_read(name: str, timeout: float = 1.0) -> dict[str, str] | None:
     """Reads the next incoming message {"topic", "payload"}; null — timeout."""
     return get_session().mqtt_read(name, timeout)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
 def mqtt_close(name: str) -> str:
     """Closes the named MQTT connection and stops its network loop."""
     get_session().mqtt_close(name)
@@ -176,13 +204,13 @@ def mqtt_close(name: str) -> str:
 # --- esp (flashing; needs the [flash] extra and IRONHARNESS_ALLOW_REAL_FLASH=1) ---
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
 def esp_image_info(firmware_path: str, chip: str = "esp32") -> dict:
     """Parses a .bin firmware image without hardware: entrypoint, segments, flash params."""
     return get_session().esp_image_info(firmware_path, chip=chip)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True))
 def esp_flash(port: str, firmware_path: str, addr: int = 0x1000, baud: int = 921600) -> str:
     """Flashes an image to the board on the given port (classic ESP32: addr=0x1000).
 
@@ -191,7 +219,7 @@ def esp_flash(port: str, firmware_path: str, addr: int = 0x1000, baud: int = 921
     return get_session().esp_flash(port, firmware_path, addr=addr, baud=baud)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True))
 def esp_erase(port: str, baud: int = 921600) -> str:
     """Erases the board's entire flash (irreversible).
 
@@ -203,25 +231,25 @@ def esp_erase(port: str, baud: int = 921600) -> str:
 # --- files (sandboxed) ---
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False))
 def file_write(path: str, content: str) -> int:
     """Writes a text file (utf-8) inside the sandbox; escaping the sandbox is denied."""
     return get_session().file_write(path, content)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
 def file_read(path: str) -> str:
     """Reads a text file from the sandbox."""
     return get_session().file_read(path)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
 def file_list(path: str = ".") -> list[str]:
     """Lists files and directories in the sandbox (relative paths)."""
     return get_session().file_list(path)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False))
 def file_delete(path: str) -> str:
     """Deletes a file from the sandbox."""
     get_session().file_delete(path)

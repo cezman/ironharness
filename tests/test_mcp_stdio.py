@@ -102,6 +102,10 @@ class WireClient:
         self.proc.stdin.write(json.dumps(payload) + "\n")
         self.proc.stdin.flush()
 
+    def send_raw(self, line: str) -> None:
+        self.proc.stdin.write(line + "\n")
+        self.proc.stdin.flush()
+
 
 @pytest.fixture()
 def server(tmp_path):
@@ -109,6 +113,11 @@ def server(tmp_path):
     yield proc
     proc.kill()
     proc.wait(timeout=10)
+
+
+def initialize(client: WireClient) -> None:
+    client.request(INITIALIZE)
+    client.notify({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
 
 def test_wire_initialize_tools_call(server, tmp_path):
@@ -194,3 +203,120 @@ def test_sdk_client_end_to_end(tmp_path):
                 assert res.content[0].text == "sdk-ping"
 
     anyio.run(drive)
+
+
+# --- IH-20: stdout hygiene + tool annotations ---
+
+
+def call(client: WireClient, req_id: int, name: str, arguments: dict) -> dict:
+    return client.request(
+        {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
+    )
+
+
+def test_tool_annotations_round_trip(server):
+    # Every tool declares explicit ToolAnnotations (IH-20: none of the tools
+    # had them); the hints must survive the real wire, so clients can judge
+    # blast radius before calling (readOnly vs mutating, destructive flash).
+    client = WireClient(server)
+    initialize(client)
+    listing = client.request({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    tools = {t["name"]: t for t in listing["result"]["tools"]}
+    assert {"echo", "serial_open", "modbus_read", "esp_flash", "file_delete"} <= set(tools)
+    # the real invariant: EVERY tool carries an explicit readOnlyHint
+    unannotated = [
+        name for name, t in tools.items() if (t.get("annotations") or {}).get("readOnlyHint") is None
+    ]
+    assert unannotated == [], f"tools without explicit annotations: {unannotated}"
+    ann = {name: t["annotations"] for name, t in tools.items()}
+    assert ann["echo"]["readOnlyHint"] is True and ann["echo"]["openWorldHint"] is False
+    assert ann["file_read"]["readOnlyHint"] is True
+    assert ann["modbus_read"]["readOnlyHint"] is True and ann["modbus_read"]["openWorldHint"] is True
+    assert ann["serial_write"]["readOnlyHint"] is False
+    assert ann["esp_flash"]["destructiveHint"] is True
+    assert ann["esp_erase"]["destructiveHint"] is True
+    assert ann["file_delete"]["destructiveHint"] is True
+    assert ann["file_write"]["destructiveHint"] is True  # an overwrite is not additive
+
+
+def test_wire_stays_clean_through_error_battery(server, tmp_path):
+    # Error-provoking calls must not let any library noise onto the wire:
+    # every stdout line the client ever reads must parse as JSON-RPC
+    # (WireClient raises on the first non-JSON line), and the server must
+    # survive the battery still serving.
+    client = WireClient(server)
+    initialize(client)
+    client.send_raw("this line is not json")  # protocol garbage on INPUT
+    res = call(client, 10, "serial_open", {"name": "s", "port": "NO-SUCH-PORT-XYZ"})
+    assert ("error" in res) or (res["result"].get("isError") is True), res
+    res = call(client, 11, "file_read", {"path": "../outside.txt"})
+    assert ("error" in res) or (res["result"].get("isError") is True), res
+    res = call(client, 12, "no_such_tool", {})
+    assert ("error" in res) or (res["result"].get("isError") is True), res
+    # still alive and answering: an echo round-trip would fail if any of the
+    # noise above had corrupted the stdout framing
+    res = call(client, 13, "echo", {"text": "alive"})
+    assert "error" not in res and res["result"]["content"][0]["text"] == "alive"
+    assert server.poll() is None
+    assert (tmp_path / "home" / "journal.jsonl").is_file()
+
+
+NOISE_SERVER_SCRIPT = """\\
+import logging, sys
+
+# same contract as io_core.mcp_server.main(): library logging goes to stderr
+logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+
+from mcp.server import MCPServer
+from mcp.types import ToolAnnotations
+
+mcp = MCPServer("noise-probe")
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def noisy() -> str:
+    print("I-AM-STDOUT-NOISE", flush=True)  # must land on the diverted stderr
+    logging.getLogger("noise-probe").error("I-AM-LOG-NOISE")
+    return "done"
+
+
+mcp.run()
+"""
+
+
+def test_noisy_handler_never_pollutes_wire(tmp_path):
+    # Negative-path demo for the stdout-hygiene gate (a gate whose violation
+    # is undetectable is decorative): a handler that prints and logs while
+    # serving. The SDK diverts fd 1 to stderr during serving, so the noise
+    # must surface on stderr and the stdout wire must stay pure JSON-RPC.
+    script = tmp_path / "noise_server.py"
+    script.write_text(NOISE_SERVER_SCRIPT, encoding="utf-8")
+    proc = subprocess.Popen(
+        [sys.executable, str(script)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        bufsize=1,
+        env={**os.environ, "PYTHONPATH": SRC},
+    )
+    try:
+        client = WireClient(proc)
+        initialize(client)
+        res = call(client, 7, "noisy", {})
+        assert "error" not in res and res["result"]["content"][0]["text"] == "done"
+        # one more round-trip: the wire framing survived the noise
+        res = call(client, 8, "noisy", {})
+        assert "error" not in res
+    finally:
+        proc.kill()
+        stderr = proc.stderr.read()
+        proc.wait(timeout=10)
+    assert "I-AM-STDOUT-NOISE" in stderr
+    assert "I-AM-LOG-NOISE" in stderr
