@@ -72,6 +72,38 @@ def test_resolve_llm_config_defaults_and_env(tmp_path, monkeypatch):
     assert resolve_llm_config(model="explicit").model == "explicit"
 
 
+def test_resolve_llm_config_priority_env_over_dotenv_over_default(tmp_path, monkeypatch):
+    # IH-30: the full priority chain - explicit > env > .env > default - for
+    # LLM_BASE_URL/LLM_API_KEY/LLM_TIMEOUT, not only for the model
+    monkeypatch.chdir(tmp_path)
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "LLM_BASE_URL=http://from-dotenv:1234/v1\nLLM_API_KEY=from-dotenv\nLLM_TIMEOUT=321\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_module, "find_env_file", lambda: dotenv)
+    for name in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_TIMEOUT"):
+        monkeypatch.delenv(name, raising=False)
+
+    cfg = resolve_llm_config()
+    assert cfg.base_url == "http://from-dotenv:1234/v1"  # .env beats the default
+    assert cfg.api_key == "from-dotenv"
+    assert cfg.timeout_sec == 321
+
+    monkeypatch.setenv("LLM_BASE_URL", "http://from-env:1234/v1")
+    monkeypatch.setenv("LLM_API_KEY", "from-env")
+    monkeypatch.setenv("LLM_TIMEOUT", "77")
+    cfg = resolve_llm_config()
+    assert cfg.base_url == "http://from-env:1234/v1"  # env beats .env
+    assert cfg.api_key == "from-env"
+    assert cfg.timeout_sec == 77
+
+    cfg = resolve_llm_config(base_url="http://explicit:1234/v1", api_key="explicit")
+    assert cfg.base_url == "http://explicit:1234/v1"  # explicit beats everything
+    assert cfg.api_key == "explicit"
+    assert cfg.timeout_sec == 77  # timeout has no explicit argument: env still rules it
+
+
 def test_validate_endpoint_rules():
     validate_endpoint("http://localhost:1234/v1", allow_local=True)
     # a public IP literal: no dependency on external DNS

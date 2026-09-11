@@ -38,3 +38,29 @@ jobs:
           uv pip install --python .venv-smoke dist/ironharness-*.whl
           .venv-smoke/bin/ironbench --version
           .venv-smoke/bin/python -c "import io_core; print('io_core', io_core.__version__, 'imports ok')"
+      - name: MCP stdio smoke (initialize ping over the installed wheel)
+        # IH-30: the entry point must boot and speak the protocol, not just import
+        run: |
+          .venv-smoke/bin/python - <<'PY'
+          import os
+          import anyio
+
+          from mcp import ClientSession, StdioServerParameters
+          from mcp.client.stdio import stdio_client
+
+          async def main():
+              params = StdioServerParameters(
+                  command=os.path.abspath(".venv-smoke/bin/ironharness-mcp")
+              )
+              async with stdio_client(params) as (read, write):
+                  async with ClientSession(read, write) as session:
+                      info = await session.initialize()
+                      assert info.server_info.name == "ironharness", info
+                      tools = await session.list_tools()
+                      assert "echo" in {t.name for t in tools.tools}, tools
+                      res = await session.call_tool("echo", {"text": "ci-ping"})
+                      assert res.content[0].text == "ci-ping", res
+
+          anyio.run(main)
+          print("mcp stdio smoke: ok")
+          PY
