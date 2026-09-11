@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
+from typing import Self
 
 import pytest
 
@@ -86,7 +87,7 @@ def test_reader_tail_and_read_until_consume():
 
 def test_reader_bounded_drop_oldest():
     fake = FakeSerial()
-    r = SerialReader(fake, max_bytes=16)
+    r = SerialReader(fake, max_bytes=16, chunk=16)
     r.start()
     try:
         fake.feed(b"A" * 10)
@@ -135,6 +136,20 @@ def test_reader_validates_arguments():
         SerialReader(fake, max_bytes=0)
     with pytest.raises(ValueError, match="chunk"):
         SerialReader(fake, chunk=0)
+    # max_bytes < chunk: every chunk would be evicted whole - refuse loudly
+    with pytest.raises(ValueError, match=">= chunk"):
+        SerialReader(fake, max_bytes=8, chunk=16)
+
+
+def test_read_until_rejects_empty_pattern():
+    fake = FakeSerial()
+    r = SerialReader(fake)
+    r.start()
+    try:
+        with pytest.raises(ValueError, match="pattern"):
+            r.read_until("")
+    finally:
+        r.stop()
 
 
 def test_reader_start_idempotent_and_stop_joinable():
@@ -208,6 +223,109 @@ def test_session_write_serialized_against_reader(session):
     assert session.serial_tail(name, 65536)["text"].count(";") >= 40
 
 
+class TrackingLock:
+    """Records every acquisition (list.append is atomic under the GIL)."""
+
+    def __init__(self, inner: threading.Lock) -> None:
+        self._inner = inner
+        self.entered: list[float] = []
+
+    def __enter__(self) -> Self:
+        self._inner.__enter__()
+        self.entered.append(time.monotonic())
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._inner.__exit__(*exc)
+
+
+def test_write_takes_the_reader_io_lock(session):
+    # The M1 pin: without `with reader.io_lock` in Session.serial_write the
+    # whole offline suite stays green - the CH340 serialization would be a
+    # promise without a mechanism. Instrumented lock: a session write while a
+    # reader runs MUST pass through the reader's I/O lock.
+    name = loop_session(session)
+    session.serial_reader_start(name)
+    reader = session._readers[name]
+    tracking = TrackingLock(threading.Lock())
+    reader._io_lock = tracking
+    before = len(tracking.entered)
+    session.serial_write(name, b"x".hex())
+    assert len(tracking.entered) > before, "serial_write bypassed the reader I/O lock"
+    session.serial_reader_stop(name)
+
+
+def test_reader_stop_does_not_deadlock_against_inflight_write(session):
+    # Review round-1 blocker: serial_write used to hold the reader I/O lock
+    # while waiting for the session lock (_get inside the lock block), and
+    # serial_reader_stop held the session lock while joining the reader
+    # thread, which waited for the I/O lock - a cycle that froze the whole
+    # session for the join timeout. Now the session lock is always released
+    # before the I/O lock is taken; this test reproduces the interleaving
+    # (a write in flight while stop joins) and pins a fast stop.
+    name = loop_session(session)
+    session.serial_reader_start(name)
+    stop_done = threading.Event()
+    errors: list[BaseException] = []
+
+    def stopper() -> None:
+        try:
+            session.serial_reader_stop(name)
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+        stop_done.set()
+
+    started = threading.Event()
+
+    def inflight_writer() -> None:
+        started.set()
+        try:
+            for _ in range(200):
+                session.serial_write(name, b"y".hex())
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    writer_thread = threading.Thread(target=inflight_writer)
+    writer_thread.start()
+    started.wait(timeout=2)
+    t0 = time.monotonic()
+    threading.Thread(target=stopper).start()
+    assert stop_done.wait(timeout=3), "reader_stop deadlocked against an in-flight write"
+    assert time.monotonic() - t0 < 2.5, "reader_stop blocked for seconds (lock cycle)"
+    writer_thread.join(timeout=5)
+    assert not writer_thread.is_alive()
+    assert errors == []
+
+
+def reader_threads_alive() -> int:
+    return sum(1 for t in threading.enumerate() if t.name == "serial-reader")
+
+
+def test_close_transport_stops_reader_thread(session):
+    name = loop_session(session)
+    session.serial_reader_start(name)
+    assert reader_threads_alive() >= 1
+    session.close_transport(name)
+    # the M3b pin: without _stop_reader in close_transport the reader thread
+    # would outlive its (closed) transport
+    deadline = time.monotonic() + 6
+    while time.monotonic() < deadline and reader_threads_alive():
+        time.sleep(0.05)
+    assert reader_threads_alive() == 0
+
+
+def test_session_close_stops_reader_threads(session):
+    name = loop_session(session)
+    session.serial_reader_start(name)
+    assert reader_threads_alive() >= 1
+    session.close()  # the M3c pin: Session.close stops every reader first
+    deadline = time.monotonic() + 6
+    while time.monotonic() < deadline and reader_threads_alive():
+        time.sleep(0.05)
+    assert reader_threads_alive() == 0
+    session.close()  # idempotent
+
+
 def test_session_direct_reads_refused_while_reader_runs(session):
     name = loop_session(session)
     session.serial_reader_start(name)
@@ -251,17 +369,11 @@ def test_close_stops_reader_and_releases_name(session):
     session.serial_reader_stop(name)
 
 
-def test_session_close_stops_readers(session):
-    name = loop_session(session)
-    session.serial_reader_start(name)
-    session.close()  # fixture closes again - Session.close must be idempotent-safe
-    session.close()
-
-
 def test_reader_output_journaled_and_replayable(session, tmp_path):
     # "the journal writes everything as before": background chunks land as
-    # normal read events with the conn name, reader lifecycle is journaled,
-    # and the replay stream contains every drained byte.
+    # normal read events with the conn name, reader lifecycle is journaled
+    # (explicit AND implicit stops - a reader must end in the journal, not
+    # vanish), and the replay stream contains every drained byte.
     name = loop_session(session)
     session.serial_reader_start(name, max_bytes=8192)
     session.serial_write(name, b"alpha beta\n".hex())
@@ -270,11 +382,18 @@ def test_reader_output_journaled_and_replayable(session, tmp_path):
     session.serial_write(name, b"gamma\n".hex())
     assert session.serial_read_until(name, "gamma", timeout=5)["found"] is True
     session.serial_reader_stop(name)
+    # a second reader, ended implicitly by the transport close
+    session.serial_reader_start(name)
     session.serial_close(name)
 
     events = read_events(tmp_path / "journal.jsonl")
     kinds = [e["kind"] for e in events]
-    assert "reader_start" in kinds and "reader_stop" in kinds
+    assert kinds.count("reader_start") == 2 and kinds.count("reader_stop") == 2
+    implicit = [e for e in events if e["kind"] == "reader_stop" and e.get("implicit")]
+    assert implicit and implicit[0].get("conn") == "loop"
+    # reader_start precedes any background read of that reader (journal order
+    # must not lie about causality)
+    assert kinds.index("reader_start") < next(i for i, k in enumerate(kinds) if k == "read")
     reads = [e for e in events if e["kind"] == "read"]
     assert reads and all(e.get("conn") == "loop" for e in reads)
     replayed = ReplaySession(events)["loop"]

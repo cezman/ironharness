@@ -146,7 +146,7 @@ def serial_reader_start(name: str, max_bytes: int = 65536) -> dict:
     return get_session().serial_reader_start(name, max_bytes=max_bytes)
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
 def serial_reader_stop(name: str) -> dict:
     """Stops the background reader of the named serial port (returns final buffer stats)."""
     return get_session().serial_reader_stop(name)
@@ -155,8 +155,10 @@ def serial_reader_stop(name: str) -> dict:
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True))
 def serial_tail(name: str, size: int = 4096) -> dict:
     """The newest data received by the background reader (non-destructive):
-    {"data_hex", "text", "dropped"} - dropped > 0 means older bytes were
-    evicted by the buffer bound."""
+    {"data_hex", "text", "dropped", "alive", "error"} - dropped > 0 means
+    older bytes were evicted by the buffer bound or consumed by
+    serial_read_until; alive=false means the reader thread died (port
+    failure - not the same as a silent device)."""
     return get_session().serial_tail(name, size)
 
 
@@ -164,7 +166,8 @@ def serial_tail(name: str, size: int = 4096) -> dict:
 def serial_read_until(name: str, pattern: str, timeout: float = 10.0) -> dict:
     """Waits until the pattern (utf-8 text) appears in fresh reader data and
     consumes the buffer up to the end of the match: {"found", "data_hex",
-    "text"}. found=false on timeout (text = whatever is unconsumed)."""
+    "text", "alive", "error"}. found=false on timeout (text = whatever is
+    unconsumed)."""
     return get_session().serial_read_until(name, pattern, timeout)
 
 

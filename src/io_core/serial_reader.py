@@ -27,6 +27,13 @@ inside its timeout window the I/O lock is held, so a concurrent write waits
 up to that timeout (default 1 s). Open the transport with a small timeout
 when low write latency matters.
 
+Journal growth note: every drained chunk is journaled, and the deadline/
+rate limits do NOT apply to the background pump - a chatty device at
+115200 baud adds up to ~23 read events per second to the JSONL for as long
+as the reader runs. The buffer in memory is bounded (max_bytes); the
+journal is not - stop the reader when the session no longer needs the
+stream.
+
 Buffer model: a deque of ingested (stamp, chunk) pairs plus a byte offset
 into the first chunk (what read_until has already consumed of it). The
 bound is on live bytes; eviction drops whole oldest chunks and counts the
@@ -55,6 +62,10 @@ class SerialReader:
             raise ValueError(f"max_bytes must be > 0, got {max_bytes}")
         if chunk <= 0:
             raise ValueError(f"chunk must be > 0, got {chunk}")
+        if max_bytes < chunk:
+            # every appended chunk would be evicted whole: the buffer could
+            # never hold anything
+            raise ValueError(f"max_bytes ({max_bytes}) must be >= chunk ({chunk})")
         self._transport = transport  # the RAW serial transport (no limit wrappers)
         self._max_bytes = max_bytes
         self._chunk = chunk
@@ -146,9 +157,12 @@ class SerialReader:
     def tail(self, size: int = 4096) -> dict[str, object]:
         """The newest `size` bytes of the buffer, non-destructive.
 
-        Returns {data_hex, text, dropped}: `dropped` is the number of bytes
-        evicted by the bound plus bytes consumed by read_until - non-zero
-        means the tail is a partial history, not everything the device sent."""
+        Returns {data_hex, text, dropped, alive, error}: `dropped` is the
+        number of bytes evicted by the bound plus bytes consumed by
+        read_until - non-zero means the tail is a partial history, not
+        everything the device sent. `alive`/`error` tell whether the
+        background thread is still draining (a dead reader means the port
+        failed - distinguish it from a silent device)."""
         with self._lock:
             buf = self._snapshot_locked()
             dropped = self._dropped + self._consumed if self._chunks else self._dropped
@@ -156,17 +170,21 @@ class SerialReader:
             "data_hex": buf[-size:].hex(),
             "text": buf[-size:].decode("utf-8", "replace"),
             "dropped": dropped,
+            "alive": self.running,
+            "error": str(self._error) if self._error is not None else None,
         }
 
     def read_until(self, pattern: str, timeout: float = 10.0) -> dict[str, object]:
         """Waits until the utf-8 `pattern` appears in fresh (unconsumed)
         buffer data, then consumes the buffer up to the end of the match.
 
-        Returns {found, data_hex, text}: on a match, everything from the
-        current read position through the end of the pattern; on timeout (or
-        when the reader thread died), whatever is unconsumed so far and
-        found=False. Consumption makes consecutive read_until calls wait for
-        NEW occurrences."""
+        Returns {found, data_hex, text, alive, error}: on a match, everything
+        from the current read position through the end of the pattern; on
+        timeout (or when the reader thread died), whatever is unconsumed so
+        far and found=False. Consumption makes consecutive read_until calls
+        wait for NEW occurrences."""
+        if not pattern:
+            raise ValueError("pattern must not be empty")
         needle = pattern.encode("utf-8")
         deadline = time.monotonic() + timeout
         while True:
@@ -180,12 +198,16 @@ class SerialReader:
                         "found": True,
                         "data_hex": buf[:end].hex(),
                         "text": buf[:end].decode("utf-8", "replace"),
+                        "alive": self.running,
+                        "error": None,
                     }
             if self._error is not None or time.monotonic() >= deadline or self._stop.is_set():
                 return {
                     "found": False,
                     "data_hex": buf.hex(),
                     "text": buf.decode("utf-8", "replace"),
+                    "alive": self.running,
+                    "error": str(self._error) if self._error is not None else None,
                 }
             time.sleep(_POLL_IDLE_SEC)
 
