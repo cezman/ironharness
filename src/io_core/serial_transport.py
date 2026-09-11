@@ -54,7 +54,8 @@ class SerialTransport:
                 self._serial.rts = False
             except OSError:
                 pass
-        except OSError as e:
+        except (OSError, ValueError) as e:
+            # ValueError: unknown URL protocol (agent's port string is untrusted)
             self._emit("open_failed", {"port": self._port, "error": str(e)})
             raise
         self._emit("open", {"port": self._port, "baudrate": self._baudrate})

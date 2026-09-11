@@ -317,6 +317,58 @@ def test_open_timeout_is_journaled(tmp_path):
     assert "broker" in events[0]["error"]
 
 
+def test_publish_error_rc_is_journaled(tmp_path):
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr:
+        t, fake = opened_transport(jr)
+        fake.publish_rc = 3
+        try:
+            with pytest.raises(OSError, match="rc=3"):
+                t.publish("t", "x")
+        finally:
+            t.close()
+    failed = [e for e in read_events(jpath) if e["kind"] == "mqtt_publish_failed"]
+    assert len(failed) == 1 and "rc=3" in failed[0]["error"]
+
+
+def test_subscribe_without_suback_is_journaled(tmp_path):
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr:
+        t, fake = opened_transport(jr)
+        fake.silent_suback = True
+        try:
+            with pytest.raises(OSError, match="SUBACK"):
+                t.subscribe("t")
+        finally:
+            t.close()
+    failed = [e for e in read_events(jpath) if e["kind"] == "mqtt_subscribe_failed"]
+    assert len(failed) == 1 and "SUBACK" in failed[0]["error"]
+
+
+def test_invalid_topic_valueerror_is_journaled(tmp_path):
+    # paho rejects invalid topics with ValueError before touching the wire -
+    # the refusal still must be journaled
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr:
+        fake = FakeClient()
+
+        def boom(topic, payload=None, qos=0, retain=False):
+            raise ValueError("Invalid topic.")
+
+        fake.publish = boom
+        t = MqttTransport(
+            "broker.test", timeout=0.5, on_event=jr, client_factory=lambda: fake
+        )
+        t.open()
+        try:
+            with pytest.raises(ValueError, match="Invalid topic"):
+                t.publish("bad+", "x")
+        finally:
+            t.close()
+    failed = [e for e in read_events(jpath) if e["kind"] == "mqtt_publish_failed"]
+    assert len(failed) == 1 and "Invalid topic" in failed[0]["error"]
+
+
 # --- сессия: те же операции через Session (транспорт подменён) ---
 
 

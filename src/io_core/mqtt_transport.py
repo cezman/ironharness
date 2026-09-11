@@ -7,6 +7,9 @@
 
 Для офлайн-тестов paho-клиент инжектится через client_factory — реальный брокер
 не нужен. Каждая операция и каждое входящее сообщение уходят в on_event (журнал).
+Проваленная операция тоже уходит в журнал (kind `<успех>_failed` + error) перед
+тем, как исключение уходит наружу: "no log = didn't happen" касается и отказов
+(ловим OSError и ValueError — paho бросает второй на невалидных топиках).
 """
 
 from __future__ import annotations
@@ -146,37 +149,34 @@ class MqttTransport:
     # --- операции ---
 
     def publish(self, topic: str, payload: str, *, qos: int = 0, retain: bool = False) -> None:
-        info = self._require_client().publish(
-            topic, payload=payload.encode("utf-8"), qos=qos, retain=retain
-        )
-        if info.rc != 0:
+        try:
+            info = self._require_client().publish(
+                topic, payload=payload.encode("utf-8"), qos=qos, retain=retain
+            )
+            if info.rc != 0:
+                raise OSError(f"mqtt publish {topic!r}: rc={info.rc}")
+            info.wait_for_publish(timeout=self._timeout)
+            # wait_for_publish молчит по таймауту: PUBACK не пришёл => публикация не подтверждена
+            if not info.is_published():
+                raise OSError(
+                    f"mqtt publish {topic!r}: not acknowledged within {self._timeout}s"
+                )
+        except (OSError, ValueError) as e:
+            # ValueError: paho rejects invalid topics before anything hits the wire
             self._emit(
                 "mqtt_publish_failed",
-                {"topic": topic, "payload": payload, "error": f"rc={info.rc}"},
+                {"topic": topic, "payload": payload, "error": str(e)},
             )
-            raise OSError(f"mqtt publish {topic!r}: rc={info.rc}")
-        info.wait_for_publish(timeout=self._timeout)
-        # wait_for_publish молчит по таймауту: PUBACK не пришёл => публикация не подтверждена
-        if not info.is_published():
-            self._emit(
-                "mqtt_publish_failed",
-                {
-                    "topic": topic,
-                    "payload": payload,
-                    "error": f"not acknowledged within {self._timeout}s",
-                },
-            )
-            raise OSError(f"mqtt publish {topic!r}: not acknowledged within {self._timeout}s")
+            raise
         self._emit("mqtt_publish", {"topic": topic, "payload": payload, "qos": qos, "retain": retain})
 
     def subscribe(self, topic: str, *, qos: int = 0) -> None:
         client = self._require_client()
-        rc, mid = client.subscribe(topic, qos=qos)
-        if rc != 0:
-            self._emit("mqtt_subscribe_failed", {"topic": topic, "error": f"rc={rc}"})
-            raise OSError(f"mqtt subscribe {topic!r}: rc={rc}")
-        # ждём SUBACK: без него отказ брокера (not authorized, кривой фильтр) был бы тихим «ok»
         try:
+            rc, mid = client.subscribe(topic, qos=qos)
+            if rc != 0:
+                raise OSError(f"mqtt subscribe {topic!r}: rc={rc}")
+            # ждём SUBACK: без него отказ брокера (not authorized, кривой фильтр) был бы тихим «ok»
             deadline = time.monotonic() + self._timeout
             with self._suback_cond:
                 while mid not in self._suback_results:
@@ -187,13 +187,13 @@ class MqttTransport:
                         )
                     self._suback_cond.wait(remaining)
                 codes = self._suback_results.pop(mid)
-        except OSError as e:
+            if any(getattr(c, "is_failure", False) for c in codes):
+                raise OSError(
+                    f"mqtt subscribe {topic!r}: broker refused ({[str(c) for c in codes]})"
+                )
+        except (OSError, ValueError) as e:
             self._emit("mqtt_subscribe_failed", {"topic": topic, "error": str(e)})
             raise
-        if any(getattr(c, "is_failure", False) for c in codes):
-            error = f"mqtt subscribe {topic!r}: broker refused ({[str(c) for c in codes]})"
-            self._emit("mqtt_subscribe_failed", {"topic": topic, "error": error})
-            raise OSError(error)
         self._emit("mqtt_subscribe", {"topic": topic, "qos": qos})
 
     def read_message(self, timeout: float = 1.0) -> dict[str, str] | None:

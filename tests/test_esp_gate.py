@@ -105,7 +105,27 @@ def test_flag_set_passes_the_gate(monkeypatch, tmp_path, image):
         EspFlasher().erase("COM7")
 
 
-def test_session_flash_denial_is_journaled(tmp_path, image):
+def test_flash_denied_with_missing_image(tmp_path, bomb_connect):
+    # the gate fires before the path check: even a probe with a bogus path is
+    # an unauthorized attempt and must leave an esp_denied trace (IH-29 review)
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(PermissionError):
+        EspFlasher(on_event=jr).flash("COM7", tmp_path / "nope.bin")
+    assert bomb_connect == []
+    assert [e["kind"] for e in read_events(jpath)] == ["esp_denied"]
+
+
+def test_image_info_missing_file_is_journaled(tmp_path):
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(FileNotFoundError):
+        EspFlasher(on_event=jr).image_info(tmp_path / "nope.bin")
+    events = read_events(jpath)
+    assert [e["kind"] for e in events] == ["esp_image_info_failed"]
+    assert "nope.bin" in events[0]["path"]
+
+
+def test_session_flash_denial_is_journaled(tmp_path, image, monkeypatch):
+    monkeypatch.delenv("IRONHARNESS_ENABLED_KINDS", raising=False)  # deterministic kinds
     jpath = tmp_path / "session.jsonl"
     s = Session(jpath, tmp_path / "sandbox", actor="test")
     with pytest.raises(PermissionError):

@@ -133,3 +133,24 @@ def test_failed_open_is_journaled(tmp_path, monkeypatch):
     events = read_events(jpath)
     assert [e["kind"] for e in events] == ["open_failed"]
     assert events[0]["port"] == LOOP and "error" in events[0]
+
+
+def test_failed_open_bad_protocol_is_journaled(tmp_path):
+    # unknown URL scheme -> ValueError from serial_for_url; the refusal is
+    # still journaled (the port string comes from an untrusted agent)
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ValueError):
+        SerialTransport("nosuchproto://x", on_event=jr).open()
+    events = read_events(jpath)
+    assert [e["kind"] for e in events] == ["open_failed"]
+
+
+def test_failed_read_line_is_journaled(tmp_path, monkeypatch):
+    _patch_broken_port(monkeypatch, serial.SerialException("device gone"))
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, SerialTransport(
+        LOOP, on_event=jr
+    ) as t, pytest.raises(serial.SerialException):
+        t.read_line()
+    failed = [e for e in read_events(jpath) if e["kind"] == "read_line_failed"]
+    assert len(failed) == 1 and failed[0]["max_len"] == 256

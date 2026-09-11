@@ -93,7 +93,9 @@ class EspFlasher:
     def image_info(self, firmware_path: str | Path) -> dict[str, Any]:
         path = Path(firmware_path)
         if not path.is_file():
-            raise FileNotFoundError(f"image not found: {path}")
+            error = f"image not found: {path}"
+            self._emit("esp_image_info_failed", {"path": str(path), "error": error})
+            raise FileNotFoundError(error)
         _require_esptool()
         img = LoadFirmwareImage(self._chip, str(path))
         segments = [{"addr": hex(s.addr), "size": len(s.data)} for s in img.segments]
@@ -130,10 +132,12 @@ class EspFlasher:
         addr: int = DEFAULT_BOOTLOADER_OFFSET,
         baud: int = 921600,
     ) -> str:
+        # the gate is the very first thing: even a probe with a bogus path is
+        # an unauthorized flash attempt and must leave a trace
+        self._require_real_flash_allowed("flash", port)
         path = Path(firmware_path)
         if not path.is_file():
             raise FileNotFoundError(f"image not found: {path}")
-        self._require_real_flash_allowed("flash", port)
         _require_esptool()
         try:
             with connect_esp(port=port, chip=self._chip) as esp:

@@ -102,7 +102,7 @@ function payloadText(row) {
 
 function rowClass(row) {
   var k = row.kind || "";
-  if (/(^|_)(fail|failed|violation|error|timeout)($|_)/.test(k)) return "bad";
+  if (/(^|_)(fail|failed|violation|error|timeout|denied)($|_)/.test(k)) return "bad";
   if (k === "task_result" || k === "attempt_result") return row.p && row.p.passed ? "ok" : "bad";
   return "";
 }

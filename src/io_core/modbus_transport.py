@@ -4,6 +4,8 @@
 что у SerialTransport) — журнал/реплей подключаются без изменений. Проваленная
 операция тоже уходит в журнал (kind `<успех>_failed` + error) перед тем, как
 исключение уходит наружу: "no log = didn't happen" касается и отказов.
+Ловим OSError и ModbusException (базовое исключение pymodbus — его
+ConnectionException и есть самый реалистичный отказ линии).
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from collections.abc import Callable, Sequence
 from typing import Any, Self
 
 from pymodbus.client import ModbusTcpClient
+from pymodbus.exceptions import ModbusException
 
 from io_core.policy import AccessPolicy
 
@@ -45,7 +48,7 @@ class ModbusTransport:
             self._client = ModbusTcpClient(self._host, port=self._port, timeout=self._timeout)
             if not self._client.connect():
                 raise ConnectionError(f"failed to connect to {self._host}:{self._port}")
-        except OSError as e:
+        except (OSError, ModbusException) as e:
             # policy refusals are journaled by the policy itself; connect
             # failures are ours to record
             self._emit(
@@ -82,7 +85,7 @@ class ModbusTransport:
                 address, count=count, device_id=self._device_id
             )
             self._check(result, "read_holding")
-        except OSError as e:
+        except (OSError, ModbusException) as e:
             self._emit(
                 "modbus_read_failed", {"address": address, "count": count, "error": str(e)}
             )
@@ -97,7 +100,7 @@ class ModbusTransport:
                 address, value, device_id=self._device_id
             )
             self._check(result, "write_register")
-        except OSError as e:
+        except (OSError, ModbusException) as e:
             self._emit(
                 "modbus_write_failed", {"address": address, "values": [value], "error": str(e)}
             )
@@ -111,7 +114,7 @@ class ModbusTransport:
                 address, values, device_id=self._device_id
             )
             self._check(result, "write_registers")
-        except OSError as e:
+        except (OSError, ModbusException) as e:
             self._emit(
                 "modbus_write_failed", {"address": address, "values": values, "error": str(e)}
             )
