@@ -4,14 +4,15 @@ real subprocess over the real wire:
 
 1. a hand-rolled line-delimited JSON-RPC client - knows nothing about the
    server's Python API, only the protocol (this is what any third-party
-   client speaks);
+   client speaks). Flushed non-JSON garbage on the server's stdout fails it
+   by design - this is the IH-20 hygiene guard this stand enables;
 2. the official MCP SDK client (ClientSession over stdio_client) - the
-   compatibility pin ("independent client" backlog idea, mcp-use #2).
+   compatibility pin ("independent client" backlog idea, mcp-use #2). The
+   SDK client tolerates garbage lines, so the garbage guard lives in (1).
 
-Both spawn `python -m io_core.mcp_server` with IRONHARNESS_HOME in a tmp dir
-(no session against the developer's real ~/.ironharness). Non-JSON garbage on
-the server's stdout fails the tests by design: that is the IH-20 hygiene
-guard this stand exists to enable.
+Both spawn `python -m io_core.mcp_server` with IRONHARNESS_HOME/SANDBOX in a
+tmp dir, and the journal-exists assertion pins that no session lands in the
+developer's real ~/.ironharness.
 """
 
 from __future__ import annotations
@@ -41,7 +42,12 @@ INITIALIZE = {
 
 
 def spawn_server(tmp_path: Path) -> subprocess.Popen:
-    env = {**os.environ, "PYTHONPATH": SRC, "IRONHARNESS_HOME": str(tmp_path / "home")}
+    env = {
+        **os.environ,
+        "PYTHONPATH": SRC,
+        "IRONHARNESS_HOME": str(tmp_path / "home"),
+        "IRONHARNESS_SANDBOX": str(tmp_path / "home" / "sandbox"),
+    }
     return subprocess.Popen(
         [sys.executable, "-m", "io_core.mcp_server"],
         stdin=subprocess.PIPE,
@@ -105,7 +111,7 @@ def server(tmp_path):
     proc.wait(timeout=10)
 
 
-def test_wire_initialize_tools_call(server):
+def test_wire_initialize_tools_call(server, tmp_path):
     client = WireClient(server)
     init = client.request(INITIALIZE)
     assert "error" not in init
@@ -140,6 +146,9 @@ def test_wire_initialize_tools_call(server):
     )
     assert "error" not in files
     assert files["result"].get("isError") is not True, files
+    # the tmp-home isolation is pinned, not just declared: the session the
+    # server just created must have journaled into tmp, never ~/.ironharness
+    assert (tmp_path / "home" / "journal.jsonl").is_file()
 
 
 def test_wire_unknown_tool_is_a_clean_jsonrpc_error(server):
