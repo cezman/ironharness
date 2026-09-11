@@ -98,14 +98,23 @@ class MqttTransport:
         client.on_disconnect = self._on_disconnect
         client.on_subscribe = self._on_subscribe
         client.on_message = self._on_message
-        client.connect(self._host, port=self._port, keepalive=self._keepalive)
-        client.loop_start()
         self._client = client
-        if not self._connected.wait(timeout=self._timeout):
+        try:
+            client.connect(self._host, port=self._port, keepalive=self._keepalive)
+            client.loop_start()
+            if not self._connected.wait(timeout=self._timeout):
+                raise ConnectionError(
+                    f"failed to connect to mqtt broker {self._host}:{self._port}"
+                )
+        except OSError as e:
+            # policy refusals are journaled by the policy itself; connect
+            # failures are ours to record
             self._teardown()
-            raise ConnectionError(
-                f"failed to connect to mqtt broker {self._host}:{self._port}"
+            self._emit(
+                "mqtt_open_failed",
+                {"host": self._host, "port": self._port, "error": str(e)},
             )
+            raise
         self._emit("mqtt_open", {"host": self._host, "port": self._port})
 
     def _teardown(self) -> None:
@@ -141,10 +150,22 @@ class MqttTransport:
             topic, payload=payload.encode("utf-8"), qos=qos, retain=retain
         )
         if info.rc != 0:
+            self._emit(
+                "mqtt_publish_failed",
+                {"topic": topic, "payload": payload, "error": f"rc={info.rc}"},
+            )
             raise OSError(f"mqtt publish {topic!r}: rc={info.rc}")
         info.wait_for_publish(timeout=self._timeout)
         # wait_for_publish молчит по таймауту: PUBACK не пришёл => публикация не подтверждена
         if not info.is_published():
+            self._emit(
+                "mqtt_publish_failed",
+                {
+                    "topic": topic,
+                    "payload": payload,
+                    "error": f"not acknowledged within {self._timeout}s",
+                },
+            )
             raise OSError(f"mqtt publish {topic!r}: not acknowledged within {self._timeout}s")
         self._emit("mqtt_publish", {"topic": topic, "payload": payload, "qos": qos, "retain": retain})
 
@@ -152,18 +173,27 @@ class MqttTransport:
         client = self._require_client()
         rc, mid = client.subscribe(topic, qos=qos)
         if rc != 0:
+            self._emit("mqtt_subscribe_failed", {"topic": topic, "error": f"rc={rc}"})
             raise OSError(f"mqtt subscribe {topic!r}: rc={rc}")
         # ждём SUBACK: без него отказ брокера (not authorized, кривой фильтр) был бы тихим «ok»
-        deadline = time.monotonic() + self._timeout
-        with self._suback_cond:
-            while mid not in self._suback_results:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise OSError(f"mqtt subscribe {topic!r}: no SUBACK within {self._timeout}s")
-                self._suback_cond.wait(remaining)
-            codes = self._suback_results.pop(mid)
+        try:
+            deadline = time.monotonic() + self._timeout
+            with self._suback_cond:
+                while mid not in self._suback_results:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise OSError(
+                            f"mqtt subscribe {topic!r}: no SUBACK within {self._timeout}s"
+                        )
+                    self._suback_cond.wait(remaining)
+                codes = self._suback_results.pop(mid)
+        except OSError as e:
+            self._emit("mqtt_subscribe_failed", {"topic": topic, "error": str(e)})
+            raise
         if any(getattr(c, "is_failure", False) for c in codes):
-            raise OSError(f"mqtt subscribe {topic!r}: broker refused ({[str(c) for c in codes]})")
+            error = f"mqtt subscribe {topic!r}: broker refused ({[str(c) for c in codes]})"
+            self._emit("mqtt_subscribe_failed", {"topic": topic, "error": error})
+            raise OSError(error)
         self._emit("mqtt_subscribe", {"topic": topic, "qos": qos})
 
     def read_message(self, timeout: float = 1.0) -> dict[str, str] | None:

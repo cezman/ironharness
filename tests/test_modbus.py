@@ -51,3 +51,37 @@ def test_journal_records_modbus_ops(sim, tmp_path):
     assert kinds == ["modbus_open", "modbus_write", "modbus_read", "modbus_close"]
     read_ev = events[2]
     assert read_ev["values"] == [42, 43]
+
+
+def test_failed_read_is_journaled(sim, tmp_path):
+    # IH-29: a failed operation is journaled before the exception escapes -
+    # "no log = didn't happen" covers refusals, not only successes
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, ModbusTransport(
+        "127.0.0.1", port=sim.port, on_event=jr
+    ) as t, pytest.raises(OSError):
+        t.read_holding(1000, 4)
+    events = [e for e in read_events(jpath) if e["kind"] == "modbus_read_failed"]
+    assert len(events) == 1
+    assert events[0]["address"] == 1000 and "error" in events[0]
+
+
+def test_failed_write_is_journaled(sim, tmp_path):
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, ModbusTransport(
+        "127.0.0.1", port=sim.port, on_event=jr
+    ) as t, pytest.raises(OSError):
+        t.write_register(1000, 1)
+    failed = [e for e in read_events(jpath) if e["kind"] == "modbus_write_failed"]
+    assert len(failed) == 1
+    assert failed[0]["values"] == [1]
+    assert not [e for e in read_events(jpath) if e["kind"] == "modbus_write"]
+
+
+def test_failed_open_is_journaled(tmp_path):
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ConnectionError):
+        ModbusTransport("127.0.0.1", port=1, timeout=0.5, on_event=jr).open()
+    events = read_events(jpath)
+    assert [e["kind"] for e in events] == ["modbus_open_failed"]
+    assert events[0]["host"] == "127.0.0.1" and "error" in events[0]

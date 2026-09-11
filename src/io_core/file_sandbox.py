@@ -93,7 +93,9 @@ class FileSandbox:
         target = self.resolve(rel_path)
         if not target.is_dir():
             raise NotADirectoryError(rel_path)
-        return sorted(p.relative_to(self._root).as_posix() for p in target.rglob("*"))
+        entries = sorted(p.relative_to(self._root).as_posix() for p in target.rglob("*"))
+        self._emit("file_list", {"path": rel_path, "count": len(entries)})
+        return entries
 
     def delete_file(self, rel_path: str) -> None:
         with self._lock:

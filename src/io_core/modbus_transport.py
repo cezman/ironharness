@@ -1,7 +1,9 @@
 """Modbus TCP транспорт io-core: holding-регистры с журналированием (этап 1, задача 3).
 
 Клиент поверх pymodbus. Каждая операция уходит в on_event (тот же контракт,
-что у SerialTransport) — журнал/реплей подключаются без изменений.
+что у SerialTransport) — журнал/реплей подключаются без изменений. Проваленная
+операция тоже уходит в журнал (kind `<успех>_failed` + error) перед тем, как
+исключение уходит наружу: "no log = didn't happen" касается и отказов.
 """
 
 from __future__ import annotations
@@ -39,9 +41,18 @@ class ModbusTransport:
 
     def open(self) -> None:
         AccessPolicy.from_env(on_event=self._on_event).check_host(self._host, self._port)
-        self._client = ModbusTcpClient(self._host, port=self._port, timeout=self._timeout)
-        if not self._client.connect():
-            raise ConnectionError(f"failed to connect to {self._host}:{self._port}")
+        try:
+            self._client = ModbusTcpClient(self._host, port=self._port, timeout=self._timeout)
+            if not self._client.connect():
+                raise ConnectionError(f"failed to connect to {self._host}:{self._port}")
+        except OSError as e:
+            # policy refusals are journaled by the policy itself; connect
+            # failures are ours to record
+            self._emit(
+                "modbus_open_failed",
+                {"host": self._host, "port": self._port, "error": str(e)},
+            )
+            raise
         self._emit("modbus_open", {"host": self._host, "port": self._port})
 
     def close(self) -> None:
@@ -66,25 +77,43 @@ class ModbusTransport:
             raise OSError(f"modbus {op}: {result}")
 
     def read_holding(self, address: int, count: int = 1) -> list[int]:
-        result = self._require_client().read_holding_registers(
-            address, count=count, device_id=self._device_id
-        )
-        self._check(result, "read_holding")
+        try:
+            result = self._require_client().read_holding_registers(
+                address, count=count, device_id=self._device_id
+            )
+            self._check(result, "read_holding")
+        except OSError as e:
+            self._emit(
+                "modbus_read_failed", {"address": address, "count": count, "error": str(e)}
+            )
+            raise
         values = list(result.registers)
         self._emit("modbus_read", {"address": address, "count": count, "values": values})
         return values
 
     def write_register(self, address: int, value: int) -> None:
-        result = self._require_client().write_register(
-            address, value, device_id=self._device_id
-        )
-        self._check(result, "write_register")
+        try:
+            result = self._require_client().write_register(
+                address, value, device_id=self._device_id
+            )
+            self._check(result, "write_register")
+        except OSError as e:
+            self._emit(
+                "modbus_write_failed", {"address": address, "values": [value], "error": str(e)}
+            )
+            raise
         self._emit("modbus_write", {"address": address, "values": [value]})
 
     def write_registers(self, address: int, values: Sequence[int]) -> None:
         values = list(values)
-        result = self._require_client().write_registers(
-            address, values, device_id=self._device_id
-        )
-        self._check(result, "write_registers")
+        try:
+            result = self._require_client().write_registers(
+                address, values, device_id=self._device_id
+            )
+            self._check(result, "write_registers")
+        except OSError as e:
+            self._emit(
+                "modbus_write_failed", {"address": address, "values": values, "error": str(e)}
+            )
+            raise
         self._emit("modbus_write", {"address": address, "values": values})

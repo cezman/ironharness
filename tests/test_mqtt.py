@@ -255,6 +255,68 @@ def test_operation_before_open_raises():
         t.publish("t", "x")
 
 
+# --- IH-29: a failed operation is journaled before the exception escapes ---
+
+
+def test_failed_publish_is_journaled(tmp_path):
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr:
+        t, fake = opened_transport(jr)
+        fake.publish_acked = False
+        try:
+            with pytest.raises(OSError, match="not acknowledged"):
+                t.publish("t", "x")
+        finally:
+            t.close()
+    failed = [e for e in read_events(jpath) if e["kind"] == "mqtt_publish_failed"]
+    assert len(failed) == 1
+    assert failed[0]["topic"] == "t" and "not acknowledged" in failed[0]["error"]
+    assert not [e for e in read_events(jpath) if e["kind"] == "mqtt_publish"]
+
+
+def test_failed_subscribe_is_journaled(tmp_path):
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr:
+        t, fake = opened_transport(jr)
+        fake.suback_codes = [reason(135)]  # Not authorized
+        try:
+            with pytest.raises(OSError, match="refused"):
+                t.subscribe("secret/#")
+        finally:
+            t.close()
+    failed = [e for e in read_events(jpath) if e["kind"] == "mqtt_subscribe_failed"]
+    assert len(failed) == 1 and "refused" in failed[0]["error"]
+    assert not [e for e in read_events(jpath) if e["kind"] == "mqtt_subscribe"]
+
+
+def test_refused_open_is_journaled(tmp_path):
+    jpath = tmp_path / "j.jsonl"
+    fake = FakeClient()
+    fake.refuse = True
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ConnectionRefusedError):
+        MqttTransport(
+            "broker.test", timeout=0.5, on_event=jr, client_factory=lambda: fake
+        ).open()
+    events = read_events(jpath)
+    assert [e["kind"] for e in events] == ["mqtt_open_failed"]
+    assert "broker down" in events[0]["error"]
+
+
+def test_open_timeout_is_journaled(tmp_path):
+    # the previously-silent path: CONNACK never arrives -> teardown, and now
+    # the failure lands in the journal too
+    jpath = tmp_path / "j.jsonl"
+    fake = FakeClient()
+    fake.silent_open = True
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ConnectionError):
+        MqttTransport(
+            "broker.test", timeout=0.3, on_event=jr, client_factory=lambda: fake
+        ).open()
+    events = read_events(jpath)
+    assert [e["kind"] for e in events] == ["mqtt_open_failed"]
+    assert "broker" in events[0]["error"]
+
+
 # --- сессия: те же операции через Session (транспорт подменён) ---
 
 

@@ -8,9 +8,10 @@ pty-пара (только POSIX) — сценарий «два конца пр�
 import os
 
 import pytest
+import serial
 
 import io_core
-from io_core import SerialTransport
+from io_core import JsonlJournal, SerialTransport, read_events
 
 LOOP = "loop://"
 
@@ -67,3 +68,68 @@ def test_pty_pair_device_side():
     finally:
         os.close(master)
         os.close(slave)
+
+
+# --- IH-29: a failed operation is journaled before the exception escapes ---
+
+
+class _BoomPort:
+    """A port object whose I/O always fails with the given exception."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+        self.dtr = True
+        self.rts = True
+
+    def write(self, data):
+        raise self._exc
+
+    def read(self, size=1):
+        raise self._exc
+
+    def read_until(self, *args, **kwargs):
+        raise self._exc
+
+    def close(self):
+        pass
+
+
+def _patch_broken_port(monkeypatch, exc, *, fail_open=False):
+    if fail_open:  # the failure happens inside serial_for_url itself
+        monkeypatch.setattr(serial, "serial_for_url", lambda *a, **k: (_ for _ in ()).throw(exc))
+    else:
+        monkeypatch.setattr(serial, "serial_for_url", lambda *a, **k: _BoomPort(exc))
+
+
+def test_failed_write_is_journaled(tmp_path, monkeypatch):
+    _patch_broken_port(monkeypatch, serial.SerialTimeoutException("write timed out"))
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, SerialTransport(
+        LOOP, on_event=jr
+    ) as t, pytest.raises(serial.SerialTimeoutException):
+        t.write(b"\xaa\xbb")
+    events = read_events(jpath)
+    # the context manager still closes the (broken) port on the way out
+    assert [e["kind"] for e in events] == ["open", "write_failed", "close"]
+    assert events[1]["data_hex"] == "aabb" and "timed out" in events[1]["error"]
+
+
+def test_failed_read_is_journaled(tmp_path, monkeypatch):
+    _patch_broken_port(monkeypatch, serial.SerialException("device gone"))
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, SerialTransport(
+        LOOP, on_event=jr
+    ) as t, pytest.raises(serial.SerialException):
+        t.read(4)
+    events = [e for e in read_events(jpath) if e["kind"] == "read_failed"]
+    assert len(events) == 1 and events[0]["size"] == 4
+
+
+def test_failed_open_is_journaled(tmp_path, monkeypatch):
+    _patch_broken_port(monkeypatch, serial.SerialException("no such port"), fail_open=True)
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(serial.SerialException):
+        SerialTransport(LOOP, on_event=jr).open()
+    events = read_events(jpath)
+    assert [e["kind"] for e in events] == ["open_failed"]
+    assert events[0]["port"] == LOOP and "error" in events[0]

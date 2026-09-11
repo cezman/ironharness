@@ -132,6 +132,22 @@ def test_esp_image_info_offline(mcp_env):
     assert len(info["segments"]) >= 3
 
 
+def test_esp_image_info_passes_chip_to_session(mcp_env, monkeypatch):
+    # IH-29: аргумент chip раньше принимался и молча отбрасывался - агент
+    # получал разбор под esp32, запросив другой чип
+    from io_core import Session
+
+    captured = {}
+
+    def fake_info(self, firmware_path, chip="esp32"):
+        captured["chip"] = chip
+        return {"chip": chip}
+
+    monkeypatch.setattr(Session, "esp_image_info", fake_info)
+    assert esp_image_info("fw.bin", chip="esp32s3") == {"chip": "esp32s3"}
+    assert captured["chip"] == "esp32s3"
+
+
 def test_get_session_race_creates_one_session(monkeypatch, tmp_path):
     # IH-12: два конкурентных первых вызова get_session() создают ровно одну
     # Session (раньше обе проходили проверку на None и одна Session с журналом
