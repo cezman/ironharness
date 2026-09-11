@@ -179,6 +179,19 @@ def test_silent_exit_before_first_wait_fails_with_zero_waits(tmp_path):
     assert "exited before the first wait-serial" in (res.error or "")
 
 
+def test_dump_of_second_wait_needle_fails_with_preprinted(tmp_path):
+    # Direct pin for the dump branch of canonical rule (2): the cheater prints
+    # only the SECOND wait's needle, so rule (1) stays silent (its waited
+    # needle 'echo: hi' never appears in the log) and the "pre-printed"
+    # wording must come from rule (2) - a wait-serial needle sitting in the
+    # final log without ever being credited as a stimulus answer.
+    res = run_synthetic(tmp_path, "print('echo: again')\n")
+    assert not res.passed
+    assert res.error_kind == "run"
+    assert (res.error or "").startswith("anti-cheat:")
+    assert "pre-printed output" in (res.error or "")
+
+
 def test_mqtt_dump_before_any_trigger_fails_with_preprinted(tmp_path):
     # mqtt-publish anchors the anti-cheat like write-serial: a cheater that
     # dumps the awaited needle and exits without ever crediting the wait step
