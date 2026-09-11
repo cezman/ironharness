@@ -256,6 +256,10 @@ def test_wire_stays_clean_through_error_battery(server, tmp_path):
     assert ("error" in res) or (res["result"].get("isError") is True), res
     res = call(client, 11, "file_read", {"path": "../outside.txt"})
     assert ("error" in res) or (res["result"].get("isError") is True), res
+    # the IH-18 reader tools are on the wire and fail cleanly without a port:
+    # a reader_start on an unknown name is a JSON-RPC error, not a crash
+    res = call(client, 14, "serial_reader_start", {"name": "nope"})
+    assert ("error" in res) or (res["result"].get("isError") is True), res
     res = call(client, 12, "no_such_tool", {})
     assert ("error" in res) or (res["result"].get("isError") is True), res
     # still alive and answering: an echo round-trip would fail if any of the

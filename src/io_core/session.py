@@ -28,6 +28,7 @@ from io_core.limits import (
 from io_core.modbus_transport import ModbusTransport
 from io_core.mqtt_transport import MqttTransport
 from io_core.policy import MAX_CONNECTIONS_ENV, AccessPolicy, parse_max_connections
+from io_core.serial_reader import SerialReader
 from io_core.serial_transport import SerialTransport
 
 DEFAULT_BOOTLOADER_OFFSET = 0x1000  # classic ESP32 (canonical value lives in esp_flash)
@@ -60,6 +61,12 @@ class Session:
         self.sandbox = FileSandbox(sandbox_root, on_event=self.journal)
         self._transports: dict[str, Any] = {}
         self._kinds: dict[str, str] = {}
+        # raw (unwrapped) serial transports and their background readers; the
+        # reader must bypass the deadline/rate wrappers (a background pump is
+        # not an agent operation) and the write path needs the raw handle's
+        # owner to serialize against it (CH340 single-threaded link)
+        self._serial_base: dict[str, Any] = {}
+        self._readers: dict[str, SerialReader] = {}
         self._lock = threading.RLock()
 
     def _check_free(self, name: str) -> None:
@@ -132,23 +139,108 @@ class Session:
             self._check_kind("serial")
             self._check_free(name)
             self._check_connection_limit()
-            t = self._apply_limits(
-                SerialTransport(
-                    port, baudrate=baudrate, timeout=timeout, on_event=self._journal_for(name)
-                )
-            )
+            raw = SerialTransport(port, baudrate=baudrate, timeout=timeout,
+                                  on_event=self._journal_for(name))
+            t = self._apply_limits(raw)
             t.open()
             self._transports[name] = t
             self._kinds[name] = "serial"
+            self._serial_base[name] = raw
 
     def serial_write(self, name: str, data_hex: str) -> int:
-        return self._get(name).write(bytes.fromhex(data_hex))
+        data = bytes.fromhex(data_hex)
+        # lock order: session lock is ALWAYS released before io_lock is taken.
+        # The inverse order (io_lock held while waiting for the session lock,
+        # e.g. in _get) plus a concurrent reader_stop (session lock held,
+        # joining a reader thread that waits for io_lock) is a deadlock cycle.
+        with self._lock:
+            t = self._get(name)
+            reader = self._readers.get(name)
+        if reader is not None:
+            # CH340: serialize against the background read (racing them on a
+            # live link bursts NUL bytes); limits still apply - the wrapper's
+            # write goes under the reader's I/O lock
+            with reader.io_lock:
+                return t.write(data)
+        return t.write(data)
 
     def serial_read(self, name: str, size: int = 64) -> str:
-        return self._get(name).read(size).hex()
+        with self._lock:
+            if name in self._readers:
+                raise RuntimeError(
+                    f"transport {name!r} has a background reader - use serial_tail/"
+                    "serial_read_until (a direct read would race the reader for bytes)"
+                )
+            t = self._get(name)
+        return t.read(size).hex()
 
     def serial_read_line(self, name: str, max_len: int = 256) -> str:
-        return self._get(name).read_line(max_len).hex()
+        with self._lock:
+            if name in self._readers:
+                raise RuntimeError(
+                    f"transport {name!r} has a background reader - use serial_tail/"
+                    "serial_read_until (a direct read would race the reader for bytes)"
+                )
+            t = self._get(name)
+        return t.read_line(max_len).hex()
+
+    # --- serial background reader (IH-18) ---
+
+    def serial_reader_start(self, name: str, *, max_bytes: int = 65536) -> dict[str, int]:
+        """Starts a background reader on an open serial transport: the reader
+        drains the port into a bounded buffer, so device output between agent
+        operations is not lost. The reader owns the read side: serial_read/
+        serial_read_line refuse while it runs (serial_write is serialized
+        against it - CH340 single-threaded link)."""
+        with self._lock:
+            base = self._serial_base.get(name)
+            if base is None:
+                raise KeyError(f"serial transport {name!r} is not open")
+            if name in self._readers:
+                raise KeyError(f"transport {name!r} already has a background reader")
+            reader = SerialReader(base, max_bytes=max_bytes)
+            self._readers[name] = reader
+            # journaled BEFORE the thread starts: a journal where the first
+            # background read precedes reader_start would be a lie about order
+            self.journal("reader_start", {"conn": name, "max_bytes": max_bytes})
+            reader.start()
+        return reader.stats()
+
+    def serial_reader_stop(self, name: str) -> dict[str, int]:
+        with self._lock:
+            reader = self._readers.pop(name, None)
+            if reader is None:
+                raise KeyError(f"transport {name!r} has no background reader")
+            reader.stop()
+            stats = reader.stats()
+        self.journal("reader_stop", {"conn": name, **stats})
+        return stats
+
+    def serial_tail(self, name: str, size: int = 4096) -> dict[str, object]:
+        """Newest `size` bytes from the reader buffer (non-destructive)."""
+        return self._reader(name).tail(size)
+
+    def serial_read_until(self, name: str, pattern: str, timeout: float = 10.0) -> dict[str, object]:
+        """Waits for the utf-8 pattern in fresh reader data; consumes the
+        buffer up to the end of the match (expect-style)."""
+        return self._reader(name).read_until(pattern, timeout)
+
+    def _reader(self, name: str) -> SerialReader:
+        with self._lock:
+            try:
+                return self._readers[name]
+            except KeyError:
+                raise KeyError(f"transport {name!r} has no background reader") from None
+
+    def _stop_reader(self, name: str, *, implicit: bool = False) -> None:
+        """Stops and drops the reader if one is attached (under the session
+        lock). An implicit stop (transport close) is journaled too: the
+        journal must show the reader ending, not vanishing."""
+        reader = self._readers.pop(name, None)
+        if reader is not None:
+            reader.stop()
+            if implicit:
+                self.journal("reader_stop", {"conn": name, "implicit": True, **reader.stats()})
 
     # --- modbus ---
 
@@ -276,8 +368,10 @@ class Session:
             t = self._get(name)
             if self._kinds.get(name) != kind:
                 raise KeyError(f"transport {name!r} is not a {kind} transport")
+            self._stop_reader(name, implicit=True)  # a reader must not outlive its transport
             del self._transports[name]
             del self._kinds[name]
+            self._serial_base.pop(name, None)
             t.close()
 
     def serial_close(self, name: str) -> None:
@@ -292,8 +386,10 @@ class Session:
     def close_transport(self, name: str) -> None:
         with self._lock:
             t = self._get(name)  # a friendly "not open" error, not a bare KeyError
+            self._stop_reader(name, implicit=True)  # a reader must not outlive its transport
             del self._transports[name]
             del self._kinds[name]  # keep the two registries in lockstep
+            self._serial_base.pop(name, None)
         t.close()
 
     def close(self) -> None:
@@ -306,6 +402,18 @@ class Session:
             transports = list(self._transports.values())
             self._transports.clear()
             self._kinds.clear()
+            self._serial_base.clear()
+            readers = list(self._readers.items())
+            self._readers.clear()
+        for name, reader in readers:  # stop readers before their transports close
+            try:
+                reader.stop()
+                # an implicit stop must end in the journal like any other
+                # (a reader that merely vanishes breaks the audit trail)
+                self.journal("reader_stop", {"conn": name, "implicit": True, **reader.stats()})
+            except Exception as e:  # noqa: BLE001 - one bad reader must not leak the rest
+                if first_error is None:
+                    first_error = e
         for t in transports:
             try:
                 t.close()
