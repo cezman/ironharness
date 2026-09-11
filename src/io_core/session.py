@@ -403,11 +403,14 @@ class Session:
             self._transports.clear()
             self._kinds.clear()
             self._serial_base.clear()
-            readers = list(self._readers.values())
+            readers = list(self._readers.items())
             self._readers.clear()
-        for reader in readers:  # stop readers before their transports close
+        for name, reader in readers:  # stop readers before their transports close
             try:
                 reader.stop()
+                # an implicit stop must end in the journal like any other
+                # (a reader that merely vanishes breaks the audit trail)
+                self.journal("reader_stop", {"conn": name, "implicit": True, **reader.stats()})
             except Exception as e:  # noqa: BLE001 - one bad reader must not leak the rest
                 if first_error is None:
                     first_error = e

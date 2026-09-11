@@ -224,19 +224,23 @@ def test_session_write_serialized_against_reader(session):
 
 
 class TrackingLock:
-    """Records every acquisition (list.append is atomic under the GIL)."""
+    """Records every acquisition with the acquirer's thread id
+    (list.append is atomic under the GIL)."""
 
     def __init__(self, inner: threading.Lock) -> None:
         self._inner = inner
-        self.entered: list[float] = []
+        self.entered: list[tuple[int, float]] = []
 
     def __enter__(self) -> Self:
         self._inner.__enter__()
-        self.entered.append(time.monotonic())
+        self.entered.append((threading.get_ident(), time.monotonic()))
         return self
 
     def __exit__(self, *exc: object) -> None:
         self._inner.__exit__(*exc)
+
+    def entered_by(self, thread_id: int) -> int:
+        return sum(1 for tid, _ in self.entered if tid == thread_id)
 
 
 def test_write_takes_the_reader_io_lock(session):
@@ -252,6 +256,32 @@ def test_write_takes_the_reader_io_lock(session):
     before = len(tracking.entered)
     session.serial_write(name, b"x".hex())
     assert len(tracking.entered) > before, "serial_write bypassed the reader I/O lock"
+    session.serial_reader_stop(name)
+
+
+def test_write_lock_order_session_lock_before_io_lock(session):
+    # Deterministic lock-order pin (the probabilistic stop-race test cannot
+    # catch the regression): while THIS thread holds the session lock, a
+    # concurrent serial_write (reader attached) must NOT touch the reader's
+    # I/O lock. The round-1 deadlock form took io_lock FIRST and then waited
+    # for the session lock inside _get - here the writer's io-lock entry
+    # would appear while the session lock is still held.
+    name = loop_session(session)
+    session.serial_reader_start(name)
+    reader = session._readers[name]
+    probe = TrackingLock(threading.Lock())
+    reader._io_lock = probe
+    writer = threading.Thread(target=session.serial_write, args=(name, b"z".hex()))
+    with session._lock:  # the writer below can only block on THIS lock
+        writer.start()
+        time.sleep(0.3)  # writer is parked on the session lock acquisition
+        assert probe.entered_by(writer.ident) == 0, (
+            "serial_write took the reader I/O lock before the session lock "
+            "(the deadlock half-cycle)"
+        )
+    writer.join(timeout=5)
+    assert not writer.is_alive()
+    assert probe.entered_by(writer.ident) == 1  # after the release, the write ran under the lock
     session.serial_reader_stop(name)
 
 
@@ -301,24 +331,37 @@ def reader_threads_alive() -> int:
     return sum(1 for t in threading.enumerate() if t.name == "serial-reader")
 
 
-def test_close_transport_stops_reader_thread(session):
+def implicit_reader_stops(journal_path: Path) -> list[dict]:
+    return [
+        e
+        for e in read_events(journal_path)
+        if e["kind"] == "reader_stop" and e.get("implicit")
+    ]
+
+
+def test_close_transport_stops_and_journals_reader(session, tmp_path):
     name = loop_session(session)
     session.serial_reader_start(name)
     assert reader_threads_alive() >= 1
     session.close_transport(name)
-    # the M3b pin: without _stop_reader in close_transport the reader thread
-    # would outlive its (closed) transport
+    # the journal pin (the thread-count assert alone is decorative on loop://:
+    # a closed port kills the reader thread by itself): closing the transport
+    # must END the reader in the journal, not just in memory
+    stops = implicit_reader_stops(tmp_path / "journal.jsonl")
+    assert stops and stops[-1].get("conn") == "loop"
     deadline = time.monotonic() + 6
     while time.monotonic() < deadline and reader_threads_alive():
         time.sleep(0.05)
     assert reader_threads_alive() == 0
 
 
-def test_session_close_stops_reader_threads(session):
+def test_session_close_stops_and_journals_reader(session, tmp_path):
     name = loop_session(session)
     session.serial_reader_start(name)
     assert reader_threads_alive() >= 1
-    session.close()  # the M3c pin: Session.close stops every reader first
+    session.close()  # stops every reader (journaling each) before transports
+    stops = implicit_reader_stops(tmp_path / "journal.jsonl")
+    assert stops and stops[-1].get("conn") == "loop"
     deadline = time.monotonic() + 6
     while time.monotonic() < deadline and reader_threads_alive():
         time.sleep(0.05)
