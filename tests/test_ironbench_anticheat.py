@@ -179,6 +179,53 @@ def test_silent_exit_before_first_wait_fails_with_zero_waits(tmp_path):
     assert "exited before the first wait-serial" in (res.error or "")
 
 
+def test_mqtt_dump_before_any_trigger_fails_with_preprinted(tmp_path):
+    # mqtt-publish anchors the anti-cheat like write-serial: a cheater that
+    # dumps the awaited needle and exits without ever crediting the wait step
+    # (the delay lets it die before the stimulus loop even starts driving) is
+    # named pre-printed, not zero-waits - the needle sits in the final log,
+    # never credited as a stimulus answer.
+    from io_core.mqtt_sim import MqttSimBroker
+
+    d = tmp_path / "t"
+    d.mkdir()
+    text = textwrap.dedent(
+        """
+    name: mqtt-dump
+    description: fake
+    entry: solution.py
+    target: unix
+    timeout_sec: 10
+    mqtt:
+      client_id: ironbench-dump
+    expect:
+      - 'READY'
+    stimulus:
+      - delay: 300ms
+      - mqtt-publish: {topic: dev/cmd, payload: "go", retain: true}
+      - wait-serial: "READY"
+    """
+    )
+    (d / "task.yaml").write_text(text, encoding="utf-8")
+    (d / "solution.py").write_text("print('READY')\n", encoding="utf-8")
+    task = load_task(d)
+    broker = MqttSimBroker()
+    broker.start()
+    try:
+        res = run_task(
+            task,
+            out_dir=tmp_path / "out",
+            unix_cmd=[sys.executable, str(d / "solution.py")],
+            mqtt_broker=broker,
+        )
+    finally:
+        broker.stop()
+    assert not res.passed
+    assert res.error_kind == "run"
+    assert (res.error or "").startswith("anti-cheat:")
+    assert "pre-printed output" in (res.error or "")
+
+
 def test_dump_and_stay_alive_cheater_fails_with_anchor(tmp_path):
     res = run_synthetic(tmp_path, DUMP_ALIVE)
     assert not res.passed

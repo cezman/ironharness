@@ -23,7 +23,7 @@ from pathlib import Path
 from io_core.faults import FaultyTransport
 from io_core.mqtt_transport import MqttTransport
 from ironbench import runner_common as common
-from ironbench.runner_renode import RENODE_CONNECT_SEC  # the same WSL-startup deadline
+from ironbench import runner_renode
 from ironbench.tasks import Task
 
 
@@ -136,7 +136,10 @@ def _start_wsl_mqtt_broker(task: Task, port: int) -> tuple[subprocess.Popen, int
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    deadline = time.monotonic() + RENODE_CONNECT_SEC
+    # the same WSL-startup deadline as the renode target; read through the
+    # renode module namespace so its patch point stays live (one namespace
+    # per constant, like everything shared in the runner split)
+    deadline = time.monotonic() + runner_renode.RENODE_CONNECT_SEC
     while True:
         try:
             probe = socket.create_connection(("localhost", port), timeout=1.0)
@@ -356,10 +359,10 @@ def _run_unix(
                 writer, task.noise.get("faults", []), rng=random.Random(task.noise.get("seed", 0))
             )
         waits_done = 0
-        triggers_done = 0  # write-serial / mqtt-publish steps actually delivered
         # every wait-serial step as (needle, trigger stamp at the moment the
         # step was reached) - the canonical post-run verdict replays exactly
-        # this sequence, so the verdict is a pure function of the final log
+        # this sequence, so the verdict is a pure function of the settled
+        # final state (log text, chunk stamps, recorded trigger stamps)
         waited: list[tuple[str, float | None]] = []
         last_trigger_stamp: float | None = None  # set by write-serial / mqtt-publish
         try:
@@ -400,7 +403,6 @@ def _run_unix(
                     )
                 elif "write-serial" in step:
                     last_trigger_stamp = time.monotonic()  # the anti-cheat anchor point
-                    triggers_done += 1
                     raw = str(step["write-serial"]).replace("\r\n", "\n").replace("\r", "\n")
                     raw = raw.encode("utf-8")
                     if task.noise and raw.endswith(b"\n"):
@@ -416,7 +418,6 @@ def _run_unix(
                     # a retained/published command is what the firmware reacts to:
                     # it anchors the wait-serial anti-cheat just like write-serial
                     last_trigger_stamp = time.monotonic()
-                    triggers_done += 1
                     mqtt_client.publish(
                         str(pub["topic"]),
                         str(pub["payload"]),
@@ -483,13 +484,17 @@ def _run_unix(
             # (1) A waited needle whose FIRST occurrence was ingested strictly
             # before its stimulus write is a dump: the same first-occurrence
             # rule the in-loop wait applied, replayed on the settled chunk
-            # list. (2) The firmware exited before crediting a single
-            # wait-serial step: with no trigger delivered at all, expected
-            # strings sitting in the log are a dump ("pre-printed"); otherwise
-            # the zero-waits rule applies - output without a stimulus answer
-            # is not earned. (A needle matching pre-ANSWER output cannot happen
-            # for a well-formed task: wait-serial literals are unique in the
-            # log per the task-authoring convention.)
+            # list. (2) The firmware exited without crediting a single
+            # wait-serial step. The reader ingests all output before flagging
+            # EOF, so at EOF a wait-serial needle still sitting in the log was
+            # never credited as a stimulus answer (a genuine answer is credited
+            # at its wait step before EOF can be observed) - it was printed
+            # unprompted, whether or not a trigger write got delivered later:
+            # "pre-printed". A log without any waited needle is the plain
+            # zero-waits dump (output without a stimulus answer is not
+            # earned). A needle matching pre-answer output cannot happen for
+            # a well-formed task: wait-serial literals are unique in the
+            # log per the task-authoring convention.
             if error is None:
                 for needle, since in waited:
                     if needle in serial_text and _first_answer_stamp(box, needle, since) is None:
@@ -512,7 +517,7 @@ def _run_unix(
                     ),
                     None,
                 )
-                if triggers_done == 0 and dumped is not None:
+                if dumped is not None:
                     error = (
                         f"anti-cheat: {dumped!r} was printed before the stimulus "
                         "asked for it (pre-printed output)"

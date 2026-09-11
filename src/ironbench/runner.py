@@ -19,7 +19,9 @@ importing from `ironbench.runner`. Target backends are called through this
 module's namespace, so tests can patch them here
 (`monkeypatch.setattr(runner_module, "_run_wokwi", ...)`). Shared constants
 that targets read through `runner_common` are patched there
-(`monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", ...)`).
+(`monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", ...)`); the renode
+constants re-exported below are read by their own target through the
+`runner_renode` namespace and are patched there (`runner_renode.RENODE_STEP_SEC`, ...).
 """
 
 from __future__ import annotations
