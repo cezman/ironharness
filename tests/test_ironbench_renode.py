@@ -5,15 +5,18 @@ speaking the MicroPython REPL protocol. No WSL, Renode, or network.
 from __future__ import annotations
 
 import dataclasses
+import io
 import json
 import socket
 import sys
+import tarfile
 import textwrap
 
 import pytest
 
 import ironbench.runner as runner_module
 from io_core.journal import JsonlJournal
+from ironbench import runner_common, runner_renode
 from ironbench.runner import (
     _parse_delay,
     _stage_renode_task,
@@ -191,6 +194,17 @@ def test_stage_missing_firmware_is_clean_fail(tmp_path):
         _stage_renode_task(task, tmp_path / "out", 3456)
 
 
+def test_renode_bin_env_override_and_default(tmp_path, monkeypatch):
+    # IH-23 env pins: IRONBENCH_RENODE_BIN swaps the Renode binary in the
+    # generated wsl-run.sh; without it the pinned default is used. The env var
+    # is read at call time (inside _wsl_run_script), so both branches are testable.
+    task = make_renode_task(tmp_path)
+    monkeypatch.setenv("IRONBENCH_RENODE_BIN", "~/renode/renode-portable")
+    assert "~/renode/renode-portable --disable-xwt" in runner_module._wsl_run_script(task)
+    monkeypatch.delenv("IRONBENCH_RENODE_BIN", raising=False)
+    assert "~/renode/renode --disable-xwt" in runner_module._wsl_run_script(task)
+
+
 # --- a full run through the dispatcher on the fake Renode ---
 
 
@@ -228,7 +242,7 @@ def test_renode_stimulus_write_serial(tmp_path):
 
 
 def test_renode_nopaste_is_infra_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner_module, "RENODE_STEP_SEC", 2)
+    monkeypatch.setattr(runner_renode, "RENODE_STEP_SEC", 2)
     task = make_renode_task(tmp_path)
     res = run_fake_renode(tmp_path, task, "nopaste")
     assert not res.passed
@@ -238,7 +252,7 @@ def test_renode_nopaste_is_infra_error(tmp_path, monkeypatch):
 
 
 def test_renode_no_listener_is_infra_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner_module, "RENODE_CONNECT_SEC", 3)
+    monkeypatch.setattr(runner_renode, "RENODE_CONNECT_SEC", 3)
     task = make_renode_task(tmp_path)
     res = run_fake_renode(tmp_path, task, "nolisten")
     assert not res.passed
@@ -251,7 +265,7 @@ def test_renode_preprinted_needle_is_run_not_infra(tmp_path, monkeypatch):
     # IH-22 pin: the anti-cheat verdict is a property of the agent's code, so
     # its error_kind must be "run" - solve must KEEP iterating on a cheat, not
     # exit early the way it does on an infra failure.
-    monkeypatch.setattr(runner_module, "RENODE_STEP_SEC", 2)
+    monkeypatch.setattr(runner_renode, "RENODE_STEP_SEC", 2)
     task = make_renode_task(
         tmp_path,
         stimulus=['write-serial: "ping\\r"', 'wait-serial: "alpha bravo"'],
@@ -280,7 +294,7 @@ def test_renode_oserror_while_starting_is_infra(tmp_path, monkeypatch):
 
 
 def test_renode_hang_repl_deadline(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner_module, "WALL_GRACE_SEC", 1)
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
     task = make_renode_task(tmp_path, timeout_sec=0)
     res = run_fake_renode(tmp_path, task, "hang")
     assert not res.passed
@@ -371,9 +385,7 @@ def test_push_firmware_sends_tar_with_marker(tmp_path, monkeypatch):
     runner_module._push_firmware(task)
     assert "ironharness-firmware" in seen["cmd"][-1]
     assert seen["input"][:2] == b"\x1f\x8b"  # the gzip magic of tar.gz
-    import io
-
-    with runner_module.tarfile.open(fileobj=io.BytesIO(seen["input"])) as tar:
+    with tarfile.open(fileobj=io.BytesIO(seen["input"])) as tar:
         assert tar.getnames() == ["fake.elf"]
 
 

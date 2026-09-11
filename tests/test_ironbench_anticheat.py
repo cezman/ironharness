@@ -136,19 +136,107 @@ def test_legal_fast_responder_passes(tmp_path):
     assert res.passed, (res.error, res.missed)
 
 
-def test_dump_and_exit_cheater_fails_with_zero_waits(tmp_path):
+FINITE_RESPONDER = (
+    "import sys\n"
+    "print('boot ok', flush=True)\n"
+    "line = sys.stdin.readline()\n"
+    "print('echo: ' + line.strip(), flush=True)\n"
+    "line = sys.stdin.readline()\n"
+    "print('echo: ' + line.strip(), flush=True)\n"
+)
+
+
+def test_finite_responder_that_answers_then_exits_passes(tmp_path):
+    # Answers both waits and exits at once: the firmware's EOF can be observed
+    # before the wait-serial evaluation runs. The verdict must come from the
+    # ingestion stamps (genuine answers), never from the eof flag seen first -
+    # an eof-first wait loop would convict this honest program as a zero-waits
+    # dump (the check-at-least-once pin for the IH-23 canonical verdict).
+    res = run_synthetic(tmp_path, FINITE_RESPONDER)
+    assert res.passed, (res.error, res.missed)
+
+
+def test_dump_and_exit_cheater_fails_with_preprinted(tmp_path):
     res = run_synthetic(tmp_path, DUMP_EXIT)
     assert not res.passed
-    # Two verdicts are both valid here and the reader-thread timing decides
-    # which one lands: "pre-printed" when the dump chunks were ingested before
-    # the wait, "exited before the first wait-serial" when EOF won the race.
-    # Pin the machine-readable kind and the verdict family, not the wording.
+    # Deterministic since IH-23: the verdict is made once, over the final log,
+    # after the reader thread joined - the needles are in it and their first
+    # occurrence predates the stimulus write, so "pre-printed" always wins
+    # over the zero-waits fallback (the two wordings used to race, IH-28).
     assert res.error_kind == "run"
     assert (res.error or "").startswith("anti-cheat:")
-    assert (
-        "pre-printed output" in (res.error or "")
-        or "exited before the first wait-serial" in (res.error or "")
+    assert "pre-printed output" in (res.error or "")
+
+
+def test_silent_exit_before_first_wait_fails_with_zero_waits(tmp_path):
+    # The other deterministic verdict: the firmware answers nothing and exits -
+    # the waited needle is absent from the final log, so the zero-waits rule
+    # (dump without even dumping) is what fires.
+    res = run_synthetic(tmp_path, "print('boot ok')\n")
+    assert not res.passed
+    assert res.error_kind == "run"
+    assert (res.error or "").startswith("anti-cheat:")
+    assert "exited before the first wait-serial" in (res.error or "")
+
+
+def test_dump_of_second_wait_needle_fails_with_preprinted(tmp_path):
+    # Direct pin for the dump branch of canonical rule (2): the cheater prints
+    # only the SECOND wait's needle, so rule (1) stays silent (its waited
+    # needle 'echo: hi' never appears in the log) and the "pre-printed"
+    # wording must come from rule (2) - a wait-serial needle sitting in the
+    # final log without ever being credited as a stimulus answer.
+    res = run_synthetic(tmp_path, "print('echo: again')\n")
+    assert not res.passed
+    assert res.error_kind == "run"
+    assert (res.error or "").startswith("anti-cheat:")
+    assert "pre-printed output" in (res.error or "")
+
+
+def test_mqtt_dump_before_any_trigger_fails_with_preprinted(tmp_path):
+    # mqtt-publish anchors the anti-cheat like write-serial: a cheater that
+    # dumps the awaited needle and exits without ever crediting the wait step
+    # (the delay lets it die before the stimulus loop even starts driving) is
+    # named pre-printed, not zero-waits - the needle sits in the final log,
+    # never credited as a stimulus answer.
+    from io_core.mqtt_sim import MqttSimBroker
+
+    d = tmp_path / "t"
+    d.mkdir()
+    text = textwrap.dedent(
+        """
+    name: mqtt-dump
+    description: fake
+    entry: solution.py
+    target: unix
+    timeout_sec: 10
+    mqtt:
+      client_id: ironbench-dump
+    expect:
+      - 'READY'
+    stimulus:
+      - delay: 300ms
+      - mqtt-publish: {topic: dev/cmd, payload: "go", retain: true}
+      - wait-serial: "READY"
+    """
     )
+    (d / "task.yaml").write_text(text, encoding="utf-8")
+    (d / "solution.py").write_text("print('READY')\n", encoding="utf-8")
+    task = load_task(d)
+    broker = MqttSimBroker()
+    broker.start()
+    try:
+        res = run_task(
+            task,
+            out_dir=tmp_path / "out",
+            unix_cmd=[sys.executable, str(d / "solution.py")],
+            mqtt_broker=broker,
+        )
+    finally:
+        broker.stop()
+    assert not res.passed
+    assert res.error_kind == "run"
+    assert (res.error or "").startswith("anti-cheat:")
+    assert "pre-printed output" in (res.error or "")
 
 
 def test_dump_and_stay_alive_cheater_fails_with_anchor(tmp_path):
