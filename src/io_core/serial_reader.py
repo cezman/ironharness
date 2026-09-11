@@ -102,17 +102,43 @@ class SerialReader:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            # the I/O lock is what a session write takes while a reader is
-            # attached; holding it only for the duration of one read keeps the
-            # worst-case write wait at the transport's read timeout
-            with self._io_lock:
-                if self._stop.is_set():
-                    break
-                try:
-                    data = self._transport.read(self._chunk)
-                except (OSError, ValueError, AssertionError) as e:
-                    self._error = e
-                    return  # port died: stop draining, surface on the next consumer call
+            # No lock while WAITING for data: a lock held through the
+            # transport's read timeout starves writers on slow runners (the
+            # reader releases and re-acquires between reads and wins every
+            # GIL convoy race - CI-proven by a faulthandler dump of two
+            # writers parked on io_lock for a full dump window). The lock
+            # guards only the actual drain, so the CH340 contract holds:
+            # a read and a write never overlap - waiting for data is not an
+            # I/O operation.
+            try:
+                in_waiting = getattr(self._transport, "in_waiting", None)
+            except (OSError, ValueError):
+                in_waiting = None  # dead/closed port: let read() below raise the real error
+            data = b""
+            if in_waiting:
+                with self._io_lock:
+                    if self._stop.is_set():
+                        break
+                    try:
+                        data = self._transport.read(min(int(in_waiting), self._chunk))
+                    except (OSError, ValueError, AssertionError) as e:
+                        self._error = e
+                        return  # port died: stop draining, surface on the next consumer call
+            elif in_waiting == 0:
+                time.sleep(_POLL_IDLE_SEC)  # nothing to drain - no lock taken at all
+                continue
+            else:
+                # no in_waiting support (test fakes): one read attempt, then idle
+                with self._io_lock:
+                    if self._stop.is_set():
+                        break
+                    try:
+                        data = self._transport.read(self._chunk)
+                    except (OSError, ValueError, AssertionError) as e:
+                        self._error = e
+                        return
+                if not data:
+                    time.sleep(_POLL_IDLE_SEC)
             if data:
                 with self._lock:
                     self._chunks.append((time.monotonic(), data))
