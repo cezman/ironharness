@@ -24,11 +24,13 @@ Configuration via environment:
 
 Stdout hygiene (IH-20): over stdio the wire must carry only JSON-RPC. The
 SDK's stdio_server diverts fd 1 to stderr while serving (the protocol is
-written to a private duplicate of the real stdout), so stray prints and
-library logging never reach the wire; the SDK's own logging is wired to
-stderr. Regression tests in tests/test_mcp_stdio.py pin this end-to-end:
-every byte the client reads from the child's stdout must parse as a
-JSON-RPC message, and a deliberately noisy handler must land on stderr.
+written to a private duplicate of the real stdout), so on the normal serving
+path stray prints and library logging do not reach the wire (the claim is
+best-effort: a non-fd-backed stdout serves in place without diversion); the
+SDK's own logging is wired to stderr. Regression tests in
+tests/test_mcp_stdio.py pin this end-to-end: every byte the client reads
+from the child's stdout must parse as a JSON-RPC message, and a deliberately
+noisy handler must land on stderr.
 """
 
 from __future__ import annotations
@@ -86,10 +88,15 @@ def echo(text: str) -> str:
 #   modbus_read (an FC3 query - the device answers, its state is untouched).
 #   serial_read/serial_read_line/mqtt_read are deliberately NOT readOnly:
 #   they drain a stream/queue - a replay loses data for later reads.
-# - destructiveHint=True only for esp_flash/esp_erase (real hardware) and
-#   file_delete; plain writes stay destructiveHint=False.
-# - openWorldHint=True for every transport that reaches outside the process
-#   (serial ports, hosts, brokers); False for the pure in-process ones.
+# - destructiveHint=True for esp_flash/esp_erase (real hardware),
+#   file_delete, and file_write (an overwrite is not an additive update);
+#   plain state writes stay destructiveHint=False.
+# - openWorldHint=True on the tools that reach outside the process
+#   (connects, I/O over ports/hosts/brokers); the close/subscribe tools
+#   leave it unset (the spec default is true anyway).
+# - idempotentHint is left unset everywhere on purpose: nothing here is
+#   idempotent (a repeated *_open on the same name is an error, not a
+#   no-op - Session refuses "already open").
 
 
 # --- serial (binary data as hex strings, JSON-friendly) ---
@@ -224,7 +231,7 @@ def esp_erase(port: str, baud: int = 921600) -> str:
 # --- files (sandboxed) ---
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False))
 def file_write(path: str, content: str) -> int:
     """Writes a text file (utf-8) inside the sandbox; escaping the sandbox is denied."""
     return get_session().file_write(path, content)

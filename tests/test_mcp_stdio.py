@@ -241,7 +241,7 @@ def test_tool_annotations_round_trip(server):
     assert ann["esp_flash"]["destructiveHint"] is True
     assert ann["esp_erase"]["destructiveHint"] is True
     assert ann["file_delete"]["destructiveHint"] is True
-    assert ann["file_write"]["destructiveHint"] is False
+    assert ann["file_write"]["destructiveHint"] is True  # an overwrite is not additive
 
 
 def test_wire_stays_clean_through_error_battery(server, tmp_path):
