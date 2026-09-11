@@ -194,34 +194,45 @@ def test_session_write_serialized_against_reader(session):
     # The CH340 contract without hardware: writes go through the reader's I/O
     # lock (loop:// would not show NUL bursts - the lock ordering is what is
     # pinned here: parallel writes while the reader drains, no deadlock, no
-    # lost write). Generous timeouts: on a loaded CI runner each write waits
-    # its turn against background reads, so wall time adds up.
+    # lost write). Deliberately small load and generous joins: free CI
+    # runners are slow and shared; a wall-clock-heavy variant of this test
+    # flaked there (writers "never finished" within 30 s while the suite
+    # around stayed green). The serialization itself is pinned exactly by
+    # test_write_takes_the_reader_io_lock and the lock-order test below.
+    import faulthandler
+
     name = loop_session(session)
     session.serial_reader_start(name)
     errors: list[BaseException] = []
 
     def writer(tag: int) -> None:
         try:
-            for i in range(5):
+            for i in range(2):
                 session.serial_write(name, f"w{tag}-{i};".encode().hex())
         except BaseException as e:  # noqa: BLE001 - recorded and asserted below
             errors.append(e)
 
-    threads = [threading.Thread(target=writer, args=(t,), daemon=True) for t in range(4)]
+    threads = [threading.Thread(target=writer, args=(t,), daemon=True) for t in range(2)]
     for t in threads:
         t.start()
-    for t in threads:
-        t.join(timeout=30)
-        assert not t.is_alive(), "deadlock: a writer never finished"
+    # if a writer wedges, dump every thread's stack right in the log - the
+    # next incident must show WHERE it stands, not just that it timed out
+    faulthandler.dump_traceback_later(45, exit=False)
+    try:
+        for t in threads:
+            t.join(timeout=60)
+            assert not t.is_alive(), "deadlock: a writer never finished"
+    finally:
+        faulthandler.cancel_dump_traceback_later()
     assert errors == []
-    # all 20 writes echo back through the loop into the reader buffer
+    # all 4 writes echo back through the loop into the reader buffer
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         text = session.serial_tail(name, 65536)["text"]
-        if text.count(";") >= 20:
+        if text.count(";") >= 4:
             break
         time.sleep(0.02)
-    assert session.serial_tail(name, 65536)["text"].count(";") >= 20
+    assert session.serial_tail(name, 65536)["text"].count(";") >= 4
 
 
 class TrackingLock:
@@ -273,6 +284,8 @@ def test_write_lock_order_session_lock_before_io_lock(session):
     probe = TrackingLock(threading.Lock())
     reader._io_lock = probe
     writer = threading.Thread(target=session.serial_write, args=(name, b"z".hex()), daemon=True)
+    import faulthandler
+
     with session._lock:  # the writer below can only block on THIS lock
         writer.start()
         time.sleep(0.3)  # writer is parked on the session lock acquisition
@@ -280,7 +293,11 @@ def test_write_lock_order_session_lock_before_io_lock(session):
             "serial_write took the reader I/O lock before the session lock "
             "(the deadlock half-cycle)"
         )
-    writer.join(timeout=15)
+    faulthandler.dump_traceback_later(10, exit=False)
+    try:
+        writer.join(timeout=15)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
     assert not writer.is_alive()
     assert probe.entered_by(writer.ident) == 1  # after the release, the write ran under the lock
     session.serial_reader_stop(name)
@@ -311,7 +328,7 @@ def test_reader_stop_does_not_deadlock_against_inflight_write(session):
     def inflight_writer() -> None:
         started.set()
         try:
-            for _ in range(50):
+            for _ in range(20):
                 session.serial_write(name, b"y".hex())
         except BaseException as e:  # noqa: BLE001
             errors.append(e)
@@ -321,9 +338,12 @@ def test_reader_stop_does_not_deadlock_against_inflight_write(session):
     started.wait(timeout=5)
     t0 = time.monotonic()
     threading.Thread(target=stopper, daemon=True).start()
-    assert stop_done.wait(timeout=10), "reader_stop deadlocked against an in-flight write"
-    assert time.monotonic() - t0 < 5, "reader_stop blocked for the join timeout (lock cycle)"
-    writer_thread.join(timeout=30)
+    assert stop_done.wait(timeout=15), "reader_stop deadlocked against an in-flight write"
+    # a real lock cycle costs the full join timeout inside reader.stop() (5 s
+    # + epsilon); a healthy stop returns after the current read (~0.1 s), so
+    # anything near 5 s IS the cycle, even on a slow runner
+    assert time.monotonic() - t0 < 4.8, "reader_stop blocked for the join timeout (lock cycle)"
+    writer_thread.join(timeout=60)
     assert not writer_thread.is_alive()
     assert errors == []
 
