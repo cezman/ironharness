@@ -14,6 +14,7 @@ import pytest
 
 import ironbench.runner as runner_module
 from io_core.journal import JsonlJournal
+from ironbench import runner_common
 from ironbench.plant import (
     PlantSpec,
     _DeterministicNoise,
@@ -195,7 +196,7 @@ def test_plant_missing_control_function(tmp_path):
 
 
 def test_plant_hung_controller_hits_wall_limit(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner_module, "WALL_GRACE_SEC", 1)
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
     task = make_plant_task(tmp_path, "def control(t, y, setpoint):\n    while True:\n        pass\n")
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
@@ -271,7 +272,7 @@ def test_plant_result_with_foreign_run_id_is_rejected(tmp_path, monkeypatch):
         fixed.mkdir(parents=True, exist_ok=True)
         return fixed, "fixed"
 
-    monkeypatch.setattr(runner_module, "_new_run_dir", reuse_run_dir)
+    monkeypatch.setattr(runner_common, "_new_run_dir", reuse_run_dir)
     res1 = run_task(task, out_dir=out)
     assert res1.passed, (res1.error, res1.missed)
     result_file = fixed / "fake-plant.plant-result.json"
@@ -297,7 +298,7 @@ def test_plant_non_dict_result_json_is_rejected(tmp_path, monkeypatch):
         fixed.mkdir(parents=True, exist_ok=True)
         return fixed, "fixed"
 
-    monkeypatch.setattr(runner_module, "_new_run_dir", reuse_run_dir)
+    monkeypatch.setattr(runner_common, "_new_run_dir", reuse_run_dir)
     result_file = fixed / "fake-plant.plant-result.json"
     writer = f"import pathlib; pathlib.Path(r'{result_file}').write_text('[]')"
     res = run_task(task, out_dir=out, plant_cmd=[sys.executable, "-c", writer])

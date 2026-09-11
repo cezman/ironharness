@@ -97,7 +97,7 @@ def make_real_task(tmp_path, entry=ECHO_ENTRY, stimulus=(), expect=("echo ready"
 def fast_boot(monkeypatch):
     monkeypatch.setattr(realhw, "_BOOT_QUIET_SEC", 0.05)
     monkeypatch.setattr(realhw, "_SOFT_RESET_SEC", 0.05)
-    monkeypatch.setattr("ironbench.runner.WALL_GRACE_SEC", 0.5)
+    monkeypatch.setattr("ironbench.runner_common.WALL_GRACE_SEC", 0.5)
 
 
 def test_repl_boot_and_echo():

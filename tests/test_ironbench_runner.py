@@ -13,6 +13,7 @@ import yaml
 
 import ironbench.runner as runner_module
 from io_core.journal import JsonlJournal
+from ironbench import runner_common
 from ironbench.runner import (
     TaskResult,
     _check_patterns,
@@ -118,7 +119,7 @@ def test_timeout_exit_with_missed_pattern_fails(tmp_path):
 
 
 def test_wall_clock_timeout_kills_run(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner_module, "WALL_GRACE_SEC", 1)
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
     task = dataclasses.replace(make_task(tmp_path), timeout_sec=0)
     res = run_fake(tmp_path, task, {"FAKE_SLEEP": "10"})
     assert not res.passed
@@ -136,7 +137,7 @@ def test_missing_cli_reports_error(tmp_path):
 
 
 def test_missing_entry_file_is_clean_fail(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner_module, "WALL_GRACE_SEC", 1)
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
     task = make_task(tmp_path, write_entry=False)
     res = run_fake(tmp_path, task, {})
     assert not res.passed
@@ -202,6 +203,32 @@ def test_load_env_file_formats(tmp_path):
 
 def test_load_env_file_missing(tmp_path):
     assert load_env_file(tmp_path / "nope.env") == {}
+
+
+def test_resolve_token_priority_explicit_env_dotenv(tmp_path, monkeypatch):
+    # IH-23 env pins: WOKWI_CLI_TOKEN resolution order is documented as
+    # explicit argument > environment variable > .env file. All four
+    # combinations are pinned; find_env_file is redirected to the tmp cwd so
+    # the repository root .env (the owner's real token) can never leak in.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("WOKWI_CLI_TOKEN=token-from-file\n", encoding="utf-8")
+
+    monkeypatch.setenv("WOKWI_CLI_TOKEN", "token-from-env")
+    assert runner_common.resolve_token("token-explicit") == "token-explicit"
+    assert runner_common.resolve_token() == "token-from-env"
+    assert runner_common.resolve_token(None) == "token-from-env"
+
+    monkeypatch.delenv("WOKWI_CLI_TOKEN")
+    assert runner_common.resolve_token() == "token-from-file"
+
+
+def test_resolve_token_none_when_nowhere(tmp_path, monkeypatch):
+    # No explicit argument, no env var, no .env anywhere - no token, and the
+    # wokwi backend is expected to report it as a clean infra error.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runner_common, "find_env_file", lambda: None)
+    monkeypatch.delenv("WOKWI_CLI_TOKEN", raising=False)
+    assert runner_common.resolve_token() is None
 
 
 def test_task_yaml_loads_from_packaged_blink():

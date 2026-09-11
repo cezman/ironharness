@@ -14,6 +14,7 @@ import pytest
 
 import ironbench.runner as runner_module
 from io_core.journal import JsonlJournal
+from ironbench import runner_common
 from ironbench.runner import run_task
 from ironbench.tasks import load_task
 
@@ -70,7 +71,7 @@ def run_fake_unix(tmp_path, task, mode, **kw):
 @pytest.fixture(autouse=True)
 def _fast_deadlines(monkeypatch):
     # the missed tests wait until the deadline by design - do not wait 25 real seconds
-    monkeypatch.setattr(runner_module, "WALL_GRACE_SEC", 1)
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
 
 
 def test_unix_pass_with_stimulus_cr_translation(tmp_path):
@@ -179,6 +180,18 @@ def test_first_answer_stamp_same_tick_is_genuine():
     assert runner_module._first_answer_stamp(box, "echo: hi", 101.0) is None
     assert runner_module._first_answer_stamp(box, "echo: hi", 99.0) == 100.0
     assert runner_module._first_answer_stamp(box, "echo: never", 100.0) is None
+
+
+def test_unix_bin_env_override_and_default(monkeypatch):
+    # IH-23 env pins: IRONBENCH_UNIX_BIN swaps the micropython binary in the
+    # generated command; without it the pinned default is used. The env var is
+    # read at call time (inside _unix_cmd), so both branches are testable.
+    cmd_tail = lambda: runner_module._unix_cmd("$HOME/ironharness-runs/fake-unix/main.py")[-1]
+    monkeypatch.setenv("IRONBENCH_UNIX_BIN", "~/opt/upy-custom")
+    assert "~/opt/upy-custom" in cmd_tail()
+    assert cmd_tail().startswith("exec ")
+    monkeypatch.delenv("IRONBENCH_UNIX_BIN", raising=False)
+    assert "~/bin/micropython" in cmd_tail()
 
 
 def test_unexecutable_unix_cmd_is_kind_infra(tmp_path):

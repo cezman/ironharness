@@ -136,19 +136,47 @@ def test_legal_fast_responder_passes(tmp_path):
     assert res.passed, (res.error, res.missed)
 
 
-def test_dump_and_exit_cheater_fails_with_zero_waits(tmp_path):
+FINITE_RESPONDER = (
+    "import sys\n"
+    "print('boot ok', flush=True)\n"
+    "line = sys.stdin.readline()\n"
+    "print('echo: ' + line.strip(), flush=True)\n"
+    "line = sys.stdin.readline()\n"
+    "print('echo: ' + line.strip(), flush=True)\n"
+)
+
+
+def test_finite_responder_that_answers_then_exits_passes(tmp_path):
+    # Answers both waits and exits at once: the firmware's EOF can be observed
+    # before the wait-serial evaluation runs. The verdict must come from the
+    # ingestion stamps (genuine answers), never from the eof flag seen first -
+    # an eof-first wait loop would convict this honest program as a zero-waits
+    # dump (the check-at-least-once pin for the IH-23 canonical verdict).
+    res = run_synthetic(tmp_path, FINITE_RESPONDER)
+    assert res.passed, (res.error, res.missed)
+
+
+def test_dump_and_exit_cheater_fails_with_preprinted(tmp_path):
     res = run_synthetic(tmp_path, DUMP_EXIT)
     assert not res.passed
-    # Two verdicts are both valid here and the reader-thread timing decides
-    # which one lands: "pre-printed" when the dump chunks were ingested before
-    # the wait, "exited before the first wait-serial" when EOF won the race.
-    # Pin the machine-readable kind and the verdict family, not the wording.
+    # Deterministic since IH-23: the verdict is made once, over the final log,
+    # after the reader thread joined - the needles are in it and their first
+    # occurrence predates the stimulus write, so "pre-printed" always wins
+    # over the zero-waits fallback (the two wordings used to race, IH-28).
     assert res.error_kind == "run"
     assert (res.error or "").startswith("anti-cheat:")
-    assert (
-        "pre-printed output" in (res.error or "")
-        or "exited before the first wait-serial" in (res.error or "")
-    )
+    assert "pre-printed output" in (res.error or "")
+
+
+def test_silent_exit_before_first_wait_fails_with_zero_waits(tmp_path):
+    # The other deterministic verdict: the firmware answers nothing and exits -
+    # the waited needle is absent from the final log, so the zero-waits rule
+    # (dump without even dumping) is what fires.
+    res = run_synthetic(tmp_path, "print('boot ok')\n")
+    assert not res.passed
+    assert res.error_kind == "run"
+    assert (res.error or "").startswith("anti-cheat:")
+    assert "exited before the first wait-serial" in (res.error or "")
 
 
 def test_dump_and_stay_alive_cheater_fails_with_anchor(tmp_path):
