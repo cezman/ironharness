@@ -171,6 +171,7 @@ def test_flash_missing_firmware_raises(monkeypatch):
         raise AssertionError("esptool не должен зваться до проверки образа")
 
     monkeypatch.setattr(esp_mod, "connect_esp", no_connect)
+    monkeypatch.setenv("IRONHARNESS_ALLOW_REAL_FLASH", "1")  # gate passes: the missing image is tested here
     with pytest.raises(FileNotFoundError):
         EspFlasher().flash("COM7", "nope.bin")
 

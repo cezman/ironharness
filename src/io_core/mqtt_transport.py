@@ -7,6 +7,9 @@
 
 Для офлайн-тестов paho-клиент инжектится через client_factory — реальный брокер
 не нужен. Каждая операция и каждое входящее сообщение уходят в on_event (журнал).
+Проваленная операция тоже уходит в журнал (kind `<успех>_failed` + error) перед
+тем, как исключение уходит наружу: "no log = didn't happen" касается и отказов
+(ловим OSError и ValueError — paho бросает второй на невалидных топиках).
 """
 
 from __future__ import annotations
@@ -98,14 +101,23 @@ class MqttTransport:
         client.on_disconnect = self._on_disconnect
         client.on_subscribe = self._on_subscribe
         client.on_message = self._on_message
-        client.connect(self._host, port=self._port, keepalive=self._keepalive)
-        client.loop_start()
         self._client = client
-        if not self._connected.wait(timeout=self._timeout):
+        try:
+            client.connect(self._host, port=self._port, keepalive=self._keepalive)
+            client.loop_start()
+            if not self._connected.wait(timeout=self._timeout):
+                raise ConnectionError(
+                    f"failed to connect to mqtt broker {self._host}:{self._port}"
+                )
+        except OSError as e:
+            # policy refusals are journaled by the policy itself; connect
+            # failures are ours to record
             self._teardown()
-            raise ConnectionError(
-                f"failed to connect to mqtt broker {self._host}:{self._port}"
+            self._emit(
+                "mqtt_open_failed",
+                {"host": self._host, "port": self._port, "error": str(e)},
             )
+            raise
         self._emit("mqtt_open", {"host": self._host, "port": self._port})
 
     def _teardown(self) -> None:
@@ -137,33 +149,51 @@ class MqttTransport:
     # --- операции ---
 
     def publish(self, topic: str, payload: str, *, qos: int = 0, retain: bool = False) -> None:
-        info = self._require_client().publish(
-            topic, payload=payload.encode("utf-8"), qos=qos, retain=retain
-        )
-        if info.rc != 0:
-            raise OSError(f"mqtt publish {topic!r}: rc={info.rc}")
-        info.wait_for_publish(timeout=self._timeout)
-        # wait_for_publish молчит по таймауту: PUBACK не пришёл => публикация не подтверждена
-        if not info.is_published():
-            raise OSError(f"mqtt publish {topic!r}: not acknowledged within {self._timeout}s")
+        try:
+            info = self._require_client().publish(
+                topic, payload=payload.encode("utf-8"), qos=qos, retain=retain
+            )
+            if info.rc != 0:
+                raise OSError(f"mqtt publish {topic!r}: rc={info.rc}")
+            info.wait_for_publish(timeout=self._timeout)
+            # wait_for_publish молчит по таймауту: PUBACK не пришёл => публикация не подтверждена
+            if not info.is_published():
+                raise OSError(
+                    f"mqtt publish {topic!r}: not acknowledged within {self._timeout}s"
+                )
+        except (OSError, ValueError) as e:
+            # ValueError: paho rejects invalid topics before anything hits the wire
+            self._emit(
+                "mqtt_publish_failed",
+                {"topic": topic, "payload": payload, "error": str(e)},
+            )
+            raise
         self._emit("mqtt_publish", {"topic": topic, "payload": payload, "qos": qos, "retain": retain})
 
     def subscribe(self, topic: str, *, qos: int = 0) -> None:
         client = self._require_client()
-        rc, mid = client.subscribe(topic, qos=qos)
-        if rc != 0:
-            raise OSError(f"mqtt subscribe {topic!r}: rc={rc}")
-        # ждём SUBACK: без него отказ брокера (not authorized, кривой фильтр) был бы тихим «ok»
-        deadline = time.monotonic() + self._timeout
-        with self._suback_cond:
-            while mid not in self._suback_results:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise OSError(f"mqtt subscribe {topic!r}: no SUBACK within {self._timeout}s")
-                self._suback_cond.wait(remaining)
-            codes = self._suback_results.pop(mid)
-        if any(getattr(c, "is_failure", False) for c in codes):
-            raise OSError(f"mqtt subscribe {topic!r}: broker refused ({[str(c) for c in codes]})")
+        try:
+            rc, mid = client.subscribe(topic, qos=qos)
+            if rc != 0:
+                raise OSError(f"mqtt subscribe {topic!r}: rc={rc}")
+            # ждём SUBACK: без него отказ брокера (not authorized, кривой фильтр) был бы тихим «ok»
+            deadline = time.monotonic() + self._timeout
+            with self._suback_cond:
+                while mid not in self._suback_results:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise OSError(
+                            f"mqtt subscribe {topic!r}: no SUBACK within {self._timeout}s"
+                        )
+                    self._suback_cond.wait(remaining)
+                codes = self._suback_results.pop(mid)
+            if any(getattr(c, "is_failure", False) for c in codes):
+                raise OSError(
+                    f"mqtt subscribe {topic!r}: broker refused ({[str(c) for c in codes]})"
+                )
+        except (OSError, ValueError) as e:
+            self._emit("mqtt_subscribe_failed", {"topic": topic, "error": str(e)})
+            raise
         self._emit("mqtt_subscribe", {"topic": topic, "qos": qos})
 
     def read_message(self, timeout: float = 1.0) -> dict[str, str] | None:

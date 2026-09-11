@@ -16,9 +16,13 @@ root), but every operation — including failures — is journaled with the full
 path.
 
 Safety: flash()/erase() modify real hardware and are gated behind the
-IRONHARNESS_ALLOW_REAL_FLASH=1 environment variable (opt-in). image_info()
-is offline and needs no guard. esptool itself is an optional dependency:
-install the `flash` extra (pip install 'ironharness[flash]').
+IRONHARNESS_ALLOW_REAL_FLASH=1 environment variable (opt-in). The gate is
+checked before anything else touches the dependency chain, and its denial is
+an event in the journal (esp_denied) before the PermissionError - an
+unauthorized flashing attempt must leave a trace ("no log = didn't happen"
+applies to refusals too). image_info() is offline and needs no guard. esptool
+itself is an optional dependency: install the `flash` extra
+(pip install 'ironharness[flash]').
 """
 
 from __future__ import annotations
@@ -59,14 +63,6 @@ def _require_esptool() -> None:
         )
 
 
-def _require_real_flash_allowed() -> None:
-    if os.environ.get(ALLOW_REAL_FLASH_ENV) != "1":
-        raise PermissionError(
-            f"{ALLOW_REAL_FLASH_ENV}=1 is required for live flash/erase — "
-            "these operations modify real hardware"
-        )
-
-
 def _reverse_lookup(table: dict, value: int, fallback: str) -> str:
     return next((name for name, v in table.items() if v == value), fallback)
 
@@ -80,12 +76,26 @@ class EspFlasher:
         if self._on_event is not None:
             self._on_event(event, data)
 
+    def _require_real_flash_allowed(self, op: str, port: str) -> None:
+        """The live-hardware gate. Checked before the esptool availability so
+        the refusal does not depend on an optional dependency, and journaled
+        before raising: an unauthorized flashing attempt must leave a trace."""
+        if os.environ.get(ALLOW_REAL_FLASH_ENV) != "1":
+            error = (
+                f"{ALLOW_REAL_FLASH_ENV}=1 is required for live flash/erase — "
+                "these operations modify real hardware"
+            )
+            self._emit("esp_denied", {"op": op, "port": port, "error": error})
+            raise PermissionError(error)
+
     # --- offline: image inspection, no board needed ---
 
     def image_info(self, firmware_path: str | Path) -> dict[str, Any]:
         path = Path(firmware_path)
         if not path.is_file():
-            raise FileNotFoundError(f"image not found: {path}")
+            error = f"image not found: {path}"
+            self._emit("esp_image_info_failed", {"path": str(path), "error": error})
+            raise FileNotFoundError(error)
         _require_esptool()
         img = LoadFirmwareImage(self._chip, str(path))
         segments = [{"addr": hex(s.addr), "size": len(s.data)} for s in img.segments]
@@ -122,11 +132,18 @@ class EspFlasher:
         addr: int = DEFAULT_BOOTLOADER_OFFSET,
         baud: int = 921600,
     ) -> str:
+        # the gate is the very first thing: even a probe with a bogus path is
+        # an unauthorized flash attempt and must leave a trace
+        self._require_real_flash_allowed("flash", port)
         path = Path(firmware_path)
         if not path.is_file():
-            raise FileNotFoundError(f"image not found: {path}")
+            error = f"image not found: {path}"
+            self._emit(
+                "esp_flash_failed",
+                {"port": port, "addr": addr, "baud": baud, "path": str(path), "error": error},
+            )
+            raise FileNotFoundError(error)
         _require_esptool()
-        _require_real_flash_allowed()
         try:
             with connect_esp(port=port, chip=self._chip) as esp:
                 esp = run_stub(esp)
@@ -143,8 +160,8 @@ class EspFlasher:
         return f"ok: {path.name} flashed at 0x{addr:x} ({port})"
 
     def erase(self, port: str, *, baud: int = 921600) -> str:
+        self._require_real_flash_allowed("erase", port)
         _require_esptool()
-        _require_real_flash_allowed()
         try:
             with connect_esp(port=port, chip=self._chip) as esp:
                 esp = run_stub(esp)

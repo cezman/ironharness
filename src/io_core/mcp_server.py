@@ -179,7 +179,7 @@ def mqtt_close(name: str) -> str:
 @mcp.tool()
 def esp_image_info(firmware_path: str, chip: str = "esp32") -> dict:
     """Parses a .bin firmware image without hardware: entrypoint, segments, flash params."""
-    return get_session().esp_image_info(firmware_path)
+    return get_session().esp_image_info(firmware_path, chip=chip)
 
 
 @mcp.tool()
