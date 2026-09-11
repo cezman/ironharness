@@ -43,7 +43,9 @@ uv run ironharness-mcp               # MCP-сервер (stdio; или: python -
 
 Все операции автоматически пишутся в JSONL-журнал (`$IRONHARNESS_HOME/journal.jsonl`,
 по умолчанию `~/.ironharness/`); файловые операции изолированы песочницей
-(`$IRONHARNESS_SANDBOX`, по умолчанию `~/.ironharness/sandbox`).
+(`$IRONHARNESS_SANDBOX`, по умолчанию `~/.ironharness/sandbox`). Один писатель
+на файл журнала: конкурентные потоки одной сессии безопасны, но два процесса
+с общим `IRONHARNESS_HOME` могут молча терять строки (один агент — один home-каталог).
 
 ## Подключение внешнего агента
 

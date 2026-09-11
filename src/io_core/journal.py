@@ -23,7 +23,11 @@ class JsonlJournal:
         self._seq = 0
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()  # колбэки MQTT пишут из сетевого потока paho
-        # Режим "a": несколько сессий могут дописывать один файл
+        # Режим "a": один писатель на файл журнала. Конкурентные потоки одного
+        # инстанса безопасны (под локом), но два ПРОЦЕССА с одним файлом
+        # молча теряют строки — O_APPEND между хэндлами на Windows не атомарен
+        # (зафиксировано аудитом перед v0.7.0; блокировку на файл приложить в
+        # IH-32, до тех пор развертывание — один агент = один IRONHARNESS_HOME).
         self._fh = self._path.open("a", encoding="utf-8")
 
     def __call__(self, kind: str, data: dict[str, Any]) -> None:
