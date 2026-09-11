@@ -369,6 +369,30 @@ def test_invalid_topic_valueerror_is_journaled(tmp_path):
     assert len(failed) == 1 and "Invalid topic" in failed[0]["error"]
 
 
+def test_invalid_subscribe_topic_valueerror_is_journaled(tmp_path):
+    # review N3: the subscribe ValueError path shares the publish-shaped
+    # except, and gets its own direct pin
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr:
+        fake = FakeClient()
+
+        def boom(topic, qos=0):
+            raise ValueError("Invalid subscription.")
+
+        fake.subscribe = boom
+        t = MqttTransport(
+            "broker.test", timeout=0.5, on_event=jr, client_factory=lambda: fake
+        )
+        t.open()
+        try:
+            with pytest.raises(ValueError, match="Invalid subscription"):
+                t.subscribe("bad+")
+        finally:
+            t.close()
+    failed = [e for e in read_events(jpath) if e["kind"] == "mqtt_subscribe_failed"]
+    assert len(failed) == 1 and "Invalid subscription" in failed[0]["error"]
+
+
 # --- сессия: те же операции через Session (транспорт подменён) ---
 
 

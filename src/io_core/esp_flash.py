@@ -137,7 +137,12 @@ class EspFlasher:
         self._require_real_flash_allowed("flash", port)
         path = Path(firmware_path)
         if not path.is_file():
-            raise FileNotFoundError(f"image not found: {path}")
+            error = f"image not found: {path}"
+            self._emit(
+                "esp_flash_failed",
+                {"port": port, "addr": addr, "baud": baud, "path": str(path), "error": error},
+            )
+            raise FileNotFoundError(error)
         _require_esptool()
         try:
             with connect_esp(port=port, chip=self._chip) as esp:

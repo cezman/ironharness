@@ -115,6 +115,18 @@ def test_flash_denied_with_missing_image(tmp_path, bomb_connect):
     assert [e["kind"] for e in read_events(jpath)] == ["esp_denied"]
 
 
+def test_flash_missing_image_with_open_gate_is_journaled(tmp_path, monkeypatch):
+    # review N1: with the gate open, the missing-image FileNotFoundError used
+    # to be the last silent raise in esp_flash
+    monkeypatch.setenv(esp_mod.ALLOW_REAL_FLASH_ENV, "1")
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(FileNotFoundError):
+        EspFlasher(on_event=jr).flash("COM7", tmp_path / "nope.bin")
+    events = read_events(jpath)
+    assert [e["kind"] for e in events] == ["esp_flash_failed"]
+    assert "nope.bin" in events[0]["path"]
+
+
 def test_image_info_missing_file_is_journaled(tmp_path):
     jpath = tmp_path / "j.jsonl"
     with JsonlJournal(jpath, actor="test") as jr, pytest.raises(FileNotFoundError):
