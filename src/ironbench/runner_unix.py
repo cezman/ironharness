@@ -88,7 +88,12 @@ def _check_events_realtime(
     intervals violate any plausible period - the declared bounds are
     physically unverifiable for a dump. Honest firmware paced by sleeps
     ingests line-by-line with real gaps and passes with the tolerance.
-    Returns the same missed-strings shape as _check_events."""
+    Returns the same missed-strings shape as _check_events.
+
+    Bound: the anchor only bites when period_ms[0] exceeds the tolerance
+    (otherwise lo <= 0 and a burst dump satisfies it) - declare periods of
+    at least ~0.2 s for anchored tasks.
+    """
     missed: list[str] = []
     for ev in events:
         period = ev.get("period_ms")
@@ -290,6 +295,10 @@ def _run_unix(
     error: str | None = None
     error_kind = common.ERROR_NONE
     serial_text = ""
+    trigger_stamps: list[float] = []  # every delivered trigger (write/publish);
+    # hoisted ABOVE the try: the post-run event anchor reads it after the
+    # finally block, and an infra failure must land as a clean TaskResult,
+    # not as an UnboundLocalError piercing run_task
     proc = None
     mqtt_client: MqttTransport | None = None
     broker_proc: subprocess.Popen | None = None
@@ -406,7 +415,6 @@ def _run_unix(
                 writer, task.noise.get("faults", []), rng=random.Random(task.noise.get("seed", 0))
             )
         waits_done = 0
-        trigger_stamps: list[float] = []  # every delivered trigger (write/publish)
         # every wait-serial step as (needle, trigger stamp at the moment the
         # step was reached) - the canonical post-run verdict replays exactly
         # this sequence, so the verdict is a pure function of the settled

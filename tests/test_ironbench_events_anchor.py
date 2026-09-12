@@ -148,3 +148,33 @@ def test_blink_unix_loads_with_empty_expect(tmp_path):
     task = load_task(Path(__file__).parents[1] / "src" / "ironbench" / "tasks" / "blink-unix")
     assert task.expect == ()
     assert task.events
+
+
+def test_events_task_infra_failure_is_a_clean_result(tmp_path):
+    # review blocker: an infra failure (unexecutable binary) before the
+    # stimulus loop used to leave trigger_stamps unbound and the post-run
+    # event anchor pierced run_task with an UnboundLocalError. It must be a
+    # clean infra TaskResult instead.
+
+    task = make_events_task(tmp_path, "print('x')\n")
+    res = run_task(task, out_dir=tmp_path / "out", unix_cmd="definitely-not-a-binary-xyz")
+    assert not res.passed
+    assert res.error_kind == "infra"
+
+
+def test_events_only_task_is_rejected_on_non_unix_targets(tmp_path):
+    # the other runners ignore task.events: an events-only wokwi task would
+    # pass ANY output - the vacuous hole the load-time validation closes
+    # (the events-section target check fires before the detector check)
+    import pytest
+
+    d = tmp_path / "events-wokwi"
+    d.mkdir()
+    (d / "task.yaml").write_text(
+        "name: ev-wokwi\ndescription: fake\nentry: main.py\ntarget: wokwi\n"
+        "timeout_sec: 5\nexpect: []\nevents:\n  - pattern: '^x '\n    count_min: 1\n",
+        encoding="utf-8",
+    )
+    (d / "main.py").write_text("print('x')\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="events section is only supported by the unix target"):
+        load_task(d)

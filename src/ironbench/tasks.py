@@ -393,16 +393,19 @@ def load_task(task_dir: Path) -> Task:
     ):
         raise ValueError(f"{task_file}: level must be an integer 1..5")
     # IH-24: a task must declare something to score - expect patterns, an
-    # events section, or (plant target) the step-response requirements that
-    # the plant worker scores. Without any of those, ANY output passes on
-    # unix (the runner only early-exits on literal matches; empty expect =
-    # nothing missed). blink-unix legitimately has expect: [] because its
-    # detector is events; the plant tasks because theirs is the plant
-    # section's requirements (validated below).
-    if not expect and not raw.get("events") and not (target == "plant" and raw.get("plant")):
+    # events section (unix only: the other runners ignore task.events, so an
+    # events-only task there would pass ANY output - the same vacuous hole
+    # this validation closes), or (plant target) the step-response
+    # requirements that the plant worker scores. Without any of those, ANY
+    # output passes on unix (the runner only early-exits on literal matches;
+    # empty expect = nothing missed). blink-unix legitimately has expect: []
+    # because its detector is events; the plant tasks because theirs is the
+    # plant section's requirements (validated below).
+    events_usable = bool(raw.get("events")) and target == "unix"
+    if not expect and not events_usable and not (target == "plant" and raw.get("plant")):
         raise ValueError(
             f"{task_file}: the task declares no scoring detector (expect "
-            "patterns, events, or plant requirements) - any output would pass"
+            "patterns, unix events, or plant requirements) - any output would pass"
         )
 
     return Task(
