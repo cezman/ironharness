@@ -302,7 +302,6 @@ def test_limit_denials_are_journaled(tmp_path, monkeypatch):
 
 
 def test_deadline_denial_is_journaled(tmp_path, monkeypatch):
-    from io_core.limits import DeadlineTransport
     from io_core.session import Session
 
     class SlowTransport:
@@ -316,7 +315,6 @@ def test_deadline_denial_is_journaled(tmp_path, monkeypatch):
             return b""
 
     monkeypatch.delenv("IRONHARNESS_TRANSPORT_RATE", raising=False)
-    monkeypatch.setattr("io_core.session.DeadlineTransport", DeadlineTransport)
     s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
     try:
         s.serial_open("c", "loop://", timeout=0.05)
