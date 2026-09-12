@@ -134,6 +134,15 @@ def serial_close(name: str) -> str:
     return f"ok: serial {name!r} closed"
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
+def serial_reset(name: str, pulse_sec: float = 0.1, settle_sec: float = 2.0) -> str:
+    """Resets the board with an RTS pulse (ESP32: RTS->EN, DTR low = normal
+    boot). Clean state between solve attempts or after a hung REPL; open()
+    never resets - reset happens only here. Waits settle_sec for the boot."""
+    get_session().serial_reset(name, pulse_sec=pulse_sec, settle_sec=settle_sec)
+    return f"ok: serial {name!r} reset (pulse {pulse_sec}s, settle {settle_sec}s)"
+
+
 # --- serial background reader (IH-18): tail + expect-style waits ---
 
 

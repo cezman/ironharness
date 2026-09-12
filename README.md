@@ -39,7 +39,7 @@ uv run ironharness-mcp               # MCP server (stdio; or: python -m io_core.
 
 ## Agent tools (MCP)
 
-`echo` · `serial_open/write/read/read_line/close` · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (background reader: device output between tool calls is buffered, not lost) · `modbus_open/read/write/close` ·
+`echo` · `serial_open/write/read/read_line/close` · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (background reader: device output between tool calls is buffered, not lost) · `serial_reset` (RTS-pulse board reset between solve attempts) · `modbus_open/read/write/close` ·
 `mqtt_open/publish/subscribe/read/close` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
 
 Every operation is journaled to JSONL (`$IRONHARNESS_HOME/journal.jsonl`,

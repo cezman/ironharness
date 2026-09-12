@@ -184,6 +184,25 @@ class Session:
             t = self._get(name)
         return t.read_line(max_len).hex()
 
+    def serial_reset(self, name: str, *, pulse_sec: float = 0.1, settle_sec: float = 2.0) -> None:
+        """Resets the board with an RTS pulse (ESP32: RTS->EN, DTR stays low
+        = normal boot) - a clean state between solve attempts or after a hung
+        REPL. open() never resets (the idle-lines fix); reset is explicit.
+        Under a reader's I/O lock: line control is I/O on the same single
+        line (CH340). The settle wait holds the lock too - writes and drains
+        are blocked while the board boots; boot output accumulates in the
+        driver RX buffer and reaches the reader after the wait (a very
+        chatty boot can overflow a small driver buffer - keep settle_sec
+        realistic)."""
+        with self._lock:
+            t = self._get(name)
+            reader = self._readers.get(name)
+        if reader is not None:
+            with reader.io_lock:
+                t.reset(pulse_sec=pulse_sec, settle_sec=settle_sec)
+        else:
+            t.reset(pulse_sec=pulse_sec, settle_sec=settle_sec)
+
     # --- serial background reader (IH-18) ---
 
     def serial_reader_start(self, name: str, *, max_bytes: int = 65536) -> dict[str, int]:
