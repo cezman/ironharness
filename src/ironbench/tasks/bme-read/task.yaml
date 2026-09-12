@@ -1,0 +1,44 @@
+# Task description for ironbench: see AGENTS.md / ironbench-task skill.
+# First golden task scored on the live board (target: real, IH-33): a BME280
+# over I2C, one forced-mode measurement per received line.
+name: bme-read
+description: >-
+  A BME280 sensor is wired to the board's I2C bus: SDA on GPIO21, SCL on GPIO22,
+  address 0x76, bus clock 400 kHz. Write firmware that on startup prints exactly
+  "bme ready", then in an infinite loop waits for lines on the serial console.
+  Every received line (ignore empty ones) triggers one forced-mode measurement,
+  answered with a single line of the exact form
+  "T=<temp> C P=<pres> hPa H=<hum> %" where <temp> is the temperature in degrees
+  Celsius with two decimals, <pres> the pressure in hPa with one decimal and
+  <hum> the relative humidity in % with one decimal - values compensated per the
+  BME280 datasheet, not raw register dumps. The program never exits.
+entry: solution.py
+target: real
+timeout_sec: 20
+tags: [data]
+level: 4
+expect:
+  - 'bme ready'
+  - 'T=-?\d+\.\d{2} C'
+  - 'P=\d+\.\d hPa'
+  - 'H=\d+\.\d %'
+fail:
+  - 'Traceback'
+  - 'BME ERR'
+stimulus:
+  # "bme ready" is boot output scored from the whole log; the reading is
+  # anchored to the request line - the real target carries the IH-14
+  # chunk-stamp anchor (IH-33), so a pre-printed answer fails the run. The
+  # wait needle is deliberately task-specific ('hPa' lives only in reading
+  # lines): a short needle like 'T=' would false-match substrings of
+  # arbitrary agent output and condemn honest firmware.
+  - delay: 1500ms
+  - write-serial: "read\r"
+  - wait-serial: 'hPa'
+# Expert notes from the live bench (2026-09-12): fed to the solve agent's
+# prompt; the fact is recorded in results.jsonl (benchmark honesty, IH-21).
+notes:
+  - 'Breadboard legs must sit fully home: half-seated legs leave the I2C bus floating.'
+  - 'Wire the sensors in parallel on the bus (SDA=GPIO21, SCL=GPIO22), not in a chain.'
+  - 'The REPL eats cooked UTF-8: keep firmware output ASCII.'
+  - 'The COM port number changes across USB re-plugs: re-enumerate ports before opening.'

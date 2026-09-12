@@ -306,7 +306,33 @@ def test_solve_writes_journal_and_counts_attempts(tmp_path):
     attempt_events = [d for k, d in events if k == "attempt_result"]
     assert attempt_events[0]["model"] == "test-model"
     assert attempt_events[0]["error_kind"] == "none"  # IH-22: journal carries the kind
+    assert attempt_events[0]["notes"] is False  # IH-21: blink ships no notes
     assert jpath.exists() is False  # the J stub writes no file - the real JsonlJournal does
+
+
+def test_solve_journal_attempt_result_carries_notes_fact(tmp_path):
+    # IH-21 honesty: the journal event marks whether the prompt had notes -
+    # a campaign viewer can tell notes-driven runs from bare ones
+    import dataclasses
+
+    events: list = []
+
+    class J:
+        def __call__(self, kind, data):
+            events.append((kind, data))
+
+    task = dataclasses.replace(make_task(), notes=("GPIO21 is SDA",))
+    solve(
+        task,
+        SolveConfig(base_url="http://x", api_key="k", model="m"),
+        attempts=1,
+        out_dir=tmp_path / "camp",
+        llm=lambda cfg, msgs: GOOD_RESPONSE,
+        runner=fake_runner(True),
+        journal=J(),
+    )
+    attempt_events = [d for k, d in events if k == "attempt_result"]
+    assert attempt_events[0]["notes"] is True
 
 
 def test_agent_solve_results_writes_error_kind(tmp_path, monkeypatch):
@@ -341,3 +367,42 @@ def test_agent_solve_results_writes_error_kind(tmp_path, monkeypatch):
     assert record["task"] == "blink"
     assert record["error_kind"] == "run"
     assert record["solved"] is False
+
+
+def test_first_prompt_carries_expert_notes():
+    # IH-21 core: notes ride into the measured prompt; without them - unchanged
+    import dataclasses
+
+    task = dataclasses.replace(make_task(), notes=("GPIO21 is SDA", "keep output ASCII"))
+    prompt = agent_module._first_prompt(task)
+    assert "Expert notes from the bench team" in prompt
+    assert "- GPIO21 is SDA" in prompt
+    assert "Expert notes" not in agent_module._first_prompt(make_task())
+
+
+def test_agent_solve_results_records_notes_fact(tmp_path, monkeypatch):
+    # IH-21 honesty: results.jsonl tells the report whether the prompt had notes
+    import dataclasses
+    import json
+
+    import ironbench.cli as cli_module
+    from ironbench.agent import AttemptResult
+
+    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None):
+        return [
+            AttemptResult(
+                task=task.name,
+                attempt=1,
+                solved=True,
+                iterations=1,
+                duration_sec=1.0,
+                work_dir=out_dir / "attempt-1",
+            )
+        ]
+
+    monkeypatch.setattr(cli_module, "agent_solve", fake_agent_solve)
+    cfg = SolveConfig(base_url="http://x", api_key="k", model="m")
+    with_notes = dataclasses.replace(make_task(), notes=("a lesson",))
+    cli_module.agent_solve_results(with_notes, cfg, attempts=1, solve_dir=tmp_path / "camp")
+    record = json.loads((tmp_path / "camp" / "blink" / "results.jsonl").read_text("utf-8"))
+    assert record["notes"] is True

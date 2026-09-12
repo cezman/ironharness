@@ -229,28 +229,12 @@ def _stop_broker_proc(proc: subprocess.Popen | None, wsl_pid: int | None) -> Non
 
 def _first_answer_stamp(box, needle: str, since: float | None) -> float | None:
     """Ingestion stamp of the chunk holding the first occurrence of `needle`,
-    or None when it is not printed yet / was printed unprompted (stamped
-    before `since`; since=None = no stimulus write happened yet)."""
+    or None when it is not printed yet / was printed unprompted (see
+    runner_common.first_occurrence_stamp for the mapping and the same-tick
+    benefit-of-the-doubt rule); the lock is held here because the reader
+    thread mutates the box concurrently."""
     with box["lock"]:
-        pos = box["text"].find(needle)
-        if pos < 0:
-            return None
-        seen = 0
-        stamp_hit: float | None = None
-        for stamp, chunk in box["chunks"]:
-            seen += len(chunk)
-            if pos < seen:
-                stamp_hit = stamp
-                break
-    if stamp_hit is None or since is None:
-        return None
-    # Only a strictly-earlier stamp condemns: an ingestion stamp EQUAL to the
-    # trigger stamp means write -> firmware read -> echo -> ingest completed
-    # within one monotonic clock tick (field-proven on coarse-clock Windows
-    # CI, where a legal fast answer was condemned as pre-printed). Same-tick
-    # order is unknowable, so the benefit of the doubt goes to the agent; the
-    # dump-and-exit cheater stays covered by the zero-waits rule.
-    return stamp_hit if stamp_hit >= since else None
+        return common.first_occurrence_stamp(box["text"], box["chunks"], needle, since)
 
 
 def _run_unix(

@@ -185,18 +185,26 @@ def extract_code(response: str) -> str | None:
 
 def _first_prompt(task: Task) -> str:
     if task.target == "plant":
-        return (
+        base = (
             f"Task: {task.description}\n\n"
             f"Write the complete code of the {AGENT_FILE} file - the controller of the "
             "closed-loop system as a control(t, y, setpoint) function. "
             "The answer must be a single ```python block with the complete code."
         )
-    return (
-        f"Task: {task.description}\n\n"
-        f"Write the complete code of the {AGENT_FILE} file for MicroPython ESP32. "
-        "Printing to serial is a regular print(). "
-        "The answer must be a single ```python block with the complete code."
-    )
+    else:
+        base = (
+            f"Task: {task.description}\n\n"
+            f"Write the complete code of the {AGENT_FILE} file for MicroPython ESP32. "
+            "Printing to serial is a regular print(). "
+            "The answer must be a single ```python block with the complete code."
+        )
+    if task.notes:
+        # expert notes from the live bench (IH-21): part of the measured
+        # prompt; the has-notes fact is recorded in results.jsonl so an A/B
+        # comparison stays honest
+        lines = "\n".join(f"- {n}" for n in task.notes)
+        base += f"\n\nExpert notes from the bench team:\n{lines}"
+    return base
 
 
 def _serial_feedback(serial_log: Path | None) -> str:
@@ -375,6 +383,7 @@ def solve(
                     "duration_sec": r.duration_sec,
                     "error": r.error,
                     "error_kind": r.error_kind,
+                    "notes": bool(task.notes),  # benchmark honesty (IH-21)
                 },
             )
     return results
