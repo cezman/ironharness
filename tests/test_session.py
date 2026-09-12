@@ -111,6 +111,51 @@ def test_close_transport_removes_name(session):
     assert session._kinds == {}  # IH-17: kind-реестр синхронен с реестром транспортов
 
 
+def test_serial_list_journals_and_formats(tmp_path, monkeypatch):
+    # IH-36: MCP-first port enumeration - vid/pid as 4-hex-digit USB IDs,
+    # None when the port has no USB identity, journaled like every operation.
+    import serial.tools.list_ports as lp
+
+    class FakePort:
+        device = "COM6"
+        vid = 0x1A86
+        pid = 0x7523
+        description = "USB-SERIAL CH340"
+
+    class FakePortNoId:
+        device = "COM1"
+        vid = None
+        pid = None
+        description = None
+
+    monkeypatch.setattr(lp, "comports", lambda: [FakePort(), FakePortNoId()])
+    s = Session(tmp_path / "journal.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        ports = s.serial_list()
+    finally:
+        s.close()
+    assert ports[0] == {
+        "device": "COM6",
+        "vid": "1a86",
+        "pid": "7523",
+        "description": "USB-SERIAL CH340",
+    }
+    assert ports[1] == {"device": "COM1", "vid": None, "pid": None, "description": None}
+    listed = [e for e in read_events(tmp_path / "journal.jsonl") if e["kind"] == "serial_listed"]
+    assert listed and listed[0]["count"] == 2
+
+
+def test_serial_list_respects_enabled_kinds(tmp_path, monkeypatch):
+    # serial_list is gated by the serial kind like the rest of the family
+    monkeypatch.setenv("IRONHARNESS_ENABLED_KINDS", "modbus")
+    s = Session(tmp_path / "journal.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        with pytest.raises(PolicyViolation):
+            s.serial_list()
+    finally:
+        s.close()
+
+
 def test_modbus_ops_respect_deadline(session, monkeypatch):
     # IH-17: лимиты действуют и на forwarded-операции (modbus_read идёт через
     # __getattr__ обёртки), а не только на serial write/read
