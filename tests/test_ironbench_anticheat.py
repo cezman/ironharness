@@ -45,12 +45,28 @@ def verbatim_source(task) -> str:
 
 
 @pytest.mark.parametrize("task", UNIX_TASKS, ids=lambda t: t.name)
-def test_unix_verbatim_cheater_fails(task, tmp_path):
+def test_unix_verbatim_cheater_fails(task, tmp_path, wsl_unix_ready):
+    # Vacuous-guard (IH-24): without a WSL distro these runs die with an
+    # infra error and the test would pass VACUOUSLY - "the cheater failed"
+    # when in fact nothing ran. Skip loudly instead of scoring a green lie.
+    if not wsl_unix_ready:
+        pytest.skip("needs a WSL distro with micropython")
     res = run_with_entry(task, verbatim_source(task), "cheat", tmp_path)
     assert not res.passed, (
         f"{task.name} is verbatim-cheatable (printed the expect strings and passed): "
         f"error={res.error!r}"
     )
+    # anti-cheat pin (IH-24): a task whose stimulus carries a trigger (the
+    # wait-serial anchor applies) must catch the dump AS CHEATING, not fail
+    # it on some missed pattern. Tasks without a trigger keep plain scoring.
+    has_trigger = any(
+        "write-serial" in s or "mqtt-publish" in s for s in task.stimulus
+    )
+    if has_trigger:
+        assert (res.error or "").startswith("anti-cheat:"), (
+            f"{task.name}: dump cheater was not caught by the wait-serial anchor "
+            f"(error={res.error!r})"
+        )
 
 
 @pytest.mark.parametrize("task", PLANT_TASKS, ids=lambda t: t.name)

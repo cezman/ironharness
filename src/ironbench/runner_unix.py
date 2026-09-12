@@ -34,11 +34,13 @@ def _check_events(serial_text: str, events: tuple[dict, ...]) -> tuple[str, ...]
     declared bounds. A cheater printing bare expected strings produces no
     parseable events and fails the count.
 
-    Accepted residual: a cheater that SIMULATES the shim line format with
-    well-timed fake timestamps passes - the scoring trusts the firmware's
-    stdout, like all unix scoring. True verification needs out-of-band GPIO
-    observation (real-target read-back); anchoring event lines to the box
-    chunk stamps would at least tie them to wall-clock ingestion."""
+    Accepted residual (narrowed by IH-24): a cheater that SIMULATES the shim
+    line format with well-timed fake timestamps now ALSO fails when the run
+    carries chunk-stamp anchors (see _check_events_realtime) - fake lines
+    printed in one dump are ingested within milliseconds, which violates the
+    declared period. Only output paced like real hardware passes; the
+    residual is a simulated device paced by real sleeps. Passive tasks (no
+    stimulus triggers) keep the old text-only scoring."""
     missed: list[str] = []
     for ev in events:
         stamps: list[float] = []
@@ -67,6 +69,51 @@ def _check_events(serial_text: str, events: tuple[dict, ...]) -> tuple[str, ...]
                         f"[{period[0]:g}, {period[1]:g}]"
                     )
                     break
+    return tuple(missed)
+
+
+# Ingestion lag slack for the real-time event anchor (IH-24): the wall-clock
+# gap between two ingested chunks may exceed the declared period by this much
+# (reader scheduling, pipe buffering) and fall short of it by no less.
+EVENT_STAMP_TOLERANCE_SEC = 0.15
+
+
+def _check_events_realtime(
+    box, events: tuple[dict, ...]
+) -> tuple[str, ...]:
+    """Chunk-stamp anchor for event scoring (IH-24): re-checks the period
+    bounds against the REAL ingestion stamps of the chunks carrying event
+    lines, not only the firmware-embedded timestamps. A fake-timestamp dump
+    printed in one burst is ingested within milliseconds, so its real
+    intervals violate any plausible period - the declared bounds are
+    physically unverifiable for a dump. Honest firmware paced by sleeps
+    ingests line-by-line with real gaps and passes with the tolerance.
+    Returns the same missed-strings shape as _check_events."""
+    missed: list[str] = []
+    for ev in events:
+        period = ev.get("period_ms")
+        if not period:
+            continue
+        stamps: list[float] = []
+        with box["lock"]:
+            for chunk_stamp, chunk in box["chunks"]:
+                for line in chunk.splitlines():
+                    if re.search(ev["pattern"], line):
+                        stamps.append(chunk_stamp)
+        name = f"events[{ev['pattern']}] (real-time)"
+        if len(stamps) < ev["count_min"]:
+            continue  # the count/anchor mismatch is scored by _check_events
+        lo = period[0] / 1000 - EVENT_STAMP_TOLERANCE_SEC
+        hi = period[1] / 1000 + EVENT_STAMP_TOLERANCE_SEC
+        for a, b in itertools.pairwise(stamps):
+            delta = b - a
+            if not lo <= delta <= hi:
+                missed.append(
+                    f"{name}: period {delta:.2f}s outside "
+                    f"[{period[0]:g}, {period[1]:g}]ms (+/-{EVENT_STAMP_TOLERANCE_SEC:g}s) - "
+                    "output was not paced like the declared hardware"
+                )
+                break
     return tuple(missed)
 
 
@@ -359,6 +406,7 @@ def _run_unix(
                 writer, task.noise.get("faults", []), rng=random.Random(task.noise.get("seed", 0))
             )
         waits_done = 0
+        trigger_stamps: list[float] = []  # every delivered trigger (write/publish)
         # every wait-serial step as (needle, trigger stamp at the moment the
         # step was reached) - the canonical post-run verdict replays exactly
         # this sequence, so the verdict is a pure function of the settled
@@ -403,6 +451,7 @@ def _run_unix(
                     )
                 elif "write-serial" in step:
                     last_trigger_stamp = time.monotonic()  # the anti-cheat anchor point
+                    trigger_stamps.append(last_trigger_stamp)
                     raw = str(step["write-serial"]).replace("\r\n", "\n").replace("\r", "\n")
                     raw = raw.encode("utf-8")
                     if task.noise and raw.endswith(b"\n"):
@@ -418,6 +467,7 @@ def _run_unix(
                     # a retained/published command is what the firmware reacts to:
                     # it anchors the wait-serial anti-cheat just like write-serial
                     last_trigger_stamp = time.monotonic()
+                    trigger_stamps.append(last_trigger_stamp)
                     mqtt_client.publish(
                         str(pub["topic"]),
                         str(pub["payload"]),
@@ -566,6 +616,12 @@ def _run_unix(
     duration = round(time.monotonic() - start, 2)
     missed, hit_fail = common._check_patterns(serial_text, task.expect, task.fail)
     missed = missed + _check_events(serial_text, task.events)
+    # IH-24 anchor: the same period bounds re-checked over the REAL chunk
+    # ingestion stamps - a fake-timestamp dump fails here even when its
+    # embedded timestamps look right. Passive tasks (no trigger writes)
+    # legitimately skip the anchor (no stimulus to be anchored to).
+    if task.events and trigger_stamps:
+        missed = missed + _check_events_realtime(box, task.events)
     passed = not missed and not hit_fail and error is None
     result = common.TaskResult(
         task=task.name,
