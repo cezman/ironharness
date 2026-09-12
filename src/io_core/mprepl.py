@@ -11,6 +11,13 @@ error reporting, while each raw-REPL exec returns the board's traceback.
 The driver assumes an idle MicroPython REPL: enter() interrupts running
 firmware (Ctrl+C x2) and enters raw mode; exit() returns to the normal
 REPL (no soft reset - the caller decides whether to reset the board).
+
+Trust boundary (checklist item 3): the device path here is a path in the
+BOARD's filesystem, not a host path - the host sandbox does not and cannot
+apply to it. That grants no new capability: a caller with serial access can
+already run arbitrary MicroPython through the same REPL, so board-side
+writes are in-band payload, not a privilege escalation. Host-side safety
+lives in the sandbox (for the source/destination files) and in the journal.
 """
 
 from __future__ import annotations
