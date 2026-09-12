@@ -19,7 +19,7 @@ An agent harness for I/O and firmware. Two modules:
   replayer, limits (rate limit, deadlines), effect verification (`expect_read`), and
   an MCP server (22 tools).
 - **ironbench** — a benchmark for firmware agents: golden tasks in simulators
-  (Wokwi ESP32/MicroPython, plus Renode), an agent loop over any LLM API, pass@k reports.
+  (Wokwi ESP32/MicroPython, plus Renode), an agent loop over an OpenAI-compatible chat API, pass@k reports.
 
 ## Quick start
 

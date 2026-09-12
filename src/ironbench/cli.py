@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -239,39 +241,89 @@ def main(argv=None) -> int:
     return 0 if all_passed else 1
 
 
+def _replace_results_atomically(tmp_path: Path, results_path: Path) -> None:
+    """os.replace with a bounded retry: on Windows a concurrent reader holding
+    an open handle (a report run, an indexer, an antivirus) makes the rename
+    fail with PermissionError. Without a retry the campaign would die AFTER
+    burning all its attempts and results.jsonl would silently keep the
+    PREVIOUS campaign's data - the exact dishonesty IH-31 exists to prevent.
+    Retries give the reader time to finish; exhaustion raises loudly (the
+    journal still has every attempt_result)."""
+    delay = 0.05
+    for attempt in range(6):
+        try:
+            os.replace(tmp_path, results_path)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 1.0)
+
+
+def clean_stale_attempts(task_dir: Path) -> int:
+    """Removes attempt-* artifact directories left by a PREVIOUS campaign on
+    the task (IH-31): a shorter re-run must not leave a longer run's iter-*
+    files behind, or the artifacts lie about what the model produced. Also
+    removes stale results.jsonl.*.tmp files (a process killed between the
+    write and the replace would otherwise leave them forever). Called before
+    the attempts start. Two concurrent campaigns on the SAME task still
+    collide (out of scope: one campaign per task at a time)."""
+    removed = 0
+    if not task_dir.is_dir():
+        return 0
+    for stale in sorted(task_dir.glob("attempt-*")):
+        if stale.is_dir():
+            shutil.rmtree(stale, ignore_errors=True)
+            removed += 1
+    for stale_tmp in sorted(task_dir.glob("results.jsonl.*.tmp")):
+        try:
+            stale_tmp.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path):
     """A solve campaign: attempts + writing results.jsonl + progress printing.
 
-    results.jsonl lives in the task directory and is overwritten: a repeated
-    campaign on the same task replaces its results in the report instead of
-    duplicating them.
+    results.jsonl lives in the task directory and is replaced atomically
+    (tmp + os.replace, IH-31): a repeated campaign on the same task replaces
+    its results in the report instead of duplicating them, and a concurrent
+    reader/writer can never observe a half-written file (last campaign wins,
+    by design). Stale attempt artifacts of a longer previous campaign are
+    cleaned before the run.
     """
     task_dir = solve_dir / task.name
     task_dir.mkdir(parents=True, exist_ok=True)
+    clean_stale_attempts(task_dir)
     results_path = task_dir / "results.jsonl"
     with JsonlJournal(solve_dir / "journal.jsonl", actor="ironbench") as journal:
         started = time.monotonic()
         results = agent_solve(
             task, cfg, attempts=attempts, out_dir=task_dir, journal=journal
         )
-        with results_path.open("w", encoding="utf-8") as fh:  # overwrite: a per-task campaign replaces its results
-            for r in results:
-                fh.write(
-                    json.dumps(
-                        {
-                            "task": r.task,
-                            "attempt": r.attempt,
-                            "solved": r.solved,
-                            "iterations": r.iterations,
-                            "model": cfg.model,
-                            "duration_sec": r.duration_sec,
-                            "error": r.error,
-                            "error_kind": r.error_kind,
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
+        payload = "".join(
+            json.dumps(
+                {
+                    "task": r.task,
+                    "attempt": r.attempt,
+                    "solved": r.solved,
+                    "iterations": r.iterations,
+                    "model": cfg.model,
+                    "duration_sec": r.duration_sec,
+                    "error": r.error,
+                    "error_kind": r.error_kind,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+            for r in results
+        )
+        tmp_path = results_path.with_name(f"{results_path.name}.{os.getpid()}.tmp")
+        tmp_path.write_text(payload, encoding="utf-8")
+        _replace_results_atomically(tmp_path, results_path)
     for r in results:
         status = "SOLVED" if r.solved else "not solved"
         print(

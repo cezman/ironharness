@@ -30,7 +30,9 @@ def test_load_and_aggregate(tmp_path):
             {"model": "m1", "task": "uart-echo", "attempt": 1, "solved": True, "iterations": 1, "duration_sec": 50},
         ],
     )
-    stats = aggregate(load_results(tmp_path))
+    records, unparseable = load_results(tmp_path)
+    assert unparseable == []
+    stats = aggregate(records)
     assert [(s.model, s.task, s.attempts, s.solved) for s in stats] == [
         ("m1", "blink", 2, 1),
         ("m1", "uart-echo", 1, 1),
