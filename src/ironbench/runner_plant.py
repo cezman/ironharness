@@ -15,10 +15,12 @@ outside its cwd is out of scope).
 Protocol: the harness writes one step per line ("t,y_meas,setpoint"), the
 controller answers one line (repr(u)) on stdout; controller print()s are
 redirected to stderr by the bootstrap, so they land in the feedback log and
-cannot garble the answer channel. stdin is fed by a writer thread (a hung
-controller that never reads stdin must not block the harness on a full pipe);
-answers are read through a queue - the run loop waits with the wall deadline
-and classifies silence/EOF/exit as run results, never as harness crashes.
+cannot garble the answer channel. The run loop writes stdin directly (one
+~60-byte line in flight: a hung controller that never reads it cannot fill
+the pipe) and reads answers through a queue thread with the wall deadline -
+silence/EOF/exit classify as run results, never as harness crashes. Both
+pipes decode with errors="replace": hostile non-UTF8 output degrades into
+the feedback log instead of killing the pump threads.
 """
 
 from __future__ import annotations
@@ -77,9 +79,14 @@ def _pump_lines(src, sink: queue.Queue) -> None:
 
 def _pump_stderr(src, sink: list) -> None:
     """Thread body: accumulate stderr until EOF (controller prints +
-    tracebacks; the thread is a daemon - it ends when the process dies)."""
+    tracebacks; the thread is a daemon - it ends when the process dies).
+    The accumulation is bounded (IH-25: the controller is untrusted - a
+    stderr flood must not eat harness memory; only the tail lands in the
+    feedback log anyway)."""
     try:
-        sink.extend(src.readlines())
+        for chunk in src.readlines():
+            if len(sink) < 500:
+                sink.extend(chunk.splitlines(keepends=True))
     finally:
         try:
             src.close()
@@ -168,6 +175,7 @@ def _run_plant(
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         threading.Thread(target=_pump_lines, args=(proc.stdout, out_q), daemon=True).start()

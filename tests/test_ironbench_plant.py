@@ -353,6 +353,25 @@ def test_plant_controller_cannot_influence_scoring_via_files(tmp_path):
     assert any("steady_error" in m for m in res.missed)
 
 
+def test_plant_hostile_non_utf8_output_is_clean_fail(tmp_path):
+    # IH-25 review: the controller prints raw non-UTF8 bytes - the pipes
+    # decode with errors="replace", so the run degrades into a clean FAIL
+    # with the feedback preserved, and the pump threads do not die.
+    controller = (
+        "import sys\n"
+        "def control(t, y, setpoint):\n"
+        "    sys.stderr.buffer.write(bytes([0xff, 0xfe, 0x0a]))\n"
+        "    sys.stderr.buffer.flush()\n"
+        "    return 0.0\n"
+    )
+    task = make_plant_task(tmp_path, controller)
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert not res.passed
+    assert any("steady_error" in m for m in res.missed)
+    log = res.serial_log.read_text("utf-8", errors="replace")
+    assert "�" in log  # the bytes arrived as replacement chars, not a crash
+
+
 def test_plant_rerun_replaces_not_doubles(tmp_path):
     # a re-run into the same out_dir scores its own run only (per-run dirs);
     # a controller replaced with a dying one must fail the second run as a
