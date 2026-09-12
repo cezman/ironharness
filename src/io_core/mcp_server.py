@@ -99,8 +99,9 @@ def echo(text: str) -> str:
 #   (connects, I/O over ports/hosts/brokers); the close/subscribe tools
 #   leave it unset (the spec default is true anyway).
 # - idempotentHint is left unset everywhere on purpose: nothing here is
-#   idempotent (a repeated *_open on the same name is an error, not a
-#   no-op - Session refuses "already open").
+#   state-idempotent (a repeated *_open on the same name is an error, not a
+#   no-op - Session refuses "already open"); the read-only tools re-execute
+#   on every call rather than being cached no-ops.
 
 
 # --- serial (binary data as hex strings, JSON-friendly) ---

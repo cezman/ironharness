@@ -118,8 +118,8 @@ def test_serial_list_journals_and_formats(tmp_path, monkeypatch):
 
     class FakePort:
         device = "COM6"
-        vid = 0x1A86
-        pid = 0x7523
+        vid = 0x86  # deliberately < 0x1000: the 4-hex-digit padding is pinned below
+        pid = 0x23
         description = "USB-SERIAL CH340"
 
     class FakePortNoId:
@@ -136,8 +136,8 @@ def test_serial_list_journals_and_formats(tmp_path, monkeypatch):
         s.close()
     assert ports[0] == {
         "device": "COM6",
-        "vid": "1a86",
-        "pid": "7523",
+        "vid": "0086",
+        "pid": "0023",
         "description": "USB-SERIAL CH340",
     }
     assert ports[1] == {"device": "COM1", "vid": None, "pid": None, "description": None}
