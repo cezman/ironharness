@@ -142,15 +142,13 @@ OUT_MARKER = ".ironbench-out"
 
 
 def _new_run_dir(out_dir: Path, task: Task) -> tuple[Path, str]:
-    """A fresh per-run artifact directory (serial log, plant spec/result, stage).
+    """A fresh per-run artifact directory (serial log, controller cwd, stage).
 
     A run writes only into its own run-<id> directory, so a re-run into the same
     out_dir scores its own output: fixed per-task paths used to leak a stale
-    plant result.json (or serial log) from a previous run into a false PASS -
-    a worker killed before writing (os._exit) even returned exit code 0. The
-    plant worker additionally stamps result.json with run_id and the runner
-    verifies it - a second line of defense against a stale/hostile file that
-    still lands at the exact result path.
+    serial log from a previous run into a false PASS. (The old plant worker
+    additionally stamped a result.json with run_id; since IH-25 the plant
+    scores in the harness from pipe data and writes no result file at all.)
     An uuid collision is retried; any other OSError (broken volume) propagates
     loudly - without an artifact directory there is nothing to score, so a
     fabricated FAIL would be no more honest than a crash.

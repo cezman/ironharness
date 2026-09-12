@@ -102,7 +102,7 @@ classes, not a single number. LLM config — environment variables: `LLM_BASE_UR
   (ESP32 recovers by reflashing, but data is gone). esptool is an optional
   dependency: `pip install 'ironharness[flash]'`.
 - **Task code runs unsandboxed**: locally executed task code - plant controllers
-  (`python -m ironbench.plant`) and firmware on the unix/real targets - runs as
+  (plant controllers and firmware on the unix/real targets) - runs as
   local processes with your user's rights (wokwi firmware runs in the Wokwi
   cloud instead). A process boundary bounds hangs and crashes only - it is not a
   filesystem or network sandbox. Plant controllers get a throwaway working
