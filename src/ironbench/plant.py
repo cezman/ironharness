@@ -5,39 +5,33 @@ meanings): dy/dt = (K*u - (y - ambient)) / T. The discretization is exact
 (exponential), so the dt step size does not affect plant stability.
 
 Controller contract: the entry file defines control(t, y, setpoint) -> float.
-The worker calls it every dt simulation seconds (t - time, y - measurement,
+The harness calls it every dt simulation seconds (t - time, y - measurement,
 setpoint - setpoint), clamps the return value to [u_min, u_max] (the actuator is
 the source of integral windup) and feeds it to the plant. Scoring uses the
 step-response metrics from task.yaml (overshoot/settle_time/steady_error), not regex.
 
-The controller runs in a separate process (`python -m ironbench.plant`): a
-hung/crashed controller is killed on the wall timeout and does not take the
-runner down. The worker reports result.json + a text log (trajectory + summary
-block). The log is the plant target's "serial": the agent sees its tail as
-feedback, so metrics and errors are written at the end. The plant parameters
-K/T never appear in the log: in system-id style tasks the agent must estimate
-them itself.
+Isolation (IH-25): the controller runs in its OWN process and talks to the
+plant over a pipe ((t, y, setpoint) -> u, see runner_plant.py). The plant
+physics - including K/T - lives in the HARNESS process only: K/T never enter
+the controller process's memory, argv, environment, or its working directory
+(the entry is copied to a throwaway cwd under a neutral name). A controller
+that tries to read the parameters finds nothing: the spec-reader cheat that
+was possible in the old single-worker design (spec file in argv) is closed
+by construction and pinned by a test. This is benchmark honesty, not a
+security sandbox: the controller process still runs with the user's rights
+and an active filesystem search outside its view is out of scope.
 
-Threat model (IH-13): the controller is untrusted code running with the full
-rights of the worker process. The process boundary bounds hangs and crashes
-only - it is NOT a filesystem/network sandbox. The runner gives the worker a
-throwaway working directory (relative writes stay inside the run dir), but the
-controller can still touch anything the user can - including reading the spec
-with K/T via sys.argv, so hiding parameters from the controller within one
-process is impossible. Only run controllers you trust; for hostile code use a
-VM/container (a strong two-process split is a separate decision).
+The log is the plant target's "serial": the agent sees its tail as feedback,
+so metrics and errors are written at the end. The plant parameters K/T never
+appear in the log: in system-id style tasks the agent must estimate them
+itself.
 """
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
 import hashlib
-import io
-import json
 import math
-import runpy
-import sys
 import traceback
 
 # Meaningful names for the same first-order physics
@@ -50,6 +44,18 @@ MAX_STDOUT_LINES = 30
 
 # Settling band when requirements has no steady_error: 2% of the travel span
 DEFAULT_SETTLE_SPAN_FRACTION = 0.02
+
+
+class ControlAbort(Exception):
+    """A verdict-level failure raised by the IPC control adapter (hung
+    controller, process death, unreadable answer). run_closed_loop passes it
+    through untouched - the harness turns it into a TaskResult with the right
+    error_kind. Plain controller exceptions keep the old 'controller crashed'
+    path."""
+
+    def __init__(self, message: str, kind: str = "run") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 class _DeterministicNoise:
@@ -135,7 +141,11 @@ def run_closed_loop(
 ) -> tuple[list[tuple[float, float, float, float]], str | None]:
     """Run: control(t, y_meas, setpoint) -> clamp to [u_min, u_max] -> plant.
     Returns (rows of (t, setpoint, y_true, u), error|None). Metrics are computed
-    against the true y: sensor noise makes control harder but does not smear the score."""
+    against the true y: sensor noise makes control harder but does not smear the score.
+
+    ControlAbort raised by the control adapter propagates to the caller
+    (the harness classifies it); plain controller exceptions become the
+    classic 'controller crashed at t=' error string with the traceback."""
     noise = _DeterministicNoise(spec.seed)
     y = spec.y0
     rows: list[tuple[float, float, float, float]] = []
@@ -151,6 +161,8 @@ def run_closed_loop(
         y_meas = y + noise.gauss(spec.noise_std)
         try:
             raw = control(t, y_meas, spec.setpoint)
+        except ControlAbort:
+            raise  # harness-level verdict: the caller classifies it
         except (Exception, SystemExit):  # noqa: BLE001 - controller code is foreign: any outcome (incl. sys.exit) = a run result
             return rows, f"controller crashed at t={t:g} s:\n{traceback.format_exc()}"
         # bool is an int: allow it explicitly, otherwise clamp(True) silently yields 1.0
@@ -263,94 +275,3 @@ def render_log(
     if error:
         parts.append(f"# error: {error}")
     return "\n".join(parts) + "\n"
-
-
-def load_control(entry):
-    """Executes the entry as a script (runpy) and extracts control(t, y, setpoint);
-    (None, error) on failure. Controller code is the subject of the run: it is
-    executed in the worker's separate process under the runner's wall timeout."""
-    try:
-        namespace = runpy.run_path(str(entry), run_name="controller")
-    except (Exception, SystemExit):  # noqa: BLE001 - controller code is foreign: any outcome = a run result
-        return None, f"entry file failed to run:\n{traceback.format_exc()}"
-    control = namespace.get("control")
-    if not callable(control):
-        return None, "entry file has no control(t, y, setpoint) -> float function"
-    return control, None
-
-
-def worker_main(argv=None) -> int:
-    """Worker entry point: the run report goes to result.json, the trajectory to
-    the log; the return code is 0 even when the controller crashed (a controller
-    error is a run result, not a worker crash). The one thing the worker cannot
-    do is write anything when the controller kills the process outright
-    (os._exit during import): a missing result.json is a failure by contract,
-    enforced by the runner. result.json is stamped with --run-id: the runner
-    scores only a report it itself requested, so a stale file at the result
-    path is rejected, not used."""
-    import argparse
-    from pathlib import Path
-
-    ap = argparse.ArgumentParser(
-        prog="python -m ironbench.plant", description="plant target worker"
-    )
-    ap.add_argument("--entry", required=True, type=Path)
-    ap.add_argument("--spec", required=True, type=Path)
-    ap.add_argument("--log", required=True, type=Path)
-    ap.add_argument("--result", required=True, type=Path)
-    ap.add_argument(
-        "--run-id",
-        default="",
-        help="opaque id of this run; the runner rejects a result.json with a foreign run_id",
-    )
-    args = ap.parse_args(argv)
-
-    try:
-        spec = PlantSpec.from_section(json.loads(args.spec.read_text(encoding="utf-8")))
-    except Exception:  # noqa: BLE001 - a broken spec is an environment problem, but the report must still happen
-        error = "failed to prepare task: plant spec is unreadable"
-        args.log.write_text(f"# error: {error}\n", encoding="utf-8")
-        args.result.write_text(
-            json.dumps(
-                {
-                    "error": error,
-                    "metrics": None,
-                    "missed": [],
-                    "steps": 0,
-                    "run_id": args.run_id,
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        return 0
-    control, error = load_control(args.entry)
-
-    rows: list = []
-    metrics = None
-    missed: list[str] = []
-    stdout_capture = io.StringIO()
-    if error is None:
-        with contextlib.redirect_stdout(stdout_capture):
-            rows, error = run_closed_loop(control, spec)
-        metrics = compute_metrics(rows, spec)
-        if metrics is not None:
-            missed = check_requirements(metrics, spec.requirements)
-
-    args.log.write_text(
-        render_log(spec, rows, metrics, missed, error, stdout_capture.getvalue()),
-        encoding="utf-8",
-    )
-    report = {
-        "error": error,
-        "metrics": metrics,
-        "missed": missed,
-        "steps": len(rows),
-        "run_id": args.run_id,
-    }
-    args.result.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(worker_main())

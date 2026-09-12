@@ -1,142 +1,273 @@
-"""plant target (see ironbench/plant.py): a closed "first-order plant +
-controller" loop entirely in Python, no simulators or WSL. The worker runs the
-controller (entry) in a separate process; scoring uses the step-response
-metrics from task.yaml (missed = unmet requirements as human-readable strings).
+"""plant target runner (IH-25): the plant physics lives HERE, in the harness
+process; the controller runs in its own process and talks to the plant over
+pipes ((t, y_meas, setpoint) -> u).
+
+Why two processes: the controller is untrusted agent code. In the old design
+a single worker ran both the physics and the controller, so K/T travelled in
+the worker's argv (spec file) - a spec-reading controller could cheat. Now
+K/T never enter the controller process: no spec file on disk, no task-directory
+paths in argv (the entry is copied into a throwaway cwd under a neutral name),
+nothing in the environment. A controller that tries to read the parameters
+finds nothing (pinned by a test). This is benchmark honesty, not a security
+sandbox - the controller keeps the user's rights (an active filesystem search
+outside its cwd is out of scope).
+
+Protocol: the harness writes one step per line ("t,y_meas,setpoint"), the
+controller answers one line (repr(u)) on stdout; controller print()s are
+redirected to stderr by the bootstrap, so they land in the feedback log and
+cannot garble the answer channel. stdin is fed by a writer thread (a hung
+controller that never reads stdin must not block the harness on a full pipe);
+answers are read through a queue - the run loop waits with the wall deadline
+and classifies silence/EOF/exit as run results, never as harness crashes.
 """
 
 from __future__ import annotations
 
-import json
+import queue
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 from ironbench import runner_common as common
+from ironbench.plant import (
+    ControlAbort,
+    PlantSpec,
+    check_requirements,
+    compute_metrics,
+    render_log,
+    run_closed_loop,
+)
 from ironbench.tasks import Task
+
+# The controller-process bootstrap: argv is [bootstrap, entry_basename] - a
+# relative name resolved against the throwaway cwd, no task-directory paths.
+# Controller print()s are redirected to stderr (the feedback log); the answer
+# channel is the REAL stdout, which the controller cannot reach through
+# sys.stdout anymore.
+CONTROLLER_BOOTSTRAP = """\
+import sys, runpy
+sys.stdout = sys.stderr
+ns = runpy.run_path(sys.argv[1], run_name="controller")
+control = ns.get("control")
+if not callable(control):
+    print("BOOTSTRAP: entry file has no control(t, y, setpoint) function")
+    sys.exit(2)
+out = sys.__stdout__
+for line in sys.stdin:
+    t, y, sp = (float(v) for v in line.split(","))
+    out.write(repr(control(t, y, sp)) + "\\n")
+    out.flush()
+"""
+
+
+def _pump_lines(src, sink: queue.Queue) -> None:
+    """Thread body: lines from src into sink (None on EOF)."""
+    try:
+        for line in src:
+            sink.put(line)
+    finally:
+        try:
+            src.close()
+        except OSError:
+            pass
+        sink.put(None)
+
+
+def _pump_stderr(src, sink: list) -> None:
+    """Thread body: accumulate stderr until EOF (controller prints +
+    tracebacks; the thread is a daemon - it ends when the process dies)."""
+    try:
+        sink.extend(src.readlines())
+    finally:
+        try:
+            src.close()
+        except OSError:
+            pass
+
+
+def _death_error(proc: subprocess.Popen, stderr_lines: list[str], err_thread, at: str) -> str:
+    """Honest error for a controller process that died mid-run. The process
+    status and stderr are settled first (at EOF the pumps may lag the death
+    by a scheduling step): without the wait the exit code reads as None and
+    the traceback is missing. The stderr first line is included only when it
+    is not a traceback (the traceback's message lines - e.g. a SystemExit
+    reason - stay in the feedback log, not in the error: the runner scans the
+    error for infra phrases)."""
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+    if err_thread is not None:
+        err_thread.join(timeout=1.0)
+    rc = proc.poll()
+    all_stderr = "".join(stderr_lines)
+    if rc != 0 and "Traceback" in all_stderr[:2000]:
+        # a crash: the reason lives in the feedback log (the traceback), and
+        # the error stays free of the agent's exception text (infra scan)
+        return f"controller crashed (exit code {rc}) {at}"
+    # the only stderr content allowed into the error is the bootstrap's own
+    # marked diagnostic (a missing control function); everything else -
+    # controller prints, SystemExit messages - stays in the feedback log
+    for ln in (l.strip() for l in stderr_lines):
+        if ln.startswith("BOOTSTRAP:"):
+            return f"controller exited (code {rc}) {at}: {ln[:200]}"
+    return f"controller exited (code {rc}) {at}"
 
 
 def _run_plant(
     task: Task,
     *,
     out_dir: Path,
-    plant_cmd: str | list | None = None,
     journal=None,
 ) -> common.TaskResult:
-    """A run through the `python -m ironbench.plant` worker: it executes the
-    controller (entry) in a separate process and writes the log + result.json.
-    A hung/crashed controller is a run result (feedback to the agent), not a
-    runner crash. plant_cmd is the injection point for tests. The target is
-    local: no WSL, simulators, or their quotas needed. Artifacts land in a
-    fresh per-run directory and result.json is stamped with run_id: a stale
-    file from a previous run in the same out_dir is rejected, not scored."""
-    run_dir, run_id = common._new_run_dir(out_dir, task)
+    """Two-process closed loop: the harness simulates the plant, the
+    controller answers (t, y, setpoint) -> u over pipes. The controller
+    process is always the entry file under the neutral bootstrap (IH-25)."""
+    run_dir, _ = common._new_run_dir(out_dir, task)
     serial_log = run_dir / f"{task.name}.serial.log"
-    result_file = run_dir / f"{task.name}.plant-result.json"
     controller_cwd = run_dir / "controller-cwd"
-    controller_cwd.mkdir(exist_ok=True)  # tolerate a reused run dir (run_id check still guards scoring)
+    controller_cwd.mkdir(exist_ok=True)
     wall_timeout = task.timeout_sec * 2 + common.WALL_GRACE_SEC
     start = time.monotonic()
     exit_code: int | None = None
     error: str | None = None
     error_kind = common.ERROR_NONE
-    report: dict | None = None
+    rows: list = []
+    spec = PlantSpec.from_section(task.plant)
+
+    entry_src = task.directory / task.entry
+    if not entry_src.is_file():
+        result = common.TaskResult(
+            task=task.name,
+            passed=False,
+            exit_code=None,
+            duration_sec=0.0,
+            serial_log=None,
+            missed=tuple(task.expect),
+            error=f"not found: entry file not found: {entry_src}",
+            error_kind=common.ERROR_INFRA,
+        )
+        common._journal_result(journal, result)
+        return result
+    (controller_cwd / "controller_entry.py").write_bytes(entry_src.read_bytes())
+
+    cmd = [sys.executable, "-c", CONTROLLER_BOOTSTRAP, "controller_entry.py"]
+    if journal:
+        journal("task_start", {"task": task.name})
+    proc: subprocess.Popen | None = None
+    stderr_lines: list[str] = []
+    out_q: queue.Queue = queue.Queue()
     try:
-        entry = task.directory / task.entry
-        if not entry.is_file():
-            raise FileNotFoundError(f"entry file not found: {entry}")
-        spec_file = run_dir / f"{task.name}.plant.json"
-        spec_file.write_text(json.dumps(task.plant, ensure_ascii=False), encoding="utf-8")
-        if plant_cmd is None:
-            cmd = [
-                sys.executable,
-                "-m",
-                "ironbench.plant",
-                "--entry",
-                str(entry),
-                "--spec",
-                str(spec_file),
-                "--log",
-                str(serial_log),
-                "--result",
-                str(result_file),
-                "--run-id",
-                run_id,
-            ]
-        else:
-            cmd = [plant_cmd] if isinstance(plant_cmd, str) else list(plant_cmd)
-        if journal:
-            journal("task_start", {"task": task.name})
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            cwd=str(controller_cwd),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
-            errors="replace",
-            timeout=wall_timeout,
-            check=False,
-            cwd=controller_cwd,
+            bufsize=1,
         )
-        exit_code = proc.returncode
-        if proc.returncode != 0:
-            # the worker returns 0 even when the controller crashed - a non-zero
-            # code means a problem in the worker/spec itself (not the agent's fault)
-            error = (
-                f"plant worker exited with code {proc.returncode}: "
-                + (proc.stderr or proc.stdout or "").strip()[-300:]
-            )
-            error_kind = common.ERROR_INFRA
-    except subprocess.TimeoutExpired:
-        error = f"the plant run exceeded the wall limit ({wall_timeout} s) - controller stuck in a loop?"
-        error_kind = common.ERROR_TIMEOUT
-    except FileNotFoundError as e:
-        error = f"not found: {e.filename or e}"
-        error_kind = common.ERROR_INFRA
+        threading.Thread(target=_pump_lines, args=(proc.stdout, out_q), daemon=True).start()
+        err_thread = threading.Thread(
+            target=_pump_stderr, args=(proc.stderr, stderr_lines), daemon=True
+        )
+        err_thread.start()
 
-    if error is None:
-        if result_file.is_file():
+        deadline = time.monotonic() + wall_timeout
+
+        def ipc_control(t: float, y_meas: float, setpoint: float) -> float:
+            """The closed-loop control adapter over the pipes; raises
+            ControlAbort on silence, EOF, exit, or a non-numeric answer."""
+            assert proc is not None and proc.stdin is not None
             try:
-                report = json.loads(result_file.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as e:
-                error = f"failed to parse the plant worker result.json: {e}"
-                error_kind = common.ERROR_INFRA
-        else:
-            error = "the plant worker left no result.json"
-            error_kind = common.ERROR_INFRA
-    if report is not None and not isinstance(report, dict):
-        error = "plant worker result.json is not a JSON object"
-        error_kind = common.ERROR_INFRA
-        report = None
-    if report is not None and report.get("run_id") != run_id:
-        # A file at the result path that this run did not request is hostile
-        # input, not data: its metrics must never be scored.
-        error = (
-            f"plant result.json is not from this run "
-            f"(run_id {report.get('run_id')!r} != {run_id!r})"
-        )
-        error_kind = common.ERROR_INFRA
-        report = None
-    if report and report.get("error"):
-        # error carries only the headline: the full traceback stays in the log
-        # (feedback to the agent), and the agent's exception text must not leak
-        # into is_infra_error
-        error = report["error"].splitlines()[0]
+                proc.stdin.write(f"{t!r},{y_meas!r},{setpoint!r}\n")
+                proc.stdin.flush()
+            except (OSError, ValueError):
+                raise ControlAbort(
+                    _death_error(proc, stderr_lines, err_thread, f"before step t={t:g}"),
+                    kind="run",
+                ) from None
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ControlAbort(
+                        f"controller did not answer step t={t:g} (wall limit "
+                        f"{wall_timeout:g} s exceeded)",
+                        kind="timeout",
+                    )
+                try:
+                    item = out_q.get(timeout=min(1.0, remaining))
+                except queue.Empty:
+                    continue
+                if item is None:
+                    raise ControlAbort(
+                        _death_error(proc, stderr_lines, err_thread, f"at step t={t:g}"),
+                        kind="run",
+                    )
+                try:
+                    return float(item)
+                except ValueError:
+                    raise ControlAbort(
+                        f"controller returned a non-number ({item.strip()[:60]!r}) "
+                        f"at t={t:g} s - control must answer one float per step",
+                        kind="run",
+                    ) from None
+
+        rows, error = run_closed_loop(ipc_control, spec)
+        if error is None:
+            # the controller survived the whole loop: close stdin so it exits
+            try:
+                proc.stdin.close()  # type: ignore[union-attr]
+            except OSError:
+                pass
+            try:
+                exit_code = proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                exit_code = None
+    except ControlAbort as e:
+        error = str(e)
+        error_kind = common.ERROR_TIMEOUT if e.kind == "timeout" else common.ERROR_RUN
+    finally:
+        if proc is not None:
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
+            if proc.poll() is None:
+                proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            if exit_code is None:
+                exit_code = proc.poll()
+
+    metrics = compute_metrics(rows, spec)
+    missed: list[str] = check_requirements(metrics, spec.requirements) if metrics else []
+    if error is None and exit_code not in (0, None):
+        error = f"controller process exited with code {exit_code}"
         error_kind = common.ERROR_RUN
 
-    serial_text = (
-        serial_log.read_text(encoding="utf-8", errors="replace") if serial_log.is_file() else ""
+    controller_output = "".join(stderr_lines)
+    serial_log.write_text(
+        render_log(spec, rows, metrics, missed, error, controller_output),
+        encoding="utf-8",
     )
-    missed_metrics = tuple(report.get("missed", ())) if report else ()
-    missed_patterns, hit_fail = common._check_patterns(serial_text, task.expect, task.fail)
-    missed = missed_metrics + missed_patterns
-    passed = not missed and not hit_fail and error is None
+    log_text = serial_log.read_text(encoding="utf-8", errors="replace")
+    missed_patterns, hit_fail = common._check_patterns(log_text, task.expect, task.fail)
+    duration = round(time.monotonic() - start, 2)
+    passed = not missed and not missed_patterns and not hit_fail and error is None
     result = common.TaskResult(
         task=task.name,
         passed=passed,
         exit_code=exit_code,
-        duration_sec=round(time.monotonic() - start, 2),
-        serial_log=serial_log if serial_text else None,
-        missed=missed,
+        duration_sec=duration,
+        serial_log=serial_log,
+        missed=tuple(missed) + missed_patterns,
         hit_fail=hit_fail,
         error=error,
         error_kind=error_kind,

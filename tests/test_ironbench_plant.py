@@ -1,12 +1,13 @@
-"""Tests of the plant target (a closed "plant + controller" loop, see ironbench/plant.py):
-unit tests of the physics/metrics + integration through the real worker (a local
-process, no WSL or simulators)."""
+"""Tests of the plant target (a closed "plant + controller" loop, see
+ironbench/plant.py and runner_plant.py): unit tests of the physics/metrics +
+integration through the real two-process runner (a local subprocess, no WSL
+or simulators). IH-25: the physics lives in the harness process, the
+controller answers over pipes - K/T never enter the controller process."""
 
 from __future__ import annotations
 
 import json
 import math
-import sys
 import textwrap
 from pathlib import Path
 
@@ -21,7 +22,6 @@ from ironbench.plant import (
     check_requirements,
     compute_metrics,
     run_closed_loop,
-    worker_main,
 )
 from ironbench.runner import run_task
 from ironbench.tasks import load_task
@@ -105,7 +105,7 @@ def test_check_requirements_reports_facts():
     assert "never settled" in missed[2]
 
 
-# --- integration: run_task -> the real worker ---
+# --- integration: run_task -> the two-process runner (IH-25) ---
 
 
 def make_plant_task(tmp_path, controller: str, name="fake-plant", **task_overrides):
@@ -141,12 +141,12 @@ expect:
     return load_task(d)
 
 
+PASSING_CONTROLLER = "GAIN = 0.5\ndef control(t, y, setpoint):\n    return GAIN * (setpoint - y)\n"
+
+
 def test_plant_pass_and_log_tail(tmp_path):
     # GAIN 0.5: e_ss = 30/31 ~= 0.97 <= 2, saturation up to y~=48, settling ~7 s
-    task = make_plant_task(
-        tmp_path,
-        "GAIN = 0.5\ndef control(t, y, setpoint):\n    return GAIN * (setpoint - y)\n",
-    )
+    task = make_plant_task(tmp_path, PASSING_CONTROLLER)
     res = run_task(task, out_dir=tmp_path / "out")
     assert res.passed, (res.error, res.missed)
     assert res.exit_code == 0
@@ -167,19 +167,19 @@ def test_plant_controller_crash_is_result_not_infra(tmp_path):
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
     assert "controller crashed" in res.error
-    assert "controller crashed" in res.serial_log.read_text("utf-8")  # feedback to the agent
+    assert "ZeroDivisionError" in res.serial_log.read_text("utf-8")  # feedback to the agent
     assert not runner_module.is_infra_error(res)
     assert res.error_kind == "run"
 
 
 def test_plant_controller_sys_exit_is_result(tmp_path):
-    # sys.exit in the controller is also a run result: result.json/log are written,
-    # the worker does not crash; the agent's exception text stays out of error (infra scan)
+    # sys.exit in the controller is also a run result: the reason stays in the
+    # feedback log, the agent's exception text does not leak into error (infra scan)
     controller = "import sys\ndef control(t, y, setpoint):\n    sys.exit('sensor not found')\n"
     task = make_plant_task(tmp_path, controller)
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert "controller crashed" in (res.error or "")
+    assert "controller" in (res.error or "")
     assert "sensor not found" not in (res.error or "")  # only in the feedback log
     assert "sensor not found" in res.serial_log.read_text("utf-8")
     assert not runner_module.is_infra_error(res)
@@ -236,100 +236,6 @@ def test_plant_journal_records_start_and_result(tmp_path):
     assert "task_start" in kinds and "task_result" in kinds
 
 
-# --- IH-10: a re-run into a dirty out_dir must not score stale artifacts ---
-
-
-PASSING_CONTROLLER = "GAIN = 0.5\ndef control(t, y, setpoint):\n    return GAIN * (setpoint - y)\n"
-
-
-def test_plant_rerun_with_dead_worker_fails_not_passes(tmp_path):
-    # The audit scenario: after a passing run the controller is replaced with
-    # os._exit(0) - the worker dies with exit code 0 before writing anything.
-    # The runner must FAIL on the missing result of THIS run, never rescore
-    # the previous run's result.json (it used to leak through a fixed path).
-    task = make_plant_task(tmp_path, PASSING_CONTROLLER)
-    out = tmp_path / "out"
-    res1 = run_task(task, out_dir=out)
-    assert res1.passed, (res1.error, res1.missed)
-    (task.directory / "solution.py").write_text(
-        "import os\nos._exit(0)\n", encoding="utf-8"
-    )
-    res2 = run_task(task, out_dir=out)
-    assert not res2.passed
-    assert res2.exit_code == 0  # the worker "succeeded" - the FAIL comes from the result check
-    assert "no result.json" in (res2.error or "")
-
-
-def test_plant_result_with_foreign_run_id_is_rejected(tmp_path, monkeypatch):
-    # Second line of defense: even when a result.json from another run sits at
-    # the exact result path (simulated by reusing one run dir), the run_id
-    # mismatch must reject it instead of scoring its metrics.
-    task = make_plant_task(tmp_path, PASSING_CONTROLLER)
-    out = tmp_path / "out"
-    fixed = out / "fake-plant" / "run-fixed"
-
-    def reuse_run_dir(base, t):
-        fixed.mkdir(parents=True, exist_ok=True)
-        return fixed, "fixed"
-
-    monkeypatch.setattr(runner_common, "_new_run_dir", reuse_run_dir)
-    res1 = run_task(task, out_dir=out)
-    assert res1.passed, (res1.error, res1.missed)
-    result_file = fixed / "fake-plant.plant-result.json"
-    report = json.loads(result_file.read_text("utf-8"))
-    report["run_id"] = "some-other-run"
-    result_file.write_text(json.dumps(report), encoding="utf-8")
-    # a worker that exits 0 without writing anything (injection point): the
-    # tampered file is all that remains at the result path
-    res2 = run_task(task, out_dir=out, plant_cmd=[sys.executable, "-c", "pass"])
-    assert not res2.passed
-    assert res2.exit_code == 0
-    assert "not from this run" in (res2.error or "")
-
-
-def test_plant_non_dict_result_json_is_rejected(tmp_path, monkeypatch):
-    # A result file holding a valid JSON that is not an object (e.g. a list)
-    # is hostile garbage: honest error, never a crash, never a PASS.
-    task = make_plant_task(tmp_path, PASSING_CONTROLLER)
-    out = tmp_path / "out"
-    fixed = out / "fake-plant" / "run-fixed"
-
-    def reuse_run_dir(base, t):
-        fixed.mkdir(parents=True, exist_ok=True)
-        return fixed, "fixed"
-
-    monkeypatch.setattr(runner_common, "_new_run_dir", reuse_run_dir)
-    result_file = fixed / "fake-plant.plant-result.json"
-    writer = f"import pathlib; pathlib.Path(r'{result_file}').write_text('[]')"
-    res = run_task(task, out_dir=out, plant_cmd=[sys.executable, "-c", writer])
-    assert not res.passed
-    assert res.exit_code == 0
-    assert "not a JSON object" in (res.error or "")
-
-
-def test_worker_stamps_run_id_on_unreadable_spec(tmp_path):
-    # Even the early-error report carries run_id: every file the worker writes
-    # at the result path is attributable to a run.
-    entry = tmp_path / "c.py"
-    entry.write_text("def control(t, y, sp):\n    return 0.0\n", encoding="utf-8")
-    spec = tmp_path / "s.json"
-    spec.write_text("not json at all", encoding="utf-8")
-    log, result = tmp_path / "log.txt", tmp_path / "r.json"
-    rc = worker_main(
-        [
-            "--entry", str(entry),
-            "--spec", str(spec),
-            "--log", str(log),
-            "--result", str(result),
-            "--run-id", "xyz",
-        ]
-    )
-    assert rc == 0
-    report = json.loads(result.read_text("utf-8"))
-    assert report["run_id"] == "xyz"
-    assert "unreadable" in report["error"]
-
-
 def test_plant_run_dirs_are_unique_per_run(tmp_path):
     task = make_plant_task(tmp_path, PASSING_CONTROLLER)
     out = tmp_path / "out"
@@ -341,26 +247,127 @@ def test_plant_run_dirs_are_unique_per_run(tmp_path):
     assert res1.serial_log.parent.parent == out / "fake-plant"
 
 
-def test_worker_echoes_run_id(tmp_path):
-    entry = tmp_path / "c.py"
-    entry.write_text("def control(t, y, sp):\n    return 0.5 * (sp - y)\n", encoding="utf-8")
-    spec = tmp_path / "s.json"
-    spec.write_text(
-        json.dumps({"K": 60.0, "T": 10.0, "setpoint": 50.0, "duration": 20, "requirements": {}}),
+def test_plant_controller_prints_land_in_feedback_log(tmp_path):
+    controller = (
+        "def control(t, y, setpoint):\n"
+        "    print(f'step {t}')\n"
+        "    return 0.5 * (setpoint - y)\n"
+    )
+    task = make_plant_task(tmp_path, controller)
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert res.passed, (res.error, res.missed)
+    log = res.serial_log.read_text("utf-8")
+    assert "# controller stdout (tail):" in log
+    # the tail keeps the LAST 30 stderr lines - 120 steps means step 0 has
+    # scrolled away; a late step line proves prints land in the feedback
+    assert "step 4" in log
+
+
+# --- IH-25: spec-reader isolation ---
+
+
+SPEC_HUNTER = textwrap.dedent(
+    """
+    import json, os, sys
+
+    # the task's real parameters (the hunter knows them, like a real cheater
+    # who read the repo): if any of them are reachable from the process view,
+    # the isolation is broken
+    secrets = ["60.0", "10.0", "60", "10"]
+
+    def looks_like_secret(text):
+        return any(s in text for s in secrets)
+
+    hits = []
+    # argv: the old design leaked the spec file location here
+    for arg in sys.argv:
+        if looks_like_secret(arg):
+            hits.append(["argv", arg])
+    # environment: an EXACT value match (substring hits in unrelated env
+    # vars are noise, not parameter leaks)
+    for k, v in os.environ.items():
+        if v.strip() in secrets:
+            hits.append(["env", k])
+    # the cwd inventory: file NAMES must not carry the parameters
+    for name in os.listdir("."):
+        if looks_like_secret(name):
+            hits.append(["cwd-name", name])
+    # the controller's own entry: it legitimately contains the literals (the
+    # hunter declares them itself), so strip its own declarations before the
+    # content check - what must NOT be there is spec content from OUTSIDE
+    with open("controller_entry.py", encoding="utf-8") as fh:
+        entry_text = "".join(
+            ln for ln in fh if "secrets =" not in ln and "looks_like_secret" not in ln
+        )
+    if looks_like_secret(entry_text):
+        hits.append(["entry", "controller_entry.py"])
+    # the conventional places a cheater would try first
+    for name in ("task.yaml", "spec.json", "plant.json", "plant-spec.json"):
+        if os.path.exists(name):
+            hits.append(["exists", name])
+    # printed to the feedback log: the harness never gives the controller a
+    # writeable channel into scoring, so the report travels the same way
+    print("SPEC-HUNT:", json.dumps(hits))
+
+    def control(t, y, setpoint):
+        return 0.5 * (setpoint - y)
+    """
+)
+
+
+def test_plant_spec_reader_finds_nothing(tmp_path):
+    # THE IH-25 pin: a controller that actively hunts for the plant
+    # parameters must not find K/T anywhere in its process view - not in
+    # argv, not in the environment, not in cwd file names, not in the
+    # conventional spec locations (the old design leaked the spec location
+    # in argv; the new one copies the entry into a throwaway cwd and keeps
+    # the physics in the harness process). The hunter reports through the
+    # feedback log - the only channel it has.
+    import json as json_mod
+
+    task = make_plant_task(tmp_path, SPEC_HUNTER)
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert res.passed, (res.error, res.missed)
+    log = res.serial_log.read_text("utf-8")
+    hunt_lines = [ln for ln in log.splitlines() if "SPEC-HUNT:" in ln]
+    assert len(hunt_lines) == 1, hunt_lines
+    hits = json_mod.loads(hunt_lines[0].split("SPEC-HUNT:", 1)[1])
+    assert hits == [], f"the controller found plant parameters: {hits}"
+
+
+def test_plant_controller_cannot_influence_scoring_via_files(tmp_path):
+    # the old result-file path is gone: scoring is computed in the harness
+    # from the pipe data - a controller writing a fake result file into its
+    # cwd can never turn it into a PASS
+    cheater = (
+        "import json, pathlib\n"
+        "pathlib.Path('fake-result.json').write_text("
+        "json.dumps({'error': None, 'metrics': {'overshoot_pct': 0.0, 'steady_error': 0.0,"
+        " 'settle_time': 0.0, 'final_y': 50.0}, 'missed': [], 'steps': 120, 'run_id': 'x'}))\n"
+        "def control(t, y, setpoint):\n"
+        "    return 0.0\n"  # fails every requirement
+    )
+    task = make_plant_task(tmp_path, cheater)
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert not res.passed
+    assert any("steady_error" in m for m in res.missed)
+
+
+def test_plant_rerun_replaces_not_doubles(tmp_path):
+    # a re-run into the same out_dir scores its own run only (per-run dirs);
+    # a controller replaced with a dying one must fail the second run as a
+    # run result
+    task = make_plant_task(tmp_path, PASSING_CONTROLLER)
+    out = tmp_path / "out"
+    res1 = run_task(task, out_dir=out)
+    assert res1.passed, (res1.error, res1.missed)
+    (task.directory / "solution.py").write_text(
+        "def control(t, y, setpoint):\n    import os\n    os._exit(0)\n",
         encoding="utf-8",
     )
-    log, result = tmp_path / "log.txt", tmp_path / "r.json"
-    rc = worker_main(
-        [
-            "--entry", str(entry),
-            "--spec", str(spec),
-            "--log", str(log),
-            "--result", str(result),
-            "--run-id", "abc123",
-        ]
-    )
-    assert rc == 0
-    assert json.loads(result.read_text("utf-8"))["run_id"] == "abc123"
+    res2 = run_task(task, out_dir=out)
+    assert not res2.passed
+    assert res2.error_kind == "run"  # died mid-run: a run result, not infra
 
 
 # --- golden plant tasks: local, free and deterministic ---

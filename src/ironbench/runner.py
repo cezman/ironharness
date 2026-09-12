@@ -173,7 +173,6 @@ def run_task(
     token: str | None = None,
     renode_cmd: str | list | None = None,
     unix_cmd: str | list | None = None,
-    plant_cmd: str | list | None = None,
     mqtt_broker=None,
     journal=None,
     real_transport=None,
@@ -181,7 +180,7 @@ def run_task(
 ) -> TaskResult:
     """Target dispatcher: wokwi/renode/unix/plant/real are implemented.
 
-    cli_path/token/renode_cmd/unix_cmd/plant_cmd are injection points for tests
+    cli_path/token/renode_cmd/unix_cmd are injection points for tests
     (fake CLIs instead of real ones). mqtt_broker - an already-running
     MqttSimBroker for tests (by default the task broker starts in WSL2).
     journal - io_core.JsonlJournal: we write task_start/task_result. real:
@@ -197,7 +196,7 @@ def run_task(
             task, out_dir=out_dir, unix_cmd=unix_cmd, mqtt_broker=mqtt_broker, journal=journal
         )
     if task.target == "plant":
-        return _run_plant(task, out_dir=out_dir, plant_cmd=plant_cmd, journal=journal)
+        return _run_plant(task, out_dir=out_dir, journal=journal)
     if task.target == "real":
         return _run_real(
             task, out_dir=out_dir, transport=real_transport, port=real_port, journal=journal
