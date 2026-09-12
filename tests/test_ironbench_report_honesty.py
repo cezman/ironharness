@@ -8,9 +8,16 @@ attempt artifacts of a longer previous campaign.
 from __future__ import annotations
 
 import json
+import os
 import threading
 
-from ironbench.cli import agent_solve_results, clean_stale_attempts
+import pytest
+
+from ironbench.cli import (
+    _replace_results_atomically,
+    agent_solve_results,
+    clean_stale_attempts,
+)
 from ironbench.report import build_report, load_results, render_html, render_leaderboard
 from test_ironbench_report import write_results
 
@@ -193,12 +200,13 @@ def test_results_write_is_atomic_under_concurrent_readers(tmp_path):
 
 def test_agent_solve_results_atomic_and_clean(tmp_path, monkeypatch):
     # integration through the CLI helper: stale attempt-* dirs of a longer
-    # previous campaign are removed, results.jsonl lands atomically.
+    # previous campaign are removed, results.jsonl lands atomically. The
+    # recorder on os.replace pins the PRODUCTION path - a mutation replacing
+    # the atomic rename with a direct write turns this test red.
     task_dir = tmp_path / "camp" / "mytask"
     stale = task_dir / "attempt-1"
     stale.mkdir(parents=True)
     (stale / "iter-9.main.py").write_text("old junk", encoding="utf-8")
-
 
     from ironbench.agent import AttemptResult
     from ironbench.tasks import Task
@@ -217,12 +225,80 @@ def test_agent_solve_results_atomic_and_clean(tmp_path, monkeypatch):
     class Cfg:
         model = "fake-model"
 
+    replaces: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def recording_replace(src, dst, *a, **k):
+        replaces.append((str(src), str(dst)))
+        return real_replace(src, dst, *a, **k)
+
+    monkeypatch.setattr("ironbench.cli.os.replace", recording_replace)
     agent_solve_results(task, Cfg(), attempts=1, solve_dir=tmp_path / "camp")
     assert not stale.exists() or not (stale / "iter-9.main.py").exists()
     results_file = task_dir / "results.jsonl"
     records = [json.loads(l) for l in results_file.read_text("utf-8").splitlines() if l.strip()]
     assert records[0]["model"] == "fake-model"
-    assert not (task_dir / "results.jsonl.tmp").exists()
+    # the atomic-rename protocol ran over the production results.jsonl path
+    assert any(dst.endswith("results.jsonl") for _, dst in replaces), (
+        "results.jsonl was not written through the atomic replace protocol"
+    )
+    assert not list(task_dir.glob("results.jsonl.*.tmp")), "tmp file left behind"
+
+
+def test_replace_retries_when_reader_holds_the_file(tmp_path, monkeypatch):
+    # The Windows hole (review round 1 blocker): a concurrent reader holding
+    # an open handle makes os.replace fail with PermissionError. Without the
+    # bounded retry the campaign dies after burning all attempts and
+    # results.jsonl silently keeps the PREVIOUS campaign's data. The first
+    # replace is forced to fail; the retry must land the data.
+    target = tmp_path / "results.jsonl"
+    target.write_text('{"old": "campaign"}', encoding="utf-8")
+    tmp = tmp_path / "results.jsonl.999.tmp"
+    tmp.write_text('{"new": "campaign"}', encoding="utf-8")
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst, *a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError(13, "reader holds the handle")
+        return real_replace(src, dst, *a, **k)
+
+    monkeypatch.setattr("ironbench.cli.os.replace", flaky_replace)
+    monkeypatch.setattr("ironbench.cli.time.sleep", lambda s: None)
+    _replace_results_atomically(tmp, target)
+    assert json.loads(target.read_text("utf-8")) == {"new": "campaign"}
+
+
+def test_replace_raises_loudly_after_exhaustion(tmp_path, monkeypatch):
+    # the negative path: retries exhausted -> a loud PermissionError, never a
+    # silent keep-the-old-data (a gate without a failing negative path is
+    # decorative)
+    target = tmp_path / "results.jsonl"
+    target.write_text('{"old": "campaign"}', encoding="utf-8")
+    tmp = tmp_path / "results.jsonl.999.tmp"
+    tmp.write_text('{"new": "campaign"}', encoding="utf-8")
+    calls = {"n": 0}
+
+    def always_busy(src, dst, *a, **k):
+        calls["n"] += 1
+        raise PermissionError(13, "held forever")
+
+    monkeypatch.setattr("ironbench.cli.os.replace", always_busy)
+    monkeypatch.setattr("ironbench.cli.time.sleep", lambda s: None)
+    with pytest.raises(PermissionError):
+        _replace_results_atomically(tmp, target)
+    assert calls["n"] == 6  # 1 initial + 5 retries
+    assert json.loads(target.read_text("utf-8")) == {"old": "campaign"}  # old data intact
+
+
+def test_clean_stale_attempts_removes_stale_tmp_files(tmp_path):
+    task_dir = tmp_path / "task"
+    task_dir.mkdir(parents=True)
+    (task_dir / "results.jsonl.4242.tmp").write_text("killed mid-campaign", encoding="utf-8")
+    n = clean_stale_attempts(task_dir)
+    assert n == 1
+    assert not (task_dir / "results.jsonl.4242.tmp").exists()
 
 
 def test_clean_stale_attempts_keeps_results_and_journal(tmp_path):

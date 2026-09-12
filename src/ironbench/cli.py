@@ -241,12 +241,34 @@ def main(argv=None) -> int:
     return 0 if all_passed else 1
 
 
+def _replace_results_atomically(tmp_path: Path, results_path: Path) -> None:
+    """os.replace with a bounded retry: on Windows a concurrent reader holding
+    an open handle (a report run, an indexer, an antivirus) makes the rename
+    fail with PermissionError. Without a retry the campaign would die AFTER
+    burning all its attempts and results.jsonl would silently keep the
+    PREVIOUS campaign's data - the exact dishonesty IH-31 exists to prevent.
+    Retries give the reader time to finish; exhaustion raises loudly (the
+    journal still has every attempt_result)."""
+    delay = 0.05
+    for attempt in range(6):
+        try:
+            os.replace(tmp_path, results_path)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 1.0)
+
+
 def clean_stale_attempts(task_dir: Path) -> int:
     """Removes attempt-* artifact directories left by a PREVIOUS campaign on
     the task (IH-31): a shorter re-run must not leave a longer run's iter-*
-    files behind, or the artifacts lie about what the model produced. Called
-    before the attempts start. Two concurrent campaigns on the SAME task
-    still collide (out of scope: one campaign per task at a time)."""
+    files behind, or the artifacts lie about what the model produced. Also
+    removes stale results.jsonl.*.tmp files (a process killed between the
+    write and the replace would otherwise leave them forever). Called before
+    the attempts start. Two concurrent campaigns on the SAME task still
+    collide (out of scope: one campaign per task at a time)."""
     removed = 0
     if not task_dir.is_dir():
         return 0
@@ -254,6 +276,12 @@ def clean_stale_attempts(task_dir: Path) -> int:
         if stale.is_dir():
             shutil.rmtree(stale, ignore_errors=True)
             removed += 1
+    for stale_tmp in sorted(task_dir.glob("results.jsonl.*.tmp")):
+        try:
+            stale_tmp.unlink()
+            removed += 1
+        except OSError:
+            pass
     return removed
 
 
@@ -295,7 +323,7 @@ def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path):
         )
         tmp_path = results_path.with_name(f"{results_path.name}.{os.getpid()}.tmp")
         tmp_path.write_text(payload, encoding="utf-8")
-        os.replace(tmp_path, results_path)  # atomic: readers never see a truncated file
+        _replace_results_atomically(tmp_path, results_path)
     for r in results:
         status = "SOLVED" if r.solved else "not solved"
         print(
