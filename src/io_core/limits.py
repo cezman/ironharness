@@ -143,7 +143,10 @@ class DeadlineTransport:
         return forwarded
 
     def _check(self) -> None:
-        assert self._started is not None, "transport is not open"
+        if self._started is None:  # explicit, not assert: survives python -O (IH-32)
+            from io_core.errors import TransportClosedError
+
+            raise TransportClosedError("transport is not open")
         if self._clock() - self._started > self._seconds:
             raise OperationTimeout(f"deadline of {self._seconds}s expired")
 

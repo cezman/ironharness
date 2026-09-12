@@ -11,6 +11,7 @@ import pytest
 
 import io_core.session as session_mod
 from io_core import JsonlJournal, MqttTransport, Session, read_events
+from io_core.errors import TransportClosedError
 
 
 def reason(code_value: int) -> SimpleNamespace:
@@ -251,7 +252,8 @@ def test_subscribe_error_rc_raises():
 
 def test_operation_before_open_raises():
     t = MqttTransport("broker.test", client_factory=FakeClient)
-    with pytest.raises(AssertionError, match="not open"):
+    # IH-32: a typed error instead of an assert (which python -O would strip)
+    with pytest.raises(TransportClosedError, match="not open"):
         t.publish("t", "x")
 
 

@@ -15,6 +15,8 @@ from typing import Any, Self
 
 import serial
 
+from io_core.errors import TransportClosedError
+
 EventHook = Callable[[str, dict[str, Any]], None]
 
 
@@ -75,7 +77,8 @@ class SerialTransport:
         self.close()
 
     def write(self, data: bytes) -> int:
-        assert self._serial is not None, "port is not open"
+        if self._serial is None:
+            raise TransportClosedError("port is not open")
         try:
             n = self._serial.write(data)
         except OSError as e:  # SerialTimeoutException at write_timeout, port errors
@@ -86,7 +89,8 @@ class SerialTransport:
 
     def read(self, size: int = 1) -> bytes:
         # До size байт; по таймауту возвращает то, что успело накопиться (может b"")
-        assert self._serial is not None, "port is not open"
+        if self._serial is None:
+            raise TransportClosedError("port is not open")
         try:
             data = self._serial.read(size)
         except OSError as e:
@@ -97,7 +101,8 @@ class SerialTransport:
 
     def read_line(self, max_len: int = 256) -> bytes:
         # Читает до \n включительно; по таймауту — что успело прийти
-        assert self._serial is not None, "port is not open"
+        if self._serial is None:
+            raise TransportClosedError("port is not open")
         try:
             data = self._serial.read_until(b"\n", size=max_len)
         except OSError as e:
@@ -121,7 +126,8 @@ class SerialTransport:
         отметить это не может), ptys дают OSError — отказ журналируется
         (reset_failed) и пробрасывается.
         """
-        assert self._serial is not None, "port is not open"
+        if self._serial is None:
+            raise TransportClosedError("port is not open")
         try:
             self._serial.dtr = False  # IO0 high: normal boot, не download mode
             self._serial.rts = True  # EN low: удерживаем чип в сбросе

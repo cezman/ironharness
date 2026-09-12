@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Self
 
+from io_core.errors import JournalCorrupt
 from io_core.journal import Event, read_events
 
 LEGACY_CONN = ""  # conn для событий без имени (журналы до IH-11 и «голые» транспорты)
@@ -30,6 +31,14 @@ LEGACY_CONN = ""  # conn для событий без имени (журналы
 
 class ReplayMismatch(Exception):
     """Воспроизводимые write-данные не совпали с записанными."""
+
+
+def _event_bytes(e: Event, key: str, where: str) -> bytes:
+    """data_hex of an event with an honest error instead of a bare ValueError."""
+    try:
+        return bytes.fromhex(e[key])
+    except (KeyError, ValueError, TypeError) as ex:
+        raise JournalCorrupt(f"{where}: event has an unreadable {key}: {ex}") from None
 
 
 class ReplayTransport:
@@ -45,13 +54,14 @@ class ReplayTransport:
         self._write_stream = bytearray()
         self._rpos = 0
         self._wpos = 0
+        self._closed = False
         for e in events:
             if str(e.get("conn", LEGACY_CONN)) != conn:
                 continue
             if e.get("kind") in ("read", "read_line"):
-                self._read_stream += bytes.fromhex(e["data_hex"])
+                self._read_stream += _event_bytes(e, "data_hex", f"event {e.get('kind')!r} (conn {conn!r})")
             elif e.get("kind") == "write":
-                self._write_stream += bytes.fromhex(e["data_hex"])
+                self._write_stream += _event_bytes(e, "data_hex", f"event 'write' (conn {conn!r})")
 
     @classmethod
     def from_file(
@@ -63,7 +73,19 @@ class ReplayTransport:
         pass
 
     def close(self) -> None:
-        pass
+        if self._closed:
+            return
+        self._closed = True
+        # strict replay means the WHOLE recorded interaction is reproduced:
+        # writes that were journaled but never replayed end here, loudly
+        # (IH-32) - a silently accepted partial replay would validate a
+        # session that did not happen.
+        if self._strict and self._wpos < len(self._write_stream):
+            recorded = bytes(self._write_stream[self._wpos :])
+            raise ReplayMismatch(
+                f"{len(recorded)} byte(s) of recorded writes were never replayed: "
+                f"{recorded.hex() or '<пусто>'}"
+            )
 
     def __enter__(self) -> Self:
         self.open()
