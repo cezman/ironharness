@@ -84,11 +84,13 @@ class RateLimiter:
 class RateLimitedTransport:
     """Пропускает операции I/O через RateLimiter: write/read/read_line напрямую,
     любой другой вызываемый атрибут (modbus_read, mqtt_publish, ...) - через
-    форвардинг с тем же лимитом. open/close не лимитируются."""
+    форвардинг с тем же лимитом. open/close не лимитируются. on_event (IH-32)
+    журналирует отказы лимита — «no log = didn't happen» касается и отказов."""
 
-    def __init__(self, transport: Any, limiter: RateLimiter) -> None:
+    def __init__(self, transport: Any, limiter: RateLimiter, on_event: Callable | None = None) -> None:
         self._t = transport
         self._limiter = limiter
+        self._on_event = on_event
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -98,7 +100,12 @@ class RateLimitedTransport:
             return attr
 
         def forwarded(*args: Any, **kwargs: Any) -> Any:
-            self._limiter.acquire()
+            try:
+                self._limiter.acquire()
+            except RateLimitExceeded as e:
+                if self._on_event is not None:
+                    self._on_event("rate_denied", {"error": str(e)})
+                raise
             return attr(*args, **kwargs)
 
         return forwarded
@@ -121,13 +128,15 @@ class DeadlineTransport:
     """Роняет операции OperationTimeout, когда истёк дедлайн с момента open().
     write/read/read_line и любой другой вызываемый атрибут (modbus_read,
     mqtt_publish, ...) проходят проверку дедлайна через форвардинг; open/close
-    не проверяются (IH-17)."""
+    не проверяются (IH-17). on_event (IH-32) журналирует отказы дедлайна."""
 
-    def __init__(self, transport: Any, seconds: float, clock: Clock = time.monotonic) -> None:
+    def __init__(self, transport: Any, seconds: float, clock: Clock = time.monotonic,
+                 on_event: Callable | None = None) -> None:
         self._t = transport
         self._seconds = seconds
         self._clock = clock
         self._started: float | None = None
+        self._on_event = on_event
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -148,6 +157,8 @@ class DeadlineTransport:
 
             raise TransportClosedError("transport is not open")
         if self._clock() - self._started > self._seconds:
+            if self._on_event is not None:
+                self._on_event("deadline_denied", {"deadline_sec": self._seconds})
             raise OperationTimeout(f"deadline of {self._seconds}s expired")
 
     def open(self) -> None:

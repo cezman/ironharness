@@ -5,12 +5,17 @@ actor (кто), kind (тип события) + payload. Совместим с х
 транспортов: экземпляр журнала передаётся прямо в SerialTransport.
 
 Целостность (IH-32): payload не может затереть служебные ключи
-(ts/seq/actor/kind/conn) — конфликтующие ключи отбрасываются с событием
-journal_key_conflict, а не молча ломают реплеер/вьюер. Межпроцессная запись
-сериализуется файловой блокировкой: потоки одного инстанса — под внутренним
-локом, процессы (второй агент на том же IRONHARNESS_HOME) — под advisory
-lock на весь write+flush, так что O_APPEND-гонка Windows больше не теряет
-строки.
+(ts/seq/actor/kind) — конфликтующие ключи отбрасываются с событием
+journal_key_conflict, а не молча ломают реплеер/вьюер (conn защищён хуком
+сессии, который ставит его ПОСЛЕ payload). Межпроцессная запись
+сериализуется sidecar lock-файлом (<path>.lock): все писатели лочат ОДИН
+фиксированный байт — O_APPEND-гонка Windows (аудит перед v0.7.0: два
+процесса теряли 5-12 строк из 1000) невозможна. Sidecar выбран вместо лока
+на диапазон самого журнала: конец файла под "a"-режимом уезжает, пока
+писатель ждёт чужой лок (stale-якорь), и запись попадает в чужой диапазон.
+Писатель, умерший между lock/unlock, не вешает журнал: ОС снимает лок при
+закрытии хэндла. msvcrt.LK_LOCK сдаётся после ~10 c ожидания — под
+ pathological долгим удержанием запись упадёт с OSError (громко, не молча).
 """
 
 from __future__ import annotations
@@ -26,42 +31,42 @@ from typing import Any, Self
 Event = dict[str, Any]
 
 # Служебные ключи записи: payload не может их затереть (IH-32). conn не здесь:
-# его атрибуция — забота хука сессии, который теперь ставит conn ПОСЛЕДНИМ
+# его атрибуция — забота хука сессии, который ставит conn ПОСЛЕДНИМ
 # ({**data, "conn": name}), так что payload события не может затереть имя
 # соединения даже случайно.
 RESERVED_KEYS = frozenset({"ts", "seq", "actor", "kind"})
 
 
-def _lock_file_region(fh: Any, pos: int, length: int) -> None:
-    """Advisory lock over the byte range [pos, pos+length) - the exact region
-    our line will occupy. Windows: msvcrt.locking blocks until the other
-    process releases; POSIX: flock is an exclusive whole-file lock. The SAME
-    explicit range must be used for the unlock (recomputing "end" after the
-    write would target a different range and leak the lock forever)."""
+def _acquire_lock_file(path: Path) -> Any:
+    """Открывает (создаёт) sidecar lock-файл и берёт эксклюзивный лок на
+    его первый байт: фиксированный диапазон = общий мьютекс всех писателей."""
+    fh = path.open("a+b")
     if sys.platform == "win32":
         import msvcrt
 
-        fh.seek(pos)
-        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, max(1, length))
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
     else:
         import fcntl
 
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    return fh
 
 
-def _unlock_file_region(fh: Any, pos: int, length: int) -> None:
-    if sys.platform == "win32":
-        import msvcrt
+def _release_lock_file(fh: Any) -> None:
+    try:
+        if sys.platform == "win32":
+            import msvcrt
 
-        fh.seek(pos)
-        try:
-            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, max(1, length))
-        except OSError:
-            pass  # already released by close() during interpreter teardown
-    else:
-        import fcntl
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
 
-        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass  # already released by close() during interpreter teardown
+    finally:
+        fh.close()
 
 
 class JsonlJournal:
@@ -71,10 +76,11 @@ class JsonlJournal:
         self._seq = 0
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()  # колбэки MQTT пишут из сетевого потока paho
-        # Режим "a": межпроцессные записи сериализуются файловой блокировкой
-        # (_lock_file_region) на весь write+flush — O_APPEND между хэндлами на
-        # Windows не атомарен (аудит перед v0.7.0: два процесса теряли 5-12
-        # строк из 1000), теперь потеря невозможна.
+        # Sidecar lock-файл создаётся в конструкторе, чтобы провалиться рано
+        # (read-only том и т.п.) — а не при первом событии.
+        self._lock_path = self._path.with_name(self._path.name + ".lock")
+        with _acquire_lock_file(self._lock_path):
+            pass
         self._fh = self._path.open("a", encoding="utf-8")
 
     def __call__(self, kind: str, data: dict[str, Any]) -> None:
@@ -89,36 +95,28 @@ class JsonlJournal:
             conflicts = {k: v for k, v in data.items() if k in RESERVED_KEYS}
             rec.update({k: v for k, v in data.items() if k not in conflicts})
             line = json.dumps(rec, ensure_ascii=False) + "\n"
-            n_bytes = len(line.encode("utf-8"))
-            # the file lock spans write+flush over the EXACT region our line
-            # occupies: a second process cannot interleave its seek-append
-            # between our reservation and our flush
-            self._fh.seek(0, os.SEEK_END)
-            region = self._fh.tell()
-            _lock_file_region(self._fh, region, n_bytes)
+            if conflicts:
+                line += json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "seq": self._seq + 1,
+                        "actor": self._actor,
+                        "kind": "journal_key_conflict",
+                        "requested_kind": kind,
+                        "keys": sorted(conflicts),
+                    },
+                    ensure_ascii=False,
+                ) + "\n"
+            # both lines go out under ONE sidecar lock: a second process
+            # cannot interleave its append between ours
+            lock_fh = _acquire_lock_file(self._lock_path)
             try:
+                self._fh.seek(0, os.SEEK_END)
                 self._fh.write(line)
                 self._fh.flush()
+                self._seq += 1 if conflicts else 0
             finally:
-                _unlock_file_region(self._fh, region, n_bytes)
-            if conflicts:
-                # the conflict is journaled AFTER the main event (IH-32): the
-                # event keeps its identity and its seq order
-                self._fh.write(
-                    json.dumps(
-                        {
-                            "ts": round(time.time(), 3),
-                            "seq": self._seq + 1,
-                            "actor": self._actor,
-                            "kind": "journal_key_conflict",
-                            "requested_kind": kind,
-                            "keys": sorted(conflicts),
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-                self._seq += 1
+                _release_lock_file(lock_fh)
 
     def close(self) -> None:
         with self._lock:  # колбэк из сетевого потока не должен писать в закрытый файл

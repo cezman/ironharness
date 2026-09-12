@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -242,7 +243,7 @@ def test_modbus_sim_survives_mbap_length_zero_and_truncated_fc16():
     srv.start()
     try:
         sock = socket.create_connection(("127.0.0.1", srv.port), timeout=3)
-        # MBAP with length=0: promises no PDU - the link is dropped, the
+        # MBAP length=0: promises no PDU - the link is dropped, the
         # server must live
         sock.sendall(struct.pack(">HHHB", 1, 0, 0, 1))
         sock.settimeout(2)
@@ -252,24 +253,84 @@ def test_modbus_sim_survives_mbap_length_zero_and_truncated_fc16():
             pass  # dropped link is the expected outcome
         # the server still serves a fresh client
         sock2 = socket.create_connection(("127.0.0.1", srv.port), timeout=3)
-        pdu = struct.pack(">BHH", 3, 0, 2)  # FC3 read 2 registers
-        sock2.sendall(struct.pack(">HHHB", 2, 0, len(pdu) + 1, 1) + pdu)
+        # MBAP length=1 (valid MBAP, empty PDU): the handler must ANSWER a
+        # modbus exception and KEEP SERVING on the same socket - this pins
+        # the handler's survival, which a fresh-connection check cannot see
+        # (ThreadingTCPServer survives a dead handler thread regardless)
+        sock2.sendall(struct.pack(">HHHB", 2, 0, 1, 1))
         resp = sock2.recv(64)
-        assert resp[7] == 3  # FC3 echo, no exception
+        assert resp[7] == 0x80 and resp[8] == 0x01
+        pdu = struct.pack(">BHH", 3, 0, 2)  # FC3 read 2 registers
+        sock2.sendall(struct.pack(">HHHB", 3, 0, len(pdu) + 1, 1) + pdu)
+        resp = sock2.recv(64)
+        assert resp[7] == 3  # FC3 echo on the SAME connection, no exception
         # truncated FC16 (qty promises 4 data bytes, frame carries 2):
         # a modbus exception (0x90 0x03), not a dead thread
         pdu_bad = struct.pack(">BHH", 16, 0, 2) + b"\x00\x01"  # promises 2 regs, carries 1
-        sock2.sendall(struct.pack(">HHHB", 3, 0, len(pdu_bad) + 1, 1) + pdu_bad)
+        sock2.sendall(struct.pack(">HHHB", 4, 0, len(pdu_bad) + 1, 1) + pdu_bad)
         resp = sock2.recv(64)
         assert resp[7] == 0x90 and resp[8] == 0x03
         # and the sim still works after the abuse
-        sock2.sendall(struct.pack(">HHHB", 4, 0, len(pdu) + 1, 1) + pdu)
+        sock2.sendall(struct.pack(">HHHB", 5, 0, len(pdu) + 1, 1) + pdu)
         resp = sock2.recv(64)
         assert resp[7] == 3
         sock2.close()
         sock.close()
     finally:
         srv.stop()
+
+
+def test_limit_denials_are_journaled(tmp_path, monkeypatch):
+    # PLAN fold-in (IH-29 remainder): the limits wrappers had no on_event
+    # mechanism, so deadline/rate denials never reached the journal.
+    from io_core.session import Session
+
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_RATE", "2/60")
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    try:
+        s.serial_open("c", "loop://", timeout=0.05)
+        s.serial_write("c", b"1".hex())
+        s.serial_write("c", b"2".hex())
+        with pytest.raises(Exception):  # noqa: B017 - RateLimitExceeded on 3rd
+            s.serial_write("c", b"3".hex())
+        wrapper = s._transports["c"]
+        assert type(wrapper).__name__ == "RateLimitedTransport"
+    finally:
+        s.close()
+    kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+    assert "rate_denied" in kinds
+
+
+def test_deadline_denial_is_journaled(tmp_path, monkeypatch):
+    from io_core.limits import DeadlineTransport
+    from io_core.session import Session
+
+    class SlowTransport:
+        def open(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+        def read(self, size: int) -> bytes:
+            return b""
+
+    monkeypatch.delenv("IRONHARNESS_TRANSPORT_RATE", raising=False)
+    monkeypatch.setattr("io_core.session.DeadlineTransport", DeadlineTransport)
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    try:
+        s.serial_open("c", "loop://", timeout=0.05)
+        # force an expired deadline on the live wrapper: open()-time is reset
+        # to far in the past via the wrapper's clock hook
+        wrapper = s._transports["c"]
+        assert type(wrapper).__name__ == "DeadlineTransport"
+        wrapper._started = time.monotonic() - 10**6
+        with pytest.raises(Exception):  # noqa: B017 - OperationTimeout
+            s.serial_write("c", b"1".hex())
+    finally:
+        s.close()
+    kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+    assert "deadline_denied" in kinds
 
 
 # --- report: typed garbage does not crash the aggregate ---

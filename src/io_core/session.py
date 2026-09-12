@@ -112,11 +112,9 @@ class Session:
         connection name, so a session with two devices stays attributable -
         without it a read/write event carries only data and the journal cannot
         say whose bytes they are. The transport keeps owning its own fields
-        (open/close events already carry port/host); conn is filled first and
-        never shadows them."""
+        (open/close events already carry port/host); conn is stamped LAST
+        (IH-32), so a payload key "conn" can never shadow the attribution."""
         def hook(kind: str, data: dict[str, Any]) -> None:
-            # conn LAST (IH-32): a payload key "conn" can never shadow the
-            # connection attribution
             self.journal(kind, {**data, "conn": name})
 
         return hook
@@ -129,15 +127,21 @@ class Session:
         the rate limiter only when IRONHARNESS_TRANSPORT_RATE=max/window is
         set. Env is re-read per open, like the access policy. The deadline
         counts from open(): a long-lived session hitting it gets
-        OperationTimeout and must re-open the transport."""
+        OperationTimeout and must re-open the transport. Limit denials are
+        journaled (deadline_denied / rate_denied, IH-32) - without a conn
+        name: the wrapper resolves before the registry insert."""
         deadline = parse_transport_deadline(os.environ.get(TRANSPORT_DEADLINE_ENV))
         if deadline is not None:
-            t = DeadlineTransport(t, deadline)
+            t = DeadlineTransport(t, deadline, on_event=self._denial_journal)
         rate = parse_transport_rate(os.environ.get(TRANSPORT_RATE_ENV))
         if rate is not None:
             max_calls, per_seconds = rate
-            t = RateLimitedTransport(t, RateLimiter(max_calls, per_seconds))
+            t = RateLimitedTransport(t, RateLimiter(max_calls, per_seconds),
+                                     on_event=self._denial_journal)
         return t
+
+    def _denial_journal(self, kind: str, data: dict[str, Any]) -> None:
+        self.journal(kind, data)
 
     # --- serial ---
 

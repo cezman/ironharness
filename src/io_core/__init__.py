@@ -3,11 +3,13 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from io_core.errors import (
+    JournalCorrupt,
     OperationTimeout,
     PolicyViolation,
     QuotaExceeded,
     RateLimitExceeded,
     SandboxViolation,
+    TransportClosedError,
     VerificationError,
 )
 from io_core.esp_flash import EspFlasher
@@ -33,6 +35,7 @@ __all__ = [
     "DeadlineTransport",
     "EspFlasher",
     "FileSandbox",
+    "JournalCorrupt",
     "JsonlJournal",
     "ModbusSimServer",
     "ModbusTransport",
@@ -49,6 +52,7 @@ __all__ = [
     "SandboxViolation",
     "SerialTransport",
     "Session",
+    "TransportClosedError",
     "VerificationError",
     "expect_read",
     "read_events",
