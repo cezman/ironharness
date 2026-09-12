@@ -190,7 +190,8 @@ def test_empty_events_section_parses_as_empty(tmp_path):
         entry: solution.py
         target: unix
         timeout_sec: 5
-        expect: []
+        expect:
+          - 'x'
         events:
         """
         ),

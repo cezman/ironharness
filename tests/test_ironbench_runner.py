@@ -324,7 +324,7 @@ def test_unknown_target_rejected(tmp_path):
 def test_explicit_wokwi_target_loads(tmp_path):
     d = tmp_path / "t"
     d.mkdir()
-    (d / "task.yaml").write_text("name: fake\ntarget: wokwi\n", encoding="utf-8")
+    (d / "task.yaml").write_text("name: fake\ntarget: wokwi\nexpect:\n  - 'x'\n", encoding="utf-8")
     assert load_task(d).target == "wokwi"
 
 

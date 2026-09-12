@@ -38,35 +38,35 @@ def test_load_task_parses_fields(tmp_path):
 
 
 def test_load_task_defaults(tmp_path):
-    d = write_task(tmp_path, "name: t1\n")
+    d = write_task(tmp_path, "name: t1\nexpect:\n  - 'x'\n")
     task = load_task(d)
     assert task.timeout_sec == 30
     assert task.scenario is None  # no scenario -> the runner generates REPL-paste
     assert task.entry == "main.py"
-    assert task.expect == ()
+    assert task.expect == ("x",)
     assert task.stimulus == ()
 
 
 def test_load_task_stimulus(tmp_path):
-    content = "name: t1\nstimulus:\n  - delay: 500ms\n  - write-serial: \"hi\\n\"\n"
+    content = "name: t1\nexpect:\n  - 'x'\nstimulus:\n  - delay: 500ms\n  - write-serial: \"hi\\n\"\n"
     task = load_task(write_task(tmp_path, content))
     assert task.stimulus == ({"delay": "500ms"}, {"write-serial": "hi\n"})
 
 
 def test_load_task_stimulus_must_be_steps(tmp_path):
-    d = write_task(tmp_path, "name: t1\nstimulus:\n  - just a string\n")
+    d = write_task(tmp_path, "name: t1\nexpect:\n  - 'x'\nstimulus:\n  - just a string\n")
     with pytest.raises(ValueError, match="stimulus"):
         load_task(d)
 
 
 def test_load_task_stimulus_unknown_step_key(tmp_path):
-    d = write_task(tmp_path, "name: t1\nstimulus:\n  - write-seral: 'x'\n")
+    d = write_task(tmp_path, "name: t1\nexpect:\n  - 'x'\nstimulus:\n  - write-seral: 'x'\n")
     with pytest.raises(ValueError, match="write-seral"):
         load_task(d)
 
 
 def test_load_task_requires_name(tmp_path):
-    d = write_task(tmp_path, "timeout_sec: 5\n")
+    d = write_task(tmp_path, "timeout_sec: 5\nexpect:\n  - 'x'\n")
     with pytest.raises(ValueError, match="name"):
         load_task(d)
 
@@ -78,8 +78,8 @@ def test_load_task_expect_must_be_strings(tmp_path):
 
 
 def test_load_tasks_sorted_and_skips_dirs_without_task(tmp_path):
-    write_task(tmp_path, "name: bbb\n", dirname="bbb")
-    write_task(tmp_path, "name: aaa\n", dirname="aaa")
+    write_task(tmp_path, "name: bbb\nexpect:\n  - 'x'\n", dirname="bbb")
+    write_task(tmp_path, "name: aaa\nexpect:\n  - 'x'\n", dirname="aaa")
     (tmp_path / "empty_dir").mkdir()
     tasks = load_tasks(tmp_path)
     assert [t.name for t in tasks] == ["aaa", "bbb"]
@@ -91,26 +91,26 @@ def test_load_tasks_missing_dir(tmp_path):
 
 
 def test_load_task_tags_and_level(tmp_path):
-    write_task(tmp_path, "name: aaa\ntags: [io, fsm]\nlevel: 3\n", dirname="aaa")
+    write_task(tmp_path, "name: aaa\nexpect:\n  - 'x'\ntags: [io, fsm]\nlevel: 3\n", dirname="aaa")
     task = load_task(tmp_path / "aaa")
     assert task.tags == ("io", "fsm")
     assert task.level == 3
 
 
 def test_load_task_rejects_unknown_tag(tmp_path):
-    write_task(tmp_path, "name: aaa\ntags: [robots]\n", dirname="aaa")
+    write_task(tmp_path, "name: aaa\nexpect:\n  - 'x'\ntags: [robots]\n", dirname="aaa")
     with pytest.raises(ValueError, match="unknown tags"):
         load_task(tmp_path / "aaa")
 
 
 def test_load_task_rejects_duplicate_tags(tmp_path):
-    write_task(tmp_path, "name: aaa\ntags: [io, io]\n", dirname="aaa")
+    write_task(tmp_path, "name: aaa\nexpect:\n  - 'x'\ntags: [io, io]\n", dirname="aaa")
     with pytest.raises(ValueError, match="duplicates"):
         load_task(tmp_path / "aaa")
 
 
 def test_load_task_rejects_bad_level(tmp_path):
-    write_task(tmp_path, "name: aaa\nlevel: 9\n", dirname="aaa")
+    write_task(tmp_path, "name: aaa\nexpect:\n  - 'x'\nlevel: 9\n", dirname="aaa")
     with pytest.raises(ValueError, match="level"):
         load_task(tmp_path / "aaa")
 
