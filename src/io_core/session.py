@@ -119,29 +119,30 @@ class Session:
 
         return hook
 
-    def _apply_limits(self, t: Any) -> Any:
+    def _apply_limits(self, t: Any, name: str) -> Any:
         """Wraps a fresh transport in the configured deadline/rate limits -
         the 'transports always have timeouts and quotas' convention for the
         standard session (IH-17). Deadline is on by default (600 s,
         IRONHARNESS_TRANSPORT_DEADLINE to reconfigure or 0/off to disable);
         the rate limiter only when IRONHARNESS_TRANSPORT_RATE=max/window is
-        set. Env is re-read per open, like the access policy. The deadline
-        counts from open(): a long-lived session hitting it gets
-        OperationTimeout and must re-open the transport. Limit denials are
-        journaled (deadline_denied / rate_denied, IH-32) - without a conn
-        name: the wrapper resolves before the registry insert."""
+        set. Env is re-read per open, like the access policy. The deadline is
+        an IDLE window (sliding, IH-35): every successful operation pushes it
+        out, so a long-lived interactive session survives; a connection with
+        no successful operation for the window gets OperationTimeout with the
+        conn name and a reopen hint, and must be re-opened. Limit denials are
+        journaled (deadline_denied / rate_denied, IH-32) with the conn name
+        (IH-35: the closure stamps the name regardless of registry state)."""
         deadline = parse_transport_deadline(os.environ.get(TRANSPORT_DEADLINE_ENV))
         if deadline is not None:
-            t = DeadlineTransport(t, deadline, on_event=self._denial_journal)
+            t = DeadlineTransport(
+                t, deadline, on_event=self._journal_for(name), label=name
+            )
         rate = parse_transport_rate(os.environ.get(TRANSPORT_RATE_ENV))
         if rate is not None:
             max_calls, per_seconds = rate
             t = RateLimitedTransport(t, RateLimiter(max_calls, per_seconds),
-                                     on_event=self._denial_journal)
+                                     on_event=self._journal_for(name))
         return t
-
-    def _denial_journal(self, kind: str, data: dict[str, Any]) -> None:
-        self.journal(kind, data)
 
     # --- serial ---
 
@@ -158,7 +159,7 @@ class Session:
             self._check_connection_limit()
             raw = SerialTransport(port, baudrate=baudrate, timeout=timeout,
                                   on_event=self._journal_for(name))
-            t = self._apply_limits(raw)
+            t = self._apply_limits(raw, name)
             t.open()
             self._transports[name] = t
             self._kinds[name] = "serial"
@@ -301,7 +302,8 @@ class Session:
                     device_id=device_id,
                     timeout=timeout,
                     on_event=self._journal_for(name),
-                )
+                ),
+                name,
             )
             t.open()
             self._transports[name] = t
@@ -340,7 +342,8 @@ class Session:
                     client_id=client_id,
                     timeout=timeout,
                     on_event=self._journal_for(name),
-                )
+                ),
+                name,
             )
             t.open()
             self._transports[name] = t
