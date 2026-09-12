@@ -87,10 +87,11 @@ def echo(text: str) -> str:
 
 # Tool annotation conventions (IH-20), applied explicitly to every tool:
 # - readOnlyHint=True only where nothing is consumed or mutated: echo,
-#   file_read/file_list (sandbox), esp_image_info (parses a file), and
-#   modbus_read (an FC3 query - the device answers, its state is untouched).
-#   serial_read/serial_read_line/mqtt_read are deliberately NOT readOnly:
-#   they drain a stream/queue - a replay loses data for later reads.
+#   serial_list (host device table), file_read/file_list (sandbox),
+#   esp_image_info (parses a file), and modbus_read (an FC3 query - the
+#   device answers, its state is untouched). serial_read/serial_read_line/
+#   mqtt_read are deliberately NOT readOnly: they drain a stream/queue -
+#   a replay loses data for later reads.
 # - destructiveHint=True for esp_flash/esp_erase (real hardware),
 #   file_delete, and file_write (an overwrite is not an additive update);
 #   plain state writes stay destructiveHint=False.
@@ -98,11 +99,20 @@ def echo(text: str) -> str:
 #   (connects, I/O over ports/hosts/brokers); the close/subscribe tools
 #   leave it unset (the spec default is true anyway).
 # - idempotentHint is left unset everywhere on purpose: nothing here is
-#   idempotent (a repeated *_open on the same name is an error, not a
-#   no-op - Session refuses "already open").
+#   state-idempotent (a repeated *_open on the same name is an error, not a
+#   no-op - Session refuses "already open"); the read-only tools re-execute
+#   on every call rather than being cached no-ops.
 
 
 # --- serial (binary data as hex strings, JSON-friendly) ---
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True))
+def serial_list() -> list[dict]:
+    """Lists host serial ports with USB identity: device, vid, pid, description.
+    Board COM numbers float across re-plugs - enumerate before serial_open.
+    Nothing is opened or consumed."""
+    return get_session().serial_list()
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))

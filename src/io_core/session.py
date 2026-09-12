@@ -13,6 +13,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import serial.tools.list_ports
+
 from io_core.errors import PolicyViolation
 from io_core.file_sandbox import FileSandbox
 from io_core.journal import JsonlJournal
@@ -145,6 +147,27 @@ class Session:
         return t
 
     # --- serial ---
+
+    def serial_list(self) -> list[dict[str, Any]]:
+        """Enumerates host serial ports with USB identity (device, vid, pid,
+        description) - the MCP-first replacement for out-of-band pyserial
+        diagnostics (IH-36): board COM numbers float across re-plugs, so
+        agents must re-enumerate before serial_open. No port is opened and
+        nothing is consumed (read-only over the host device table); the
+        enumeration is journaled like every operation."""
+        self._check_open()
+        self._check_kind("serial")
+        ports = [
+            {
+                "device": p.device,
+                "vid": f"{p.vid:04x}" if p.vid is not None else None,
+                "pid": f"{p.pid:04x}" if p.pid is not None else None,
+                "description": p.description,
+            }
+            for p in serial.tools.list_ports.comports()
+        ]
+        self.journal("serial_listed", {"count": len(ports), "ports": ports})
+        return ports
 
     def serial_open(
         self, name: str, port: str, *, baudrate: int = 115200, timeout: float = 1.0

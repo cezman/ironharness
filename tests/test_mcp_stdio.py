@@ -236,6 +236,7 @@ def test_tool_annotations_round_trip(server):
     ann = {name: t["annotations"] for name, t in tools.items()}
     assert ann["echo"]["readOnlyHint"] is True and ann["echo"]["openWorldHint"] is False
     assert ann["file_read"]["readOnlyHint"] is True
+    assert ann["serial_list"]["readOnlyHint"] is True  # IH-36: enumerates, opens nothing
     assert ann["modbus_read"]["readOnlyHint"] is True and ann["modbus_read"]["openWorldHint"] is True
     assert ann["serial_write"]["readOnlyHint"] is False
     assert ann["esp_flash"]["destructiveHint"] is True

@@ -10,7 +10,7 @@ boundary right before an operation reaches the outside world:
   host and port, a bare "broker.lan" matches the host on any port.
 - IRONHARNESS_ENABLED_KINDS — comma-separated subset of serial,modbus,mqtt,esp,
   file. Unset or empty means all kinds are enabled; a disabled kind makes the
-  Session open methods, esp_* and file_* methods raise PolicyViolation.
+  Session open methods, esp_*, file_* and serial_list raise PolicyViolation.
 - IRONHARNESS_MAX_CONNECTIONS — ceiling on simultaneously open transports per
   Session (unset = unlimited). A denial is a PolicyViolation, journaled like
   every other policy denial.
