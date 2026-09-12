@@ -9,13 +9,14 @@
 
 from __future__ import annotations
 
+import queue
 import time
 from collections.abc import Callable
 from typing import Any, Self
 
 import serial
 
-from io_core.errors import TransportClosedError
+from io_core.errors import TransportClosedError, TransportIoError
 
 EventHook = Callable[[str, dict[str, Any]], None]
 
@@ -84,6 +85,13 @@ class SerialTransport:
         except OSError as e:  # SerialTimeoutException at write_timeout, port errors
             self._emit("write_failed", {"data_hex": data.hex(), "error": str(e)})
             raise
+        except queue.Full as e:
+            # loop:// family: a full internal buffer is NOT an OSError (IH-34) -
+            # without this handler the failure escaped unjournaled and surfaced
+            # as an anonymous tool error. Wrapped into TransportIoError (an
+            # OSError subclass) so existing handlers keep catching it.
+            self._emit("write_failed", {"data_hex": data.hex(), "error": f"queue.Full: {e}"})
+            raise TransportIoError(f"port buffer overflow on write: {e}") from e
         self._emit("write", {"data_hex": data.hex(), "bytes": n})
         return n
 
@@ -96,6 +104,9 @@ class SerialTransport:
         except OSError as e:
             self._emit("read_failed", {"size": size, "error": str(e)})
             raise
+        except queue.Empty as e:  # IH-34: same non-OSError family as write's queue.Full
+            self._emit("read_failed", {"size": size, "error": f"queue.Empty: {e}"})
+            raise TransportIoError(f"port buffer underflow on read: {e}") from e
         self._emit("read", {"data_hex": data.hex(), "bytes": len(data)})
         return data
 
@@ -108,6 +119,9 @@ class SerialTransport:
         except OSError as e:
             self._emit("read_line_failed", {"max_len": max_len, "error": str(e)})
             raise
+        except queue.Empty as e:  # IH-34: same non-OSError family as write's queue.Full
+            self._emit("read_line_failed", {"max_len": max_len, "error": f"queue.Empty: {e}"})
+            raise TransportIoError(f"port buffer underflow on read_line: {e}") from e
         self._emit("read_line", {"data_hex": data.hex(), "bytes": len(data)})
         return data
 

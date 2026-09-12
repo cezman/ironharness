@@ -32,6 +32,13 @@ class TransportClosedError(RuntimeError):
     голый assert: обязан работать и под python -O, который assert'ы вырезает."""
 
 
+class TransportIoError(OSError):
+    """Провал транспортной операции I/O вне семейства OSError — например
+    queue.Full переполненного буфера loop:// (IH-34). Наследует OSError,
+    чтобы существующие обработчики продолжали ловить; главное — операция
+    журналируется, а не исчезает в анонимной ошибке инструмента."""
+
+
 class JournalCorrupt(Exception):
     """Журнал повреждён: строка не JSON-объект, отсутствуют служебные поля или
     data_hex не парсится. Честный отказ с именем файла вместо KeyError/AttributeError."""

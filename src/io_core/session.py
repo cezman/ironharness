@@ -15,6 +15,7 @@ from typing import Any
 
 import serial.tools.list_ports
 
+from io_core import mprepl
 from io_core.errors import PolicyViolation
 from io_core.file_sandbox import FileSandbox
 from io_core.journal import JsonlJournal
@@ -189,7 +190,16 @@ class Session:
             self._serial_base[name] = raw
 
     def serial_write(self, name: str, data_hex: str) -> int:
-        data = bytes.fromhex(data_hex)
+        try:
+            data = bytes.fromhex(data_hex)
+        except ValueError as e:
+            # journal before raising (IH-34): a bad argument used to surface as
+            # an anonymous tool error with no trace in the journal
+            self.journal(
+                "write_failed",
+                {"conn": name, "error": f"data_hex is not valid hex: {e}"},
+            )
+            raise ValueError(f"data_hex is not valid hex: {e}") from e
         # lock order: session lock is ALWAYS released before io_lock is taken.
         # The inverse order (io_lock held while waiting for the session lock,
         # e.g. in _get) plus a concurrent reader_stop (session lock held,
@@ -243,6 +253,70 @@ class Session:
                 t.reset(pulse_sec=pulse_sec, settle_sec=settle_sec)
         else:
             t.reset(pulse_sec=pulse_sec, settle_sec=settle_sec)
+
+    def serial_put(self, name: str, source_path: str, target_path: str) -> int:
+        """Pushes a sandbox file onto the device filesystem over the raw REPL
+        (IH-34): target_path is overwritten. source_path is sandbox-relative -
+        the agent stages content with file_write, the transfer never touches
+        host paths. Refuses under an active background reader: the transfer
+        reads the board's answers, a reader would steal those bytes. The
+        whole exchange is journaled; a failed transfer lands as
+        serial_put_failed with the board's error text.
+        """
+        self._check_open()
+        self._check_kind("serial")
+        data = self.sandbox.read_file(source_path)
+        with self._lock:
+            if name in self._readers:
+                raise RuntimeError(
+                    f"transport {name!r} has a background reader - stop it before "
+                    "serial_put (the transfer reads the board's answers)"
+                )
+            t = self._get(name)
+        try:
+            mprepl.put_file(t, data, target_path)
+        except Exception as e:
+            self.journal(
+                "serial_put_failed",
+                {"conn": name, "source": source_path, "target": target_path, "error": str(e)},
+            )
+            raise
+        self.journal(
+            "serial_put",
+            {"conn": name, "source": source_path, "target": target_path, "bytes": len(data)},
+        )
+        return len(data)
+
+    def serial_get(self, name: str, target_path: str, dest_path: str) -> int:
+        """Pulls a device file into the sandbox over the raw REPL (IH-34):
+        target_path on the board, dest_path sandbox-relative (overwritten,
+        sandbox quotas apply). Same reader and journaling contract as
+        serial_put; a missing board file lands as serial_get_failed carrying
+        the board's ENOENT traceback.
+        """
+        self._check_open()
+        self._check_kind("serial")
+        with self._lock:
+            if name in self._readers:
+                raise RuntimeError(
+                    f"transport {name!r} has a background reader - stop it before "
+                    "serial_get (the transfer reads the board's answers)"
+                )
+            t = self._get(name)
+        try:
+            data = mprepl.get_file(t, target_path)
+        except Exception as e:
+            self.journal(
+                "serial_get_failed",
+                {"conn": name, "source": target_path, "target": dest_path, "error": str(e)},
+            )
+            raise
+        written = self.sandbox.write_file(dest_path, data, overwrite=True)
+        self.journal(
+            "serial_get",
+            {"conn": name, "source": target_path, "target": dest_path, "bytes": written},
+        )
+        return written
 
     # --- serial background reader (IH-18) ---
 
