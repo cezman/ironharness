@@ -2,6 +2,10 @@
 # (not the spec!) - the agent must estimate them itself from the step response.
 # The worker's render_log deliberately does not print K/T. The sensor noise forces
 # estimating from an averaged trajectory.
+# Honesty caveat (IH-31): K/T physically travel inside the run's spec file in the
+# artifacts directory, so a controller reading it could cheat today. This is not
+# detected yet - the isolation fix (IH-25, controller in its own process) is the
+# real fix; until then this comment is the documented boundary, not a guarantee.
 name: system-id
 description: >-
   The plant is a heater: a first-order lag, y_oo = ambient + K*u. ambient = 20 deg C
