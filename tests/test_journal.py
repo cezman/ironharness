@@ -62,14 +62,20 @@ def test_replay_read_line_across_chunks(tmp_path):
 
     jpath = record(tmp_path, script)
     with ReplayTransport.from_file(jpath) as rp:
+        # strict replay reproduces the WHOLE session (IH-32): the recorded
+        # write must be replayed too, or close() reports it as missing
+        rp.write(b"ab\ncd\n")
         assert rp.read_line() == b"ab\n"
         assert rp.read_line() == b"cd\n"
 
 
 def test_replay_strict_write_mismatch(tmp_path):
     jpath = record(tmp_path, lambda t: (t.write(b"ping"), t.read(4)))
-    with ReplayTransport.from_file(jpath) as rp, pytest.raises(ReplayMismatch):
-        rp.write(b"XXXX")
+    with ReplayTransport.from_file(jpath) as rp:
+        with pytest.raises(ReplayMismatch):
+            rp.write(b"XXXX")  # recorded write does not match
+        rp.write(b"ping")  # the honest completion satisfies close()'s fullness check
+        assert rp.read(4) == b"ping"
 
 
 def test_replay_lenient_ignores_writes(tmp_path):

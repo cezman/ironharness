@@ -27,5 +27,15 @@ class ConnectionLost(Exception):
     """Соединение с устройством потеряно (в том числе по сценарию сбоев)."""
 
 
+class TransportClosedError(RuntimeError):
+    """Операция на транспорте, который не открыт (или уже закрыт). Заменяет
+    голый assert: обязан работать и под python -O, который assert'ы вырезает."""
+
+
+class JournalCorrupt(Exception):
+    """Журнал повреждён: строка не JSON-объект, отсутствуют служебные поля или
+    data_hex не парсится. Честный отказ с именем файла вместо KeyError/AttributeError."""
+
+
 class PolicyViolation(PermissionError):
     """Operation denied by the access policy (host allowlist or enabled kinds)."""

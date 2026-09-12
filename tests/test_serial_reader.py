@@ -130,6 +130,28 @@ def test_reader_surfaces_transport_death():
     assert not r.running
 
 
+def test_reader_surfaces_transport_closed_error():
+    # The IH-32 class pin: transport closed while the reader is in read()
+    # now raises TransportClosedError (the old AssertionError became a typed
+    # error), and the reader thread must die CLEANLY - error() set, no
+    # traceback leaking into threading-excepthook.
+    from io_core.errors import TransportClosedError
+
+    class ClosedMidRead:
+        def read(self, size: int) -> bytes:
+            raise TransportClosedError("port is not open")
+
+        def close(self) -> None:
+            pass
+
+    r = SerialReader(ClosedMidRead())
+    r.start()
+    got = r.read_until("anything", timeout=5)
+    assert got["found"] is False
+    assert r.error() is not None and isinstance(r.error(), TransportClosedError)
+    assert not r.running
+
+
 def test_reader_validates_arguments():
     fake = FakeSerial()
     with pytest.raises(ValueError, match="max_bytes"):

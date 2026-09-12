@@ -20,6 +20,7 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any, Self
 
+from io_core.errors import TransportClosedError
 from io_core.policy import AccessPolicy
 
 EventHook = Callable[[str, dict[str, Any]], None]
@@ -143,7 +144,8 @@ class MqttTransport:
         self.close()
 
     def _require_client(self) -> Any:
-        assert self._client is not None, "connection is not open"
+        if self._client is None:
+            raise TransportClosedError("connection is not open")
         return self._client
 
     # --- операции ---

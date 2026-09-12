@@ -31,6 +31,18 @@ class _ModbusSimHandler(socketserver.StreamRequestHandler):
                 return
             if pid != 0:
                 return
+            # IH-32: a hostile/garbled frame (length 0, or a PDU that promises
+            # more bytes than exist) must not kill the handler thread - the
+            # simulation dies silently, the agent sees a hung port. Answer
+            # with a modbus exception when possible, otherwise drop the
+            # connection but keep serving.
+            if length < 2 or length > 260:  # 1 uid byte + at least a PDU; MBAP max is 254+1
+                if length == 0 or length > 260:
+                    return  # unframed garbage: nothing sane to answer, drop the link
+                self.request.sendall(
+                    struct.pack(">HHHB", tid, 0, 3, uid) + bytes([0x80, 0x01])
+                )
+                continue
             try:
                 pdu = self._recv_exact(length - 1)
             except (ConnectionError, OSError):
@@ -39,6 +51,8 @@ class _ModbusSimHandler(socketserver.StreamRequestHandler):
             self.request.sendall(struct.pack(">HHHB", tid, 0, len(resp) + 1, uid) + resp)
 
     def _handle_pdu(self, pdu: bytes) -> bytes:
+        if not pdu:  # empty PDU: nothing to dispatch, refuse per the spec
+            return bytes([0x80, 0x01])
         regs: list[int] = self.server.registers  # type: ignore[attr-defined]
         fc = pdu[0]
         if fc == 3 and len(pdu) >= 5:  # чтение holding-регистров
@@ -54,6 +68,11 @@ class _ModbusSimHandler(socketserver.StreamRequestHandler):
             return pdu[:5]
         if fc == 16 and len(pdu) >= 6:  # запись блока регистров
             start, qty = struct.unpack(">HH", pdu[1:5])
+            # IH-32: a truncated FC16 (the byte count promises more data than
+            # the frame carries) must be an exception answer, not a struct
+            # crash that kills the handler thread
+            if len(pdu) < 6 + qty * 2:
+                return bytes([0x90, 0x03])
             if start + qty > len(regs):
                 return bytes([0x90, 0x02])
             regs[start : start + qty] = list(struct.unpack(f">{qty}H", pdu[6 : 6 + qty * 2]))

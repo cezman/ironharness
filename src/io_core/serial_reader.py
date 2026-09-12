@@ -47,6 +47,8 @@ import time
 from collections import deque
 from typing import Any
 
+from io_core.errors import TransportClosedError
+
 _POLL_IDLE_SEC = 0.05
 
 
@@ -121,7 +123,7 @@ class SerialReader:
                         break
                     try:
                         data = self._transport.read(min(int(in_waiting), self._chunk))
-                    except (OSError, ValueError, AssertionError) as e:
+                    except (OSError, ValueError, AssertionError, TransportClosedError) as e:
                         self._error = e
                         return  # port died: stop draining, surface on the next consumer call
             elif in_waiting == 0:
@@ -134,7 +136,7 @@ class SerialReader:
                         break
                     try:
                         data = self._transport.read(self._chunk)
-                    except (OSError, ValueError, AssertionError) as e:
+                    except (OSError, ValueError, AssertionError, TransportClosedError) as e:
                         self._error = e
                         return
                 if not data:

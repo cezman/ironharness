@@ -22,6 +22,13 @@ class FileSandbox:
     Quota atomicity (IH-12): usage check + write happen under one lock, so
     parallel writers cannot both pass a quota check computed before either of
     them wrote (two 600 KB writes used to slip past a 1 MB limit together).
+
+    Quota scope is PER INSTANCE (IH-32): the counters scan the shared tree at
+    check time, so two instances on one root see each other's files - but
+    neither enforces the other's limit, and a combined budget across instances
+    is NOT guaranteed (each checks "would MY limit break", the total can reach
+    both limits summed). One root - one sandbox instance, unless a summed cap
+    is acceptable.
     """
 
     def __init__(
@@ -49,9 +56,18 @@ class FileSandbox:
 
     def resolve(self, rel_path: str) -> Path:
         if Path(rel_path).is_absolute():
+            self._emit(
+                "sandbox_violation", {"path": rel_path, "reason": "absolute path"}
+            )
             raise SandboxViolation(f"absolute path is not allowed: {rel_path!r}")
         resolved = (self._root / rel_path).resolve()
         if resolved != self._root and self._root not in resolved.parents:
+            # "no log = didn't happen" covers denials too (IH-32): a sandbox
+            # escape attempt must leave a trace even though it raised
+            self._emit(
+                "sandbox_violation",
+                {"path": rel_path, "resolved": str(resolved), "reason": "escape"},
+            )
             raise SandboxViolation(f"path {rel_path!r} escapes the sandbox root {self._root}")
         return resolved
 
@@ -59,13 +75,22 @@ class FileSandbox:
         files = [p for p in self._root.rglob("*") if p.is_file()]
         return sum(f.stat().st_size for f in files), len(files)
 
-    def _check_quota(self, extra_bytes: int, new_files: int) -> None:
+    def _check_quota(self, extra_bytes: int, new_files: int, path: str = "") -> None:
         used_bytes, used_files = self._usage()
         if used_bytes + extra_bytes > self._max_bytes:
+            self._emit(
+                "quota_denied",
+                {"path": path, "limit_kind": "bytes", "used": used_bytes,
+                 "adding": extra_bytes, "limit": self._max_bytes},
+            )
             raise QuotaExceeded(
                 f"bytes: used {used_bytes}, adding {extra_bytes}, limit {self._max_bytes}"
             )
         if used_files + new_files > self._max_files:
+            self._emit(
+                "quota_denied",
+                {"path": path, "limit_kind": "files", "used": used_files, "limit": self._max_files},
+            )
             raise QuotaExceeded(
                 f"files: used {used_files}, limit {self._max_files}"
             )
@@ -78,7 +103,7 @@ class FileSandbox:
             if target.exists() and not overwrite:
                 raise FileExistsError(rel_path)
             adding = len(data) - (target.stat().st_size if target.exists() else 0)
-            self._check_quota(max(adding, 0), 0 if target.exists() else 1)
+            self._check_quota(max(adding, 0), 0 if target.exists() else 1, rel_path)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
         self._emit("file_write", {"path": rel_path, "bytes": len(data)})

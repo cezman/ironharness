@@ -172,8 +172,9 @@ class AccessPolicy:
         """Enabled-kinds gate for session open/esp/file operations."""
         if kind in self.enabled_kinds:
             return
-        # detail key is "transport": JsonlJournal merges data over the record,
-        # so a "kind" key here would clobber the event type "policy_violation"
+        # detail key is "transport": "kind" is a journal service key (payload
+        # keys conflicting with ts/seq/actor/kind are stripped by the journal,
+        # IH-32), so the reason is carried as "transport" instead
         self._deny(
             f"transport kind {kind!r} is disabled by {ENABLED_KINDS_ENV}",
             rule="enabled_kinds",

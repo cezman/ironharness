@@ -67,7 +67,17 @@ class Session:
         # owner to serialize against it (CH340 single-threaded link)
         self._serial_base: dict[str, Any] = {}
         self._readers: dict[str, SerialReader] = {}
+        self._closed = False
         self._lock = threading.RLock()
+
+    def _check_open(self) -> None:
+        """Operations on a closed session raise a typed error (IH-32): the old
+        behaviour resurrected transports (a fresh open on a closed session
+        leaked past close() and was never cleaned up)."""
+        if self._closed:
+            from io_core.errors import TransportClosedError
+
+            raise TransportClosedError("session is closed - create a new Session")
 
     def _check_free(self, name: str) -> None:
         if name in self._transports:
@@ -102,10 +112,10 @@ class Session:
         connection name, so a session with two devices stays attributable -
         without it a read/write event carries only data and the journal cannot
         say whose bytes they are. The transport keeps owning its own fields
-        (open/close events already carry port/host); conn is filled first and
-        never shadows them."""
+        (open/close events already carry port/host); conn is stamped LAST
+        (IH-32), so a payload key "conn" can never shadow the attribution."""
         def hook(kind: str, data: dict[str, Any]) -> None:
-            self.journal(kind, {"conn": name, **data})
+            self.journal(kind, {**data, "conn": name})
 
         return hook
 
@@ -117,21 +127,28 @@ class Session:
         the rate limiter only when IRONHARNESS_TRANSPORT_RATE=max/window is
         set. Env is re-read per open, like the access policy. The deadline
         counts from open(): a long-lived session hitting it gets
-        OperationTimeout and must re-open the transport."""
+        OperationTimeout and must re-open the transport. Limit denials are
+        journaled (deadline_denied / rate_denied, IH-32) - without a conn
+        name: the wrapper resolves before the registry insert."""
         deadline = parse_transport_deadline(os.environ.get(TRANSPORT_DEADLINE_ENV))
         if deadline is not None:
-            t = DeadlineTransport(t, deadline)
+            t = DeadlineTransport(t, deadline, on_event=self._denial_journal)
         rate = parse_transport_rate(os.environ.get(TRANSPORT_RATE_ENV))
         if rate is not None:
             max_calls, per_seconds = rate
-            t = RateLimitedTransport(t, RateLimiter(max_calls, per_seconds))
+            t = RateLimitedTransport(t, RateLimiter(max_calls, per_seconds),
+                                     on_event=self._denial_journal)
         return t
+
+    def _denial_journal(self, kind: str, data: dict[str, Any]) -> None:
+        self.journal(kind, data)
 
     # --- serial ---
 
     def serial_open(
         self, name: str, port: str, *, baudrate: int = 115200, timeout: float = 1.0
     ) -> None:
+        self._check_open()
         # check + open + insert under one lock: two parallel opens of one name
         # used to both pass the free-check, open two real ports and lose one of
         # them (it stayed open past session.close() - a leaked COM port)
@@ -272,6 +289,7 @@ class Session:
         device_id: int = 1,
         timeout: float = 3.0,
     ) -> None:
+        self._check_open()
         with self._lock:
             self._check_kind("modbus")
             self._check_free(name)
@@ -310,6 +328,7 @@ class Session:
         client_id: str = "",
         timeout: float = 3.0,
     ) -> None:
+        self._check_open()
         with self._lock:
             self._check_kind("mqtt")
             self._check_free(name)
@@ -339,6 +358,7 @@ class Session:
     # --- esp (flashing via esptool; needs the [flash] extra) ---
 
     def esp_image_info(self, firmware_path: str, chip: str = "esp32") -> dict[str, Any]:
+        self._check_open()
         self._check_kind("esp")
         from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
 
@@ -347,12 +367,14 @@ class Session:
     def esp_flash(
         self, port: str, firmware_path: str, *, addr: int = DEFAULT_BOOTLOADER_OFFSET, baud: int = 921600
     ) -> str:
+        self._check_open()
         self._check_kind("esp")
         from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
 
         return EspFlasher(on_event=self.journal).flash(port, firmware_path, addr=addr, baud=baud)
 
     def esp_erase(self, port: str, *, baud: int = 921600) -> str:
+        self._check_open()
         self._check_kind("esp")
         from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
 
@@ -361,18 +383,22 @@ class Session:
     # --- файлы (песочница) ---
 
     def file_write(self, path: str, content: str) -> int:
+        self._check_open()
         self._check_kind("file")
         return self.sandbox.write_file(path, content.encode("utf-8"), overwrite=True)
 
     def file_read(self, path: str) -> str:
+        self._check_open()
         self._check_kind("file")
         return self.sandbox.read_file(path).decode("utf-8", errors="replace")
 
     def file_list(self, path: str = ".") -> list[str]:
+        self._check_open()
         self._check_kind("file")
         return self.sandbox.list_dir(path)
 
     def file_delete(self, path: str) -> None:
+        self._check_open()
         self._check_kind("file")
         self.sandbox.delete_file(path)
 
@@ -416,6 +442,7 @@ class Session:
         collected and re-raised only after everything else (including the
         journal) has been closed - one stuck port must not leak the rest of the
         session."""
+        self._closed = True
         first_error: BaseException | None = None
         with self._lock:
             transports = list(self._transports.values())

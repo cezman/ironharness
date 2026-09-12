@@ -131,6 +131,22 @@ def load_results(solve_dir: Path) -> tuple[list[dict], list[dict]]:
     return records, [{"file": f, "lines": n} for f, n in sorted(unparseable.items())]
 
 
+def _to_int(value: object, default: int = 0) -> int:
+    """Lenient numeric field (IH-32): typed garbage in a valid JSON record
+    (duration_sec: null) must not crash the report with a TypeError."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def aggregate(records: list[dict]) -> list[GroupStats]:
     """Grouping (model, task) -> stats; sorted by model, then task. Records
     without error_kind (old campaigns) count as live attempts."""
@@ -139,8 +155,8 @@ def aggregate(records: list[dict]) -> list[GroupStats]:
         stats = groups[(rec.get("model", "?"), rec.get("task", "?"))]
         stats[0] += 1
         stats[1] += 1 if rec.get("solved") else 0
-        stats[2] += int(rec.get("iterations", 0))
-        stats[3] += float(rec.get("duration_sec", 0))
+        stats[2] += _to_int(rec.get("iterations"))
+        stats[3] += _to_float(rec.get("duration_sec"))
         if rec.get("error_kind") == "infra" and not rec.get("solved"):
             stats[4] += 1
     return [
