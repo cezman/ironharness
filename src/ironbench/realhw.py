@@ -13,8 +13,10 @@ CH340/USB-UART constraints learned on live hardware (IH-2):
 - the REPL line editor terminates input() on \\r only (\\n is silent) —
   stimulus writes are normalized to \\r by the runner;
 - the entry is staged line-by-line in paste mode after the "paste mode"
-  banner; boot() clears the output buffer after staging so pattern scoring
-  only sees the run itself.
+  banner; legacy paste ECHOES the staged source back (live-verified IH-33,
+  ESP32 MicroPython v1.27), so boot() truncates the buffer right after the
+  echoed last source line - task patterns and the anti-cheat anchor must
+  never see source literals
 """
 
 from __future__ import annotations
@@ -97,9 +99,12 @@ class RealRepl:
     def boot(self, code: str) -> None:
         """Гигиена + запуск entry: снести чужой main.py, soft reset, залить код.
 
-        После staging буфер вывода очищается — в оценку попадает только сам
-        прогон (Traceback от прерывания чужой прошивки или boot-мусор не
-        считается за провал задачи).
+        Буфер очищается перед staging (вместе с _chunks — античит отображает
+        позиции текста на штампы чанков). Легаси paste-режим эхолит залитый
+        исходник — после Ctrl+D буфер усекается по концу эха последней строки
+        кода: эхо и баннер paste-режима в оценку и античит не попадают, а
+        рантайм-вывод не теряется (исполнение начинается только после
+        Ctrl+D, так что рантайм-вывод не может оказаться до конца эха).
         """
         self.interrupt()
         self.write(REMOVE_MAIN)
@@ -122,6 +127,41 @@ class RealRepl:
         for line in code.splitlines(keepends=True):
             self.write(line.encode("utf-8"))
         self.write(CTRL_D)  # выполнить; вывод читается в wait_for/дочитывании
+        self._drain()
+        self._truncate_after_staging_echo(code)
+
+    def _truncate_after_staging_echo(self, code: str) -> None:
+        """Срезает баннер paste-режима и эхо исходника: граница — конец эха
+        последней непустой строки кода. rfind берёт последнее вхождение, то
+        есть именно эхо финальной строки. Принятая граница: прошивка,
+        печатающая при старте строку, совпадающую с последней строкой своего
+        исходника, оставит хвост эха в логе (adversarial самосаботаж, не
+        класс читеров)."""
+        lines = [ln.rstrip() for ln in code.splitlines()]
+        last = next((ln for ln in reversed(lines) if ln), None)
+        if not last:
+            return
+        pos = self._text.rfind(last)
+        if pos < 0:
+            return  # no echo seen (raw-paste board) - nothing to trim
+        end = self._text.find("\n", pos)
+        pos_end = len(self._text) if end < 0 else end + 1
+        self._truncate_text_and_chunks(pos_end)
+
+    def _truncate_text_and_chunks(self, pos: int) -> None:
+        """Drops everything before byte offset pos from text and chunks
+        together (position consistency for the anti-cheat mapping)."""
+        if pos <= 0:
+            return
+        self._text = self._text[pos:]
+        kept: list[tuple[float, str]] = []
+        seen = 0
+        for stamp, chunk in self._chunks:
+            chunk_end = seen + len(chunk)
+            if chunk_end > pos:
+                kept.append((stamp, chunk[max(0, pos - seen):]))
+            seen = chunk_end
+        self._chunks = kept
 
     def wait_for(self, needle: str, deadline: float) -> bool:
         """Ждёт подстроку в накопленном выводе до дедлайна; False — время вышло."""

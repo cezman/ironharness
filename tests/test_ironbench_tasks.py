@@ -191,10 +191,14 @@ def test_bme_read_is_real_target_with_notes():
     assert task.target == "real"
     assert task.tags == ("data",)
     assert task.notes, "the bench lessons must ship with the task (IH-21)"
-    # the wait is anchored to the request line: unique needle, real trigger
+    # the wait is anchored to the request line: unique, task-specific needle
+    # (a short 'T=' would false-match substrings of arbitrary agent output),
+    # real trigger before it
     waits = [s["wait-serial"] for s in task.stimulus if "wait-serial" in s]
-    assert waits == ["T="]
+    assert waits == ["hPa"]
     assert any("write-serial" in s for s in task.stimulus)
+    # sub-zero benches are legal: the temperature pattern accepts a sign
+    assert any("-?" in p for p in task.expect)
 
 
 def test_wokwi_stimulus_controls_exist_in_diagram():

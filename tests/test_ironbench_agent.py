@@ -306,7 +306,33 @@ def test_solve_writes_journal_and_counts_attempts(tmp_path):
     attempt_events = [d for k, d in events if k == "attempt_result"]
     assert attempt_events[0]["model"] == "test-model"
     assert attempt_events[0]["error_kind"] == "none"  # IH-22: journal carries the kind
+    assert attempt_events[0]["notes"] is False  # IH-21: blink ships no notes
     assert jpath.exists() is False  # the J stub writes no file - the real JsonlJournal does
+
+
+def test_solve_journal_attempt_result_carries_notes_fact(tmp_path):
+    # IH-21 honesty: the journal event marks whether the prompt had notes -
+    # a campaign viewer can tell notes-driven runs from bare ones
+    import dataclasses
+
+    events: list = []
+
+    class J:
+        def __call__(self, kind, data):
+            events.append((kind, data))
+
+    task = dataclasses.replace(make_task(), notes=("GPIO21 is SDA",))
+    solve(
+        task,
+        SolveConfig(base_url="http://x", api_key="k", model="m"),
+        attempts=1,
+        out_dir=tmp_path / "camp",
+        llm=lambda cfg, msgs: GOOD_RESPONSE,
+        runner=fake_runner(True),
+        journal=J(),
+    )
+    attempt_events = [d for k, d in events if k == "attempt_result"]
+    assert attempt_events[0]["notes"] is True
 
 
 def test_agent_solve_results_writes_error_kind(tmp_path, monkeypatch):

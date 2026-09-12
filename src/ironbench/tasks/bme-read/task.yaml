@@ -19,7 +19,7 @@ tags: [data]
 level: 4
 expect:
   - 'bme ready'
-  - 'T=\d+\.\d{2} C'
+  - 'T=-?\d+\.\d{2} C'
   - 'P=\d+\.\d hPa'
   - 'H=\d+\.\d %'
 fail:
@@ -28,10 +28,13 @@ fail:
 stimulus:
   # "bme ready" is boot output scored from the whole log; the reading is
   # anchored to the request line - the real target carries the IH-14
-  # chunk-stamp anchor (IH-33), so a pre-printed answer fails the run.
+  # chunk-stamp anchor (IH-33), so a pre-printed answer fails the run. The
+  # wait needle is deliberately task-specific ('hPa' lives only in reading
+  # lines): a short needle like 'T=' would false-match substrings of
+  # arbitrary agent output and condemn honest firmware.
   - delay: 1500ms
   - write-serial: "read\r"
-  - wait-serial: 'T='
+  - wait-serial: 'hPa'
 # Expert notes from the live bench (2026-09-12): fed to the solve agent's
 # prompt; the fact is recorded in results.jsonl (benchmark honesty, IH-21).
 notes:

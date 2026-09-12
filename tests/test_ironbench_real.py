@@ -26,8 +26,9 @@ class FakeBoard:
     """Duck-typed serial: emulates a MicroPython REPL running staged uart-echo code.
 
     Semantics mirrored from live hardware: os.remove('main.py') hygiene clears
-    the staged firmware, Ctrl+E enters paste mode (no source echo), Ctrl+D runs
-    the freshly staged code (prints "echo ready"), input() echoes are line-fed.
+    the staged firmware, Ctrl+E enters paste mode, legacy paste echoes the
+    staged source back (live-verified IH-33), Ctrl+D runs the freshly staged
+    code (prints "echo ready"), input() echoes are line-fed.
     """
 
     def __init__(self) -> None:
@@ -62,7 +63,11 @@ class FakeBoard:
                 self._paste_buf = ""
             return len(data)
         if self._paste_mode:
-            self._paste_buf += text  # raw-paste не эхолит исходник
+            if not self._paste_buf:  # the paste prompt precedes the first echoed line
+                self._emit("=== ")
+            self._paste_buf += text  # raw-paste keeps the source...
+            # ...but legacy paste (live ESP32, IH-33 verification) ECHOES it back
+            self._emit(text)
             return len(data)
         if self._started:
             for line in text.splitlines():
@@ -247,7 +252,7 @@ BME_TASK_KWARGS = {
         "        continue\n"
         "    print('" + FakeBmeBoard.READING + "')\n"
     ),
-    "stimulus": ('write-serial: "read\\n"', 'wait-serial: "T="'),
+    "stimulus": ('write-serial: "read\\n"', 'wait-serial: "hPa"'),
     # readable literals double as regexes ('.' matches itself)
     "expect": ("bme ready", "T=22.71 C", "P=1008.3 hPa", "H=41.2 %"),
 }
