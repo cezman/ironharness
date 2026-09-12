@@ -66,15 +66,20 @@ def test_reset_pulses_rts_with_dtr_low():
     t.close()
 
 
-def test_open_does_not_touch_lines_again():
-    # The idle-lines pin: open() sets the lines idle ONCE (9e836d7) and no
-    # reset pulse may happen implicitly - a reset is only ever explicit.
+def test_open_sets_idle_lines_and_never_resets(monkeypatch):
+    # The idle-lines pin, full form: open() sets DTR/RTS idle ONCE (9e836d7)
+    # and no reset pulse may happen implicitly - a reset is only ever an
+    # explicit call. serial_for_url is redirected to the tracking fake, so
+    # even the idle set is observed: exactly the two idle assignments.
     inner = TrackingLines()
+    monkeypatch.setattr(
+        "io_core.serial_transport.serial.serial_for_url", lambda *a, **k: inner
+    )
     t = SerialTransport("loop://", timeout=0.05)
     t.open()
-    t._serial = inner  # swap AFTER open: open's own idle-set is not in this log
-    assert inner.log == []  # no line churn without an explicit reset
+    assert inner.log == ["dtr=False", "rts=False"]
     t.close()
+    assert inner.log == ["dtr=False", "rts=False"]  # close adds no churn either
 
 
 def test_reset_journaled_with_conn(tmp_path: Path):
@@ -156,15 +161,36 @@ def test_reset_failure_journaled_and_raises(tmp_path: Path):
 
 def test_reset_serialized_against_reader_drain(tmp_path: Path):
     # CH340 single-line contract without hardware: while the reader drains
-    # (blocking read inside io_lock), a concurrent serial_reset must wait for
-    # the lock - line control may never race a data read.
+    # (blocking read inside io_lock), a concurrent serial_reset must PARK on
+    # the reader's I/O lock - line control may never race a data read. The
+    # negative assertion (reset does NOT finish while the reader holds the
+    # lock) is the mechanism pin: without the io_lock in Session.serial_reset
+    # the reset would complete immediately (mutation-verified).
     s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
     try:
         s.serial_open("board", "loop://", timeout=0.05)
         base = s._serial_base["board"]
-        inner = TrackingLines()
-        base._serial = inner
+        entered_read = threading.Event()
+        release_read = threading.Event()
+
+        class BlockingRead:
+            dtr = None
+            rts = None
+
+            def read(self, size: int) -> bytes:
+                entered_read.set()
+                release_read.wait(timeout=10)
+                return b""
+
+            def write(self, data: bytes) -> int:
+                return len(data)
+
+            def close(self) -> None:
+                release_read.set()
+
+        base._serial = BlockingRead()
         s.serial_reader_start("board")
+        assert entered_read.wait(timeout=5), "reader never started draining"
         reset_done = threading.Event()
         errors: list[BaseException] = []
 
@@ -176,15 +202,29 @@ def test_reset_serialized_against_reader_drain(tmp_path: Path):
             reset_done.set()
 
         threading.Thread(target=resetter, daemon=True).start()
-        # give the resetter time to park on the io_lock (the reader holds it
-        # inside its blocking read); then release everything
-        time.sleep(0.2)
-        inner._closed = True
+        # the reader holds io_lock inside its blocking read: the reset must wait
+        assert not reset_done.wait(timeout=0.3), (
+            "serial_reset did not wait for the reader's I/O lock "
+            "(line control raced a data read)"
+        )
+        release_read.set()
         assert reset_done.wait(timeout=10), "reset deadlocked against the reader"
         assert errors == []
         s.serial_reader_stop("board")
         s.serial_close("board")
-        # the exact RTS pulse happened, after the drain released the lock
-        assert "rts=True" in inner.log and "rts=False" in inner.log
+    finally:
+        s.close()
+
+
+def test_reset_settle_waits_for_the_boot(tmp_path: Path):
+    # The settle promise ("waits settle_sec for the boot") needs a mechanism
+    # test: the call must take at least pulse_sec + settle_sec of wall time.
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    try:
+        s.serial_open("board", "loop://", timeout=0.05)
+        t0 = time.monotonic()
+        s.serial_reset("board", pulse_sec=0.05, settle_sec=0.3)
+        elapsed = time.monotonic() - t0
+        assert elapsed >= 0.3, f"reset returned in {elapsed:.3f}s - no settle wait"
     finally:
         s.close()

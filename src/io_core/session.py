@@ -189,7 +189,11 @@ class Session:
         = normal boot) - a clean state between solve attempts or after a hung
         REPL. open() never resets (the idle-lines fix); reset is explicit.
         Under a reader's I/O lock: line control is I/O on the same single
-        line (CH340); boot output then lands in the reader buffer."""
+        line (CH340). The settle wait holds the lock too - writes and drains
+        are blocked while the board boots; boot output accumulates in the
+        driver RX buffer and reaches the reader after the wait (a very
+        chatty boot can overflow a small driver buffer - keep settle_sec
+        realistic)."""
         with self._lock:
             t = self._get(name)
             reader = self._readers.get(name)
