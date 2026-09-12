@@ -188,3 +188,110 @@ def test_task_yaml_roundtrip():
     # stimulus с write-serial из yaml доходит до раннера как словарь
     raw = yaml.safe_load('stimulus:\n  - write-serial: "hi\\n"')
     assert raw["stimulus"][0] == {"write-serial": "hi\n"}
+
+
+# --- IH-33: the bme-read protocol on the stamp anchor ---
+
+
+class FakeBmeBoard(FakeBoard):
+    """A REPL running the bme-read protocol: "bme ready" at boot, one reading
+    line per received non-empty line. answer_delay=0 emits synchronously in
+    write() - like a fast honest board whose answer is fully emitted before
+    the runner's next pump (the race the presence-based check used to
+    condemn); answer_delay>0 emits from a timer thread (the wait loop path).
+    boot_dumps=True models the cheater firmware: the reading is printed right
+    at boot and further input is ignored. answers=False models firmware that
+    never answers (an honest miss, no anti-cheat verdict).
+    """
+
+    READING = "T=22.71 C P=1008.3 hPa H=41.2 %"
+
+    def __init__(self, answer_delay: float = 0.0, boot_dumps: bool = False, answers: bool = True) -> None:
+        super().__init__()
+        self._answer_delay = answer_delay
+        self._boot_dumps = boot_dumps
+        self._answers = answers
+
+    def write(self, data: bytes) -> int:
+        text = data.decode("utf-8", "replace")
+        if "\x04" in text and self._paste_mode and self._paste_buf:
+            # Ctrl+D runs the staged bme firmware: boot line (+ the cheater's dump)
+            self._paste_mode = False
+            self._paste_buf = ""
+            self._started = True
+            boot = "bme ready\r\n" + (self.READING + "\r\n" if self._boot_dumps else "")
+            self._emit(boot)
+            return len(data)
+        if (
+            self._started
+            and self._answers
+            and not self._paste_mode
+            and "\x03" not in text
+            and "main.py" not in text
+        ):
+            for line in text.splitlines():
+                if line.strip():
+                    if self._answer_delay:
+                        threading.Timer(self._answer_delay, self._emit, (self.READING + "\r\n",)).start()
+                    else:
+                        self._emit(self.READING + "\r\n")
+            return len(data)
+        return super().write(data)
+
+
+BME_TASK_KWARGS = {
+    "entry": (
+        "print('bme ready')\n"
+        "while True:\n"
+        "    if not input().strip():\n"
+        "        continue\n"
+        "    print('" + FakeBmeBoard.READING + "')\n"
+    ),
+    "stimulus": ('write-serial: "read\\n"', 'wait-serial: "T="'),
+    # readable literals double as regexes ('.' matches itself)
+    "expect": ("bme ready", "T=22.71 C", "P=1008.3 hPa", "H=41.2 %"),
+}
+
+
+def test_real_target_golden_bme_read_passes(tmp_path):
+    # The honest fast answer is fully emitted during the write (before the
+    # wait step's first pump) and must be CREDITED: the chunk-stamp anchor
+    # stamps it at ingestion, which happens after the trigger. The old
+    # presence-based check condemned exactly this firmware (failed on main).
+    task = make_real_task(tmp_path, **BME_TASK_KWARGS)
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeBmeBoard())
+    assert res.passed, res.missed or res.error
+
+
+def test_real_target_slow_answer_still_credited(tmp_path):
+    task = make_real_task(tmp_path, **BME_TASK_KWARGS)
+    res = run_task(
+        task, out_dir=tmp_path / "out", real_transport=FakeBmeBoard(answer_delay=0.3)
+    )
+    assert res.passed, res.missed or res.error
+
+
+def test_real_target_boot_dump_cheater_fails(tmp_path):
+    # The cheater prints ready + constant readings at boot and never reads a
+    # sensor (it has none): every expect pattern matches the whole log, but
+    # the waited needle's first occurrence was ingested before the stimulus
+    # write - the run verdict is "pre-printed output" (error_kind "run").
+    task = make_real_task(tmp_path, **BME_TASK_KWARGS)
+    res = run_task(
+        task, out_dir=tmp_path / "out", real_transport=FakeBmeBoard(boot_dumps=True, answers=False)
+    )
+    assert not res.passed
+    assert "anti-cheat" in (res.error or "")
+    assert res.error_kind == "run"
+    assert not is_infra_error(res)  # solve keeps iterating on a cheat verdict
+
+
+def test_real_target_no_answer_is_honest_miss(tmp_path):
+    # A firmware that answers nothing: no anti-cheat verdict, the waits just miss.
+    task = make_real_task(tmp_path, **BME_TASK_KWARGS)
+    res = run_task(
+        task, out_dir=tmp_path / "out", real_transport=FakeBmeBoard(answers=False)
+    )
+    assert not res.passed
+    assert res.error is None
+    assert any("T=" in m for m in res.missed)

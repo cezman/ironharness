@@ -44,6 +44,10 @@ class RealRepl:
     def __init__(self, transport: Any, *, boot_quiet_sec: float | None = None) -> None:
         self._t = transport
         self._text = ""
+        # every ingested chunk as (monotonic stamp, text), position-consistent
+        # with _text (IH-33): the runner maps a needle's first occurrence back
+        # to its chunk stamp for the anti-cheat anchor
+        self._chunks: list[tuple[float, str]] = []
         time.sleep(_BOOT_QUIET_SEC if boot_quiet_sec is None else boot_quiet_sec)
         self.interrupt()
 
@@ -59,7 +63,13 @@ class RealRepl:
                 data = self._t.read(256)  # фейки без in_waiting: read неблокирующий
             if not data:
                 return
-            self._text += data.decode("utf-8", "replace")
+            chunk = data.decode("utf-8", "replace")
+            self._chunks.append((time.monotonic(), chunk))
+            self._text += chunk
+
+    def chunks(self) -> list[tuple[float, str]]:
+        """A snapshot of the ingested (stamp, text) chunks (see _pump)."""
+        return list(self._chunks)
 
     def output(self) -> str:
         self._pump()
@@ -98,7 +108,10 @@ class RealRepl:
         self.write(CTRL_D)  # soft reset: чистое состояние без main.py
         time.sleep(_SOFT_RESET_SEC)
         self._drain()
+        # text and chunks are cleared together - the anti-cheat maps positions
+        # in text back to chunk stamps, so they must stay consistent
         self._text = ""
+        self._chunks = []
 
         deadline = time.monotonic() + 8
         while PASTE_BANNER not in self.output():

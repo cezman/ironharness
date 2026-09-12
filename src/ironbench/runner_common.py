@@ -118,6 +118,42 @@ def _plain_text(pattern: str) -> str | None:
     return pattern if not re.search(r"[\\^$.|?*+()\[\]{}]", pattern) else None
 
 
+def first_occurrence_stamp(
+    text: str,
+    chunks: list[tuple[float, str]],
+    needle: str,
+    since: float | None,
+) -> float | None:
+    """Ingestion stamp of the chunk holding the first occurrence of `needle`,
+    or None when it is not printed yet / was printed unprompted (stamped
+    before `since`; since=None = no stimulus write happened yet).
+
+    The caller guarantees text and chunks stay position-consistent (every
+    chunk was appended to text in order). Only a strictly-earlier stamp
+    condemns: an ingestion stamp EQUAL to the trigger stamp means write ->
+    firmware read -> echo -> ingest completed within one monotonic clock tick
+    (field-proven on coarse-clock Windows CI, where a legal fast answer was
+    condemned as pre-printed). Same-tick order is unknowable, so the benefit
+    of the doubt goes to the agent. Shared by the unix target (reader thread
+    ingests continuously) and the real target (IH-33 chunk-stamp anchor; the
+    real runner drains the board buffer before recording a trigger stamp so
+    stale buffered output cannot masquerade as a fresh answer).
+    """
+    pos = text.find(needle)
+    if pos < 0:
+        return None
+    seen = 0
+    stamp_hit: float | None = None
+    for stamp, chunk in chunks:
+        seen += len(chunk)
+        if pos < seen:
+            stamp_hit = stamp
+            break
+    if stamp_hit is None or since is None:
+        return None
+    return stamp_hit if stamp_hit >= since else None
+
+
 def _parse_delay(value: str) -> float:
     """'1500ms' -> 1.5, '2s' -> 2.0; no suffix means seconds."""
     text = str(value).strip().lower()

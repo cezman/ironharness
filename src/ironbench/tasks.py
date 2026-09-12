@@ -109,6 +109,10 @@ class Task:
     events: tuple[dict, ...] = ()
     tags: tuple[str, ...] = ()
     level: int | None = None
+    # Expert notes from the live bench (IH-21 core, first used by the real
+    # task bme-read): fed into the solve agent's prompt; the has-notes fact
+    # is recorded in results.jsonl for benchmark honesty.
+    notes: tuple[str, ...] = ()
 
 
 def load_task(task_dir: Path) -> Task:
@@ -392,6 +396,11 @@ def load_task(task_dir: Path) -> Task:
         isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 5
     ):
         raise ValueError(f"{task_file}: level must be an integer 1..5")
+    notes = raw.get("notes") or []
+    if not isinstance(notes, list) or not all(
+        isinstance(n, str) and n.strip() for n in notes
+    ):
+        raise ValueError(f"{task_file}: notes must be a list of non-empty strings")
     # IH-24: a task must declare something to score - expect patterns, an
     # events section (unix only: the other runners ignore task.events, so an
     # events-only task there would pass ANY output - the same vacuous hole
@@ -427,6 +436,7 @@ def load_task(task_dir: Path) -> Task:
         events=tuple(events),
         tags=tuple(tags),
         level=level,
+        notes=tuple(notes),
     )
 
 

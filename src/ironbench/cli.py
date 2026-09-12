@@ -315,6 +315,9 @@ def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path):
                     "duration_sec": r.duration_sec,
                     "error": r.error,
                     "error_kind": r.error_kind,
+                    # benchmark honesty (IH-21): whether the agent's prompt
+                    # carried the task's expert notes
+                    "notes": bool(task.notes),
                 },
                 ensure_ascii=False,
             )

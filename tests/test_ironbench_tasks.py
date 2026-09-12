@@ -115,6 +115,28 @@ def test_load_task_rejects_bad_level(tmp_path):
         load_task(tmp_path / "aaa")
 
 
+def test_load_task_notes_roundtrip(tmp_path):
+    # IH-21 core: expert notes load into the Task and ride into the prompt
+    write_task(
+        tmp_path,
+        "name: aaa\nexpect:\n  - 'x'\nnotes:\n  - 'first lesson'\n  - 'second lesson'\n",
+        dirname="aaa",
+    )
+    assert load_task(tmp_path / "aaa").notes == ("first lesson", "second lesson")
+
+
+def test_load_task_notes_optional_and_empty_section_ok(tmp_path):
+    write_task(tmp_path, "name: aaa\nexpect:\n  - 'x'\nnotes:\n", dirname="aaa")
+    assert load_task(tmp_path / "aaa").notes == ()
+
+
+@pytest.mark.parametrize("raw", ["notes: 'one string'\n", "notes:\n  - ''\n", "notes:\n  - 7\n"])
+def test_load_task_rejects_bad_notes(tmp_path, raw):
+    write_task(tmp_path, f"name: aaa\nexpect:\n  - 'x'\n{raw}", dirname="aaa")
+    with pytest.raises(ValueError, match="notes"):
+        load_task(tmp_path / "aaa")
+
+
 def test_golden_tasks_have_tags_and_levels():
     from pathlib import Path
 
@@ -154,7 +176,25 @@ def test_golden_tasks_all_load_and_include_expectations():
         "p-regulator",
         "pid-antiwindup",
         "system-id",
+        "bme-read",
     } <= names
+
+
+def test_bme_read_is_real_target_with_notes():
+    # IH-33 pin: the first live-board golden task stays target "real" and
+    # carries bench notes - the solve agent's only edge on real hardware
+    from pathlib import Path
+
+    task = load_task(
+        Path(__file__).parents[1] / "src" / "ironbench" / "tasks" / "bme-read"
+    )
+    assert task.target == "real"
+    assert task.tags == ("data",)
+    assert task.notes, "the bench lessons must ship with the task (IH-21)"
+    # the wait is anchored to the request line: unique needle, real trigger
+    waits = [s["wait-serial"] for s in task.stimulus if "wait-serial" in s]
+    assert waits == ["T="]
+    assert any("write-serial" in s for s in task.stimulus)
 
 
 def test_wokwi_stimulus_controls_exist_in_diagram():

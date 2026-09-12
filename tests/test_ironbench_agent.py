@@ -341,3 +341,42 @@ def test_agent_solve_results_writes_error_kind(tmp_path, monkeypatch):
     assert record["task"] == "blink"
     assert record["error_kind"] == "run"
     assert record["solved"] is False
+
+
+def test_first_prompt_carries_expert_notes():
+    # IH-21 core: notes ride into the measured prompt; without them - unchanged
+    import dataclasses
+
+    task = dataclasses.replace(make_task(), notes=("GPIO21 is SDA", "keep output ASCII"))
+    prompt = agent_module._first_prompt(task)
+    assert "Expert notes from the bench team" in prompt
+    assert "- GPIO21 is SDA" in prompt
+    assert "Expert notes" not in agent_module._first_prompt(make_task())
+
+
+def test_agent_solve_results_records_notes_fact(tmp_path, monkeypatch):
+    # IH-21 honesty: results.jsonl tells the report whether the prompt had notes
+    import dataclasses
+    import json
+
+    import ironbench.cli as cli_module
+    from ironbench.agent import AttemptResult
+
+    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None):
+        return [
+            AttemptResult(
+                task=task.name,
+                attempt=1,
+                solved=True,
+                iterations=1,
+                duration_sec=1.0,
+                work_dir=out_dir / "attempt-1",
+            )
+        ]
+
+    monkeypatch.setattr(cli_module, "agent_solve", fake_agent_solve)
+    cfg = SolveConfig(base_url="http://x", api_key="k", model="m")
+    with_notes = dataclasses.replace(make_task(), notes=("a lesson",))
+    cli_module.agent_solve_results(with_notes, cfg, attempts=1, solve_dir=tmp_path / "camp")
+    record = json.loads((tmp_path / "camp" / "blink" / "results.jsonl").read_text("utf-8"))
+    assert record["notes"] is True

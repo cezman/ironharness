@@ -342,3 +342,18 @@ def test_mqtt_collect_timeout_gap_does_not_false_flag(tmp_path):
     finally:
         broker.stop()
     assert res.passed, (res.error, res.missed)
+
+
+def test_first_occurrence_stamp_mapping_rules():
+    # IH-33: the pure mapping shared by the unix box and the real target -
+    # first occurrence -> its chunk stamp; only a strictly-earlier stamp
+    # condemns, same-tick order is unknowable (benefit of the doubt).
+    from ironbench.runner_common import first_occurrence_stamp
+
+    chunks = [(1.0, "boot\n"), (5.0, "T=1 C\n")]
+    text = "boot\nT=1 C\n"
+    assert first_occurrence_stamp(text, chunks, "T=", None) is None  # no trigger yet
+    assert first_occurrence_stamp(text, chunks, "T=", 3.0) == 5.0  # after trigger
+    assert first_occurrence_stamp(text, chunks, "T=", 5.0) == 5.0  # same tick: credited
+    assert first_occurrence_stamp(text, chunks, "T=", 7.0) is None  # pre-trigger dump
+    assert first_occurrence_stamp(text, chunks, "zz", 3.0) is None  # never printed
