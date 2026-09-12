@@ -10,6 +10,7 @@ from io_core.errors import (
     RateLimitExceeded,
     SandboxViolation,
     TransportClosedError,
+    TransportIoError,
     VerificationError,
 )
 from io_core.esp_flash import EspFlasher
@@ -53,6 +54,7 @@ __all__ = [
     "SerialTransport",
     "Session",
     "TransportClosedError",
+    "TransportIoError",
     "VerificationError",
     "expect_read",
     "read_events",

@@ -93,8 +93,10 @@ def echo(text: str) -> str:
 #   mqtt_read are deliberately NOT readOnly: they drain a stream/queue -
 #   a replay loses data for later reads.
 # - destructiveHint=True for esp_flash/esp_erase (real hardware),
-#   file_delete, and file_write (an overwrite is not an additive update);
-#   plain state writes stay destructiveHint=False.
+#   file_delete, file_write (an overwrite is not an additive update), and
+#   serial_put/serial_get (IH-34: both overwrite - the device file and the
+#   sandbox destination respectively); plain state writes stay
+#   destructiveHint=False.
 # - openWorldHint=True on the tools that reach outside the process
 #   (connects, I/O over ports/hosts/brokers); the close/subscribe tools
 #   leave it unset (the spec default is true anyway).
@@ -154,6 +156,24 @@ def serial_reset(name: str, pulse_sec: float = 0.1, settle_sec: float = 2.0) -> 
     never resets - reset happens only here. Waits settle_sec for the boot."""
     get_session().serial_reset(name, pulse_sec=pulse_sec, settle_sec=settle_sec)
     return f"ok: serial {name!r} reset (pulse {pulse_sec}s, settle {settle_sec}s)"
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True))
+def serial_put(name: str, source_path: str, target_path: str) -> str:
+    """Pushes a sandbox file onto the device filesystem over the raw REPL;
+    target_path on the device is overwritten. source_path is sandbox-relative
+    (stage content with file_write first)."""
+    n = get_session().serial_put(name, source_path, target_path)
+    return f"ok: serial {name!r} put {n} bytes -> {target_path}"
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True))
+def serial_get(name: str, target_path: str, dest_path: str) -> str:
+    """Pulls a device file into the sandbox over the raw REPL; dest_path
+    (sandbox-relative) is overwritten. A missing file fails with the
+    board's error text."""
+    n = get_session().serial_get(name, target_path, dest_path)
+    return f"ok: serial {name!r} get {n} bytes -> {dest_path}"
 
 
 # --- serial background reader (IH-18): tail + expect-style waits ---
