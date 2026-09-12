@@ -78,15 +78,17 @@ def _pump_lines(src, sink: queue.Queue) -> None:
 
 
 def _pump_stderr(src, sink: list) -> None:
-    """Thread body: accumulate stderr until EOF (controller prints +
-    tracebacks; the thread is a daemon - it ends when the process dies).
-    The accumulation is bounded (IH-25: the controller is untrusted - a
-    stderr flood must not eat harness memory; only the tail lands in the
-    feedback log anyway)."""
+    """Thread body: accumulate stderr until the 500-line cap (controller
+    prints + tracebacks; the thread is a daemon - it ends when the process
+    dies). IH-25: the controller is untrusted - after the cap the pipe stops
+    being drained, so a stderr flood BLOCKS the controller on write (killed
+    by the wall deadline) instead of eating harness memory. Only the captured
+    head lands in the feedback log anyway."""
     try:
-        for chunk in src.readlines():
-            if len(sink) < 500:
-                sink.extend(chunk.splitlines(keepends=True))
+        for chunk in src:
+            sink.extend(chunk.splitlines(keepends=True))
+            if len(sink) >= 500:
+                break
     finally:
         try:
             src.close()
