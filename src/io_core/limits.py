@@ -125,18 +125,32 @@ class RateLimitedTransport:
 
 
 class DeadlineTransport:
-    """Роняет операции OperationTimeout, когда истёк дедлайн с момента open().
+    """Роняет операции OperationTimeout, когда истёк дедлайн БЕЗДЕЙСТВИЯ.
+
+    Скользящее окно (IH-35): каждая УСПЕШНАЯ операция сдвигает дедлайн, так
+    что живая интерактивная сессия (редкие, но успешные обращения) работает
+    сколь угодно долго, а транспорт, по которому не было успешных операций
+    `seconds` подряд, требует переоткрытия — прежняя семантика «время от
+    open()» убивала живые диагностики на 10-й минуте сессии. Операция,
+    завершившаяся исключением, окно НЕ сдвигает. open/close не проверяются;
     write/read/read_line и любой другой вызываемый атрибут (modbus_read,
-    mqtt_publish, ...) проходят проверку дедлайна через форвардинг; open/close
-    не проверяются (IH-17). on_event (IH-32) журналирует отказы дедлайна."""
+    mqtt_publish, ...) идут через форвардинг с проверкой+обновлением. Отказ
+    журналируется через on_event (deadline_denied, IH-32) с секундами
+    бездействия; label (имя соединения) попадает в текст ошибки (IH-35).
+    Фоновый serial-ридер (IH-18) дренирует RAW транспорт мимо обёрток:
+    живой вывод платы окно НЕ сдвигает — это осознанно (pump не агентная
+    операция, «wedged»-линк, качающий мусор, должен состариться), поэтому
+    возможен denial при живом tail; текст ошибки называет соединение.
+    """
 
     def __init__(self, transport: Any, seconds: float, clock: Clock = time.monotonic,
-                 on_event: Callable | None = None) -> None:
+                 on_event: Callable | None = None, label: str | None = None) -> None:
         self._t = transport
         self._seconds = seconds
         self._clock = clock
         self._started: float | None = None
         self._on_event = on_event
+        self._label = label
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -147,7 +161,9 @@ class DeadlineTransport:
 
         def forwarded(*args: Any, **kwargs: Any) -> Any:
             self._check()
-            return attr(*args, **kwargs)
+            result = attr(*args, **kwargs)
+            self._started = self._clock()  # сдвиг окна: только успех
+            return result
 
         return forwarded
 
@@ -156,10 +172,18 @@ class DeadlineTransport:
             from io_core.errors import TransportClosedError
 
             raise TransportClosedError("transport is not open")
-        if self._clock() - self._started > self._seconds:
+        now = self._clock()
+        if now - self._started > self._seconds:
             if self._on_event is not None:
-                self._on_event("deadline_denied", {"deadline_sec": self._seconds})
-            raise OperationTimeout(f"deadline of {self._seconds}s expired")
+                self._on_event(
+                    "deadline_denied",
+                    {"deadline_sec": self._seconds, "idle_sec": round(now - self._started, 3)},
+                )
+            target = f" on connection {self._label!r}" if self._label else ""
+            raise OperationTimeout(
+                f"no successful operation within {self._seconds}s{target} - "
+                "the connection went stale, close and reopen it to reset the deadline"
+            )
 
     def open(self) -> None:
         self._t.open()

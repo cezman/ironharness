@@ -65,6 +65,87 @@ def test_deadline_within_limit():
         t.read(1)
 
 
+class _Boom:
+    """A transport whose every operation fails (no I/O needed)."""
+
+    def open(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def write(self, data):
+        raise OSError("port gone")
+
+
+def test_deadline_slides_on_successful_ops():
+    # IH-35 pin: the deadline is an IDLE window, not a lifetime - every
+    # successful operation pushes it out. Cumulative 8s with 4s gaps passes
+    # on a 5s deadline (a lifetime deadline would condemn the second write),
+    # then 6s of true silence denies. Fails on the pre-IH-35 semantics.
+    clock: Clock = FakeClock()
+    with DeadlineTransport(SerialTransport("loop://", timeout=0.2), seconds=5, clock=clock) as t:
+        t.write(b"a")
+        clock.advance(4)
+        t.write(b"b")  # 4s idle: refreshes the window
+        clock.advance(4)
+        t.write(b"c")  # 8s since open, 4s idle: must pass
+        clock.advance(6)
+        with pytest.raises(OperationTimeout):
+            t.write(b"d")  # 6s of silence: denied
+
+
+def test_failed_operation_does_not_refresh_deadline():
+    # IH-35: only successful operations slide the window - a transport that
+    # keeps failing goes stale exactly as one that stays silent.
+    clock: Clock = FakeClock()
+    t = DeadlineTransport(_Boom(), seconds=5, clock=clock)
+    t.open()
+    with pytest.raises(OSError):
+        t.write(b"x")  # fails: no refresh
+    clock.advance(4)
+    with pytest.raises(OSError):
+        t.write(b"x")
+    clock.advance(1.5)  # 5.5s since open, zero successful ops
+    with pytest.raises(OperationTimeout):
+        t.write(b"x")
+
+
+def test_deadline_denial_message_names_connection_and_hint():
+    # IH-35: the agent must learn WHICH connection went stale and WHAT to do.
+    clock: Clock = FakeClock()
+    events: list[tuple[str, dict]] = []
+    t = DeadlineTransport(
+        SerialTransport("loop://", timeout=0.2),
+        seconds=5,
+        clock=clock,
+        on_event=lambda kind, data: events.append((kind, data)),
+        label="esp",
+    )
+    t.open()
+    clock.advance(6)
+    with pytest.raises(OperationTimeout, match=r"'esp'.*close and reopen"):
+        t.write(b"x")
+    kind, data = events[-1]
+    assert kind == "deadline_denied"
+    assert data["deadline_sec"] == 5
+    assert data["idle_sec"] >= 6  # the journal tells how long the line was silent
+
+
+def test_reopen_resets_stale_deadline():
+    # IH-35 negative path, paired: denied before the reopen, working after.
+    clock: Clock = FakeClock()
+    t = DeadlineTransport(SerialTransport("loop://", timeout=0.2), seconds=5, clock=clock)
+    t.open()
+    clock.advance(6)
+    with pytest.raises(OperationTimeout):
+        t.write(b"x")
+    t.close()
+    t.open()
+    t.write(b"x")  # fresh window
+    t.close()
+
+
 def test_expect_read_echo():
     with SerialTransport("loop://", timeout=0.2) as t:
         t.write(b"hello")

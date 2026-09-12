@@ -304,6 +304,37 @@ def test_deadline_expires_produces_timeout(session, monkeypatch):
         session.serial_read("s", 1)
 
 
+def test_deadline_denial_names_connection(session, monkeypatch, tmp_path):
+    # IH-35: the timeout text names the stale connection - an agent with two
+    # open transports can tell which one to reopen without guessing
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_DEADLINE", "1")
+    session.serial_open("s", "loop://", timeout=0.5)
+    time.sleep(1.3)
+    with pytest.raises(OperationTimeout, match=r"'s'"):
+        session.serial_read("s", 1)
+    # the denial is journaled with the conn stamp (IH-35 closes the missing-name gap)
+    events = [
+        e for e in read_events(tmp_path / "journal.jsonl") if e.get("kind") == "deadline_denied"
+    ]
+    assert events and events[-1]["conn"] == "s"
+
+
+def test_deadline_slides_across_session_ops(session, monkeypatch):
+    # IH-35: a sparse-but-alive interactive session survives - ops 0.7s apart
+    # on a 1s deadline (cumulative 1.4s); lifetime semantics killed the third
+    # write, the sliding window condemns only true silence.
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_DEADLINE", "1")
+    session.serial_open("s", "loop://", timeout=0.5)
+    session.serial_write("s", "aa")
+    time.sleep(0.7)
+    session.serial_write("s", "bb")
+    time.sleep(0.7)
+    session.serial_write("s", "cc")  # 1.4s since open, 0.7s idle: passes
+    time.sleep(1.3)
+    with pytest.raises(OperationTimeout):
+        session.serial_read("s", 1)  # 1.3s of silence: denied
+
+
 def test_deadline_disabled_by_env(session, monkeypatch):
     monkeypatch.setenv("IRONHARNESS_TRANSPORT_DEADLINE", "off")
     session.serial_open("s", "loop://", timeout=0.5)
