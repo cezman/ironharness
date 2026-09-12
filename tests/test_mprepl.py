@@ -290,4 +290,32 @@ def test_session_serial_failures_are_journaled(tmp_path):
         s.serial_get("b", "/nope.py", "pulled/x.py")  # no such board file
     s.close()
     kinds = [e["kind"] for e in read_events(tmp_path / "journal.jsonl")]
+    # review IH-34 blocker pin: the missing-source path used to leave the
+    # journal EMPTY while the docstring promised serial_put_failed
+    assert "serial_put_failed" in kinds
     assert "serial_get_failed" in kinds
+
+
+def test_enter_retries_when_board_is_mid_boot():
+    # live finding (IH-34): the CH340 port-open pulse resets the board, so the
+    # first dance lands mid-boot. The fake's first attempt answers with boot
+    # junk containing '>' but NO raw banner: only the retry + banner matching
+    # (never the first '>') can recover - a naive prompt-match fails this test.
+    class _MidBoot(FakeRawBoard):
+        def __init__(self) -> None:
+            super().__init__()
+            self._ctrl_a_seen = 0
+
+        def write(self, data: bytes) -> int:
+            if b"\x01" in data:
+                self._ctrl_a_seen += 1
+                if self._ctrl_a_seen == 1:
+                    self._inbuf.clear()
+                    self._emit(b"ets Jul 29 2019...\r\n>>> stale boot junk\r\n")
+                    return len(data)  # no raw banner: the board is still booting
+            return super().write(data)
+
+    board = _MidBoot()
+    put_file(board, b"payload", "/f.py")
+    assert board._ctrl_a_seen >= 2  # the retry actually happened
+    assert bytes(board.files["/f.py"]) == b"payload"

@@ -104,7 +104,9 @@ class SerialTransport:
         except OSError as e:
             self._emit("read_failed", {"size": size, "error": str(e)})
             raise
-        except queue.Empty as e:  # IH-34: same non-OSError family as write's queue.Full
+        except queue.Empty as e:  # IH-34: defensive symmetry with write; live pyserial
+            # backends swallow Empty internally (read returns b""), the handler
+            # exists so a backend that does raise it can never skip the journal
             self._emit("read_failed", {"size": size, "error": f"queue.Empty: {e}"})
             raise TransportIoError(f"port buffer underflow on read: {e}") from e
         self._emit("read", {"data_hex": data.hex(), "bytes": len(data)})
@@ -119,7 +121,7 @@ class SerialTransport:
         except OSError as e:
             self._emit("read_line_failed", {"max_len": max_len, "error": str(e)})
             raise
-        except queue.Empty as e:  # IH-34: same non-OSError family as write's queue.Full
+        except queue.Empty as e:  # IH-34: defensive symmetry, see read()
             self._emit("read_line_failed", {"max_len": max_len, "error": f"queue.Empty: {e}"})
             raise TransportIoError(f"port buffer underflow on read_line: {e}") from e
         self._emit("read_line", {"data_hex": data.hex(), "bytes": len(data)})

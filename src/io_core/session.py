@@ -265,7 +265,14 @@ class Session:
         """
         self._check_open()
         self._check_kind("serial")
-        data = self.sandbox.read_file(source_path)
+        try:
+            data = self.sandbox.read_file(source_path)
+        except Exception as e:
+            self.journal(
+                "serial_put_failed",
+                {"conn": name, "source": source_path, "target": target_path, "error": str(e)},
+            )
+            raise
         with self._lock:
             if name in self._readers:
                 raise RuntimeError(
@@ -311,7 +318,14 @@ class Session:
                 {"conn": name, "source": target_path, "target": dest_path, "error": str(e)},
             )
             raise
-        written = self.sandbox.write_file(dest_path, data, overwrite=True)
+        try:
+            written = self.sandbox.write_file(dest_path, data, overwrite=True)
+        except Exception as e:
+            self.journal(
+                "serial_get_failed",
+                {"conn": name, "source": target_path, "target": dest_path, "error": str(e)},
+            )
+            raise
         self.journal(
             "serial_get",
             {"conn": name, "source": target_path, "target": dest_path, "bytes": written},

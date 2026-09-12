@@ -118,9 +118,10 @@ class MpRepl:
                 time.sleep(1.0)  # let the boot finish, then dance again
 
     def exit_(self) -> None:
-        """Back to the normal REPL. Best effort: a dead board must not mask
-        the original error of a failed transfer."""
-        with contextlib.suppress(OSError):
+        """Back to the normal REPL. Best effort: ANY failure here (dead
+        board, deadline, closed link) must not mask the original error of a
+        failed transfer, hence Exception - not just OSError."""
+        with contextlib.suppress(Exception):
             self._t.write(CTRL_B)
 
     def exec_(self, command: str) -> str:
@@ -128,7 +129,10 @@ class MpRepl:
 
         The board answers with 'OK' + output + Ctrl+D + error text + Ctrl+D
         + '>'; the 'OK' acceptance mark is stripped here. A non-empty error
-        text raises MpReplError carrying the traceback.
+        text raises MpReplError carrying the traceback. Constraint: the
+        driver's own commands never print Ctrl+D inside their output (hex
+        payload only) - an exec whose output contains a raw \\x04 byte would
+        desync the section parsing.
         """
         deadline = time.monotonic() + EXEC_TIMEOUT_SEC
         self._t.write(command.encode("utf-8") + CTRL_D)
@@ -199,9 +203,11 @@ class MpRepl:
 
     def _best_effort_close(self) -> None:
         """f.close() after a failed transfer - errors here (dead board, dead
-        link) must never mask the original transfer failure."""
+        link) must never mask the original transfer failure. `f` is always
+        bound at this point: this path is reachable only after a successful
+        open exec."""
         with contextlib.suppress(Exception):
-            self.exec_("try:\n    f.close()\nexcept NameError:\n    pass")
+            self.exec_("f.close()")
 
 
 def put_file(t: Any, data: bytes, target_path: str, *, chunk: int = DEFAULT_CHUNK) -> int:
