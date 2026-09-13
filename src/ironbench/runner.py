@@ -97,7 +97,7 @@ from ironbench.runner_wokwi import (
     default_cli,
     generate_paste_scenario,
 )
-from ironbench.tasks import Task
+from ironbench.tasks import Task, check_target_compat
 
 __all__ = [
     "ERROR_INFRA",
@@ -187,6 +187,25 @@ def run_task(
     real_transport - a ready transport (tests, usually loop://), real_port -
     the live board's COM port (otherwise env IRONBENCH_REAL_PORT).
     """
+    # IH-38: a target swapped in after load_task (--target override) is
+    # re-validated here - the enforcement point every caller shares, so a
+    # task whose detectors the target does not execute can never run to a
+    # vacuous PASS.
+    try:
+        check_target_compat(task)
+    except ValueError as e:
+        result = TaskResult(
+            task=task.name,
+            passed=False,
+            exit_code=None,
+            duration_sec=0.0,
+            serial_log=None,
+            missed=tuple(task.expect),
+            error=str(e),
+            error_kind=ERROR_INFRA,
+        )
+        _journal_result(journal, result)
+        return result
     if task.target == "wokwi":
         return _run_wokwi(task, out_dir=out_dir, cli_path=cli_path, token=token, journal=journal)
     if task.target == "renode":

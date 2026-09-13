@@ -182,6 +182,12 @@ def load_task(task_dir: Path) -> Task:
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
         raise ValueError(f"{task_file}: unknown target {target!r} (allowed: {TASK_TARGETS})")
+    if target == "unix" and "set-control" in {k for step in stimulus for k in step}:
+        # authoring error at load time (IH-38 review N1): the unix runner has
+        # no Wokwi buttons/sensors, so the step can never execute
+        raise ValueError(
+            f"{task_file}: set-control steps are not supported by the unix target"
+        )
     # anti-cheat (IH-14): on the runner-anchored targets a wait-serial answer is
     # anchored to the stimulus that asked for it (a preceding write-serial or
     # mqtt-publish). A wait without any preceding trigger would false-flag
@@ -450,3 +456,70 @@ def load_tasks(tasks_dir: Path) -> list[Task]:
         if d.is_dir() and (d / TASK_FILE).is_file()
     ]
     return sorted(tasks, key=lambda t: t.name)
+
+
+def check_target_compat(task: Task) -> None:
+    """Re-validates the target-dependent task rules (IH-38).
+
+    load_task validates the sections against the task's NATIVE target; the
+    CLI --target override replaces target AFTER loading, which used to bypass
+    every per-target rule - `p-regulator --target unix` ran with zero scoring
+    detectors (plant requirements not executed, expect/events empty) and
+    PASSED an arbitrary program. Called by run_task before dispatching and by
+    the CLI right after the replace. Raises ValueError listing every
+    incompatibility.
+    """
+    problems: list[str] = []
+    t = task.target
+    if t not in TASK_TARGETS:
+        problems.append(f"unknown target {t!r} (allowed: {TASK_TARGETS})")
+    if task.plant and t != "plant":
+        problems.append("the plant section (scoring requirements) is only executed by the plant target")
+    if t == "plant" and not task.plant:
+        problems.append("the plant target has no detector without a plant section")
+    if task.events and t != "unix":
+        problems.append("the events section is only scored by the unix target")
+    if task.shim and t != "unix":
+        problems.append("the harness shim is only supported by the unix target")
+    if task.noise and t != "unix":
+        problems.append("the noise section is only supported by the unix target")
+    if task.mqtt and t != "unix":
+        problems.append("the mqtt section (broker) is only supported by the unix target")
+    if t == "unix" and any("set-control" in step for step in task.stimulus):
+        problems.append("set-control steps are not supported by the unix target")
+    if t != "unix" and MQTT_STEP_KEYS & {k for step in task.stimulus for k in step}:
+        # direct rule (IH-38 review N2): mqtt stimulus steps are unix-only,
+        # not only transitively through the mqtt section
+        problems.append("mqtt stimulus steps are only supported by the unix target")
+    if t == "renode":
+        missing = {"platform", "firmware"} - set(task.renode)
+        if missing:
+            problems.append(
+                f"the renode target requires platform and firmware in the renode section "
+                f"(missing: {sorted(missing)})"
+            )
+    if t in ("unix", "renode", "real"):
+        seen_trigger = False
+        for step in task.stimulus:
+            if "write-serial" in step or "mqtt-publish" in step:
+                seen_trigger = True
+            if "wait-serial" in step and not seen_trigger:
+                problems.append(
+                    "wait-serial must be preceded by a write-serial or mqtt-publish step "
+                    "(the answer is anchored to the stimulus that asked for it)"
+                )
+                break
+    has_detector = (
+        bool(task.expect)
+        or (bool(task.events) and t == "unix")
+        or (bool(task.plant) and t == "plant")
+    )
+    if not has_detector:
+        problems.append(
+            "no scoring detector on this target (expect patterns, unix events, "
+            "or plant requirements) - any output would pass"
+        )
+    if problems:
+        raise ValueError(
+            f"task {task.name!r} is not compatible with target {t!r}: " + "; ".join(problems)
+        )

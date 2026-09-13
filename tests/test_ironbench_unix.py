@@ -4,6 +4,7 @@ a local script reading stdin and printing to stdout. No WSL, no build.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import sys
@@ -129,8 +130,19 @@ def test_unix_hang_until_wall_deadline(tmp_path):
     assert res.missed == task.expect
 
 
+def test_unix_set_control_rejected_at_load(tmp_path):
+    # IH-38 review N1: a natively-authored unix task with set-control is an
+    # authoring error - it surfaces at load_task, before any run.
+    with pytest.raises(ValueError, match="set-control"):
+        make_unix_task(tmp_path, stimulus=['set-control: "button0: true"'])
+
+
 def test_unix_set_control_rejected_upfront(tmp_path):
-    task = make_unix_task(tmp_path, stimulus=['set-control: "button0: true"'])
+    # a task mutated to set-control AFTER load still gets the clean infra
+    # refusal from run_task (the solve loop early-exits on error_kind=infra)
+    task = dataclasses.replace(
+        make_unix_task(tmp_path), stimulus=({"set-control": "button0: true"},)
+    )
     res = run_fake_unix(tmp_path, task, "echo")
     assert not res.passed
     assert "set-control" in (res.error or "")
