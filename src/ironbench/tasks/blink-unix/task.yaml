@@ -11,7 +11,9 @@ description: >-
   (a shim) and records every pin transition; the scoring checks that at least
   10 transitions happened and that every interval between consecutive
   transitions is within 350..650 ms - a script that merely prints strings
-  cannot pass.
+  (with any timestamps, even well-timed fake ones printed in a burst) cannot
+  pass: the harness checks the real arrival pacing of the output, not just
+  the text.
 entry: solution.py
 target: unix
 shim: machine

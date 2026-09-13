@@ -34,13 +34,14 @@ def _check_events(serial_text: str, events: tuple[dict, ...]) -> tuple[str, ...]
     declared bounds. A cheater printing bare expected strings produces no
     parseable events and fails the count.
 
-    Accepted residual (narrowed by IH-24): a cheater that SIMULATES the shim
-    line format with well-timed fake timestamps now ALSO fails when the run
-    carries chunk-stamp anchors (see _check_events_realtime) - fake lines
-    printed in one dump are ingested within milliseconds, which violates the
-    declared period. Only output paced like real hardware passes; the
-    residual is a simulated device paced by real sleeps. Passive tasks (no
-    stimulus triggers) keep the old text-only scoring."""
+    Accepted residual (narrowed by IH-24 and closed for passives by IH-44):
+    a cheater that SIMULATES the shim line format with well-timed fake
+    timestamps also fails when the run carries chunk-stamp anchors (see
+    _check_events_realtime) - which now covers EVERY events task, passive
+    ones included; fake lines printed in one burst are ingested within
+    milliseconds, which violates the declared period. Only output paced like
+    real hardware passes.
+    """
     missed: list[str] = []
     for ev in events:
         stamps: list[float] = []
@@ -89,6 +90,11 @@ def _check_events_realtime(
     physically unverifiable for a dump. Honest firmware paced by sleeps
     ingests line-by-line with real gaps and passes with the tolerance.
     Returns the same missed-strings shape as _check_events.
+
+    IH-44: the anchor applies to every events task - passive tasks (no
+    stimulus triggers) included. Without a trigger there is no anchor point,
+    but none is needed: the deltas between consecutive event-line ingestion
+    stamps alone distinguish a paced device from a burst dump.
 
     Bound: the anchor only bites when period_ms[0] exceeds the tolerance
     (otherwise lo <= 0 and a burst dump satisfies it) - declare periods of
@@ -276,6 +282,9 @@ def _run_unix(
     # hoisted ABOVE the try: the post-run event anchor reads it after the
     # finally block, and an infra failure must land as a clean TaskResult,
     # not as an UnboundLocalError piercing run_task
+    box: dict = {"text": "", "chunks": [], "eof": False, "lock": threading.Lock()}
+    # same hoist (IH-44): the always-on realtime anchor reads box even when
+    # an infra failure happened before the reader thread bound it
     proc = None
     writer = None  # the async stdin pump; bound after the process spawns
     mqtt_client: MqttTransport | None = None
@@ -639,11 +648,12 @@ def _run_unix(
     duration = round(time.monotonic() - start, 2)
     missed, hit_fail = common._check_patterns(serial_text, task.expect, task.fail)
     missed = missed + _check_events(serial_text, task.events)
-    # IH-24 anchor: the same period bounds re-checked over the REAL chunk
-    # ingestion stamps - a fake-timestamp dump fails here even when its
-    # embedded timestamps look right. Passive tasks (no trigger writes)
-    # legitimately skip the anchor (no stimulus to be anchored to).
-    if task.events and trigger_stamps:
+    # IH-24 anchor, IH-44 extension: the same period bounds re-checked over
+    # the REAL chunk ingestion stamps - for every events task, passive ones
+    # included. A passive task has no trigger stamps, but a burst dump still
+    # violates the declared period: its ingestion deltas are ~0 regardless
+    # of how perfect the embedded timestamps look.
+    if task.events:
         missed = missed + _check_events_realtime(box, task.events)
     passed = not missed and not hit_fail and error is None
     result = common.TaskResult(
