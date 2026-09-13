@@ -181,13 +181,16 @@ def load_task(task_dir: Path) -> Task:
             ):
                 raise ValueError(f"{task_file}: mqtt-collect.count must be an integer >= 1")
             ts = col.get("timeout_sec", 10)
-            if isinstance(ts, bool) or not isinstance(ts, (int, float)) or ts <= 0:
-                raise ValueError(f"{task_file}: mqtt-collect.timeout_sec must be a number > 0")
-            if ts > 600:
-                # IH-46 review F2: the collect deadline derives from this -
-                # an unbounded value defeats the task wall deadline
+            if (
+                isinstance(ts, bool)
+                or not isinstance(ts, (int, float))
+                or not (0 < ts <= 600)
+            ):
+                # IH-46 review F2: the collect deadline derives from this - a
+                # non-finite or unbounded value defeats the wall deadline
+                # (0 < nan is False, nan > 600 is False - hence the combined form)
                 raise ValueError(
-                    f"{task_file}: mqtt-collect.timeout_sec must be <= 600, got {ts}"
+                    f"{task_file}: mqtt-collect.timeout_sec must be a finite number in 1..600, got {ts!r}"
                 )
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
@@ -391,6 +394,12 @@ def load_task(task_dir: Path) -> Task:
         for key, value in requirements.items():
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
                 raise ValueError(f"{task_file}: plant.requirements.{key} must be a number > 0")
+            if isinstance(value, float) and not math.isfinite(value):
+                # IH-24 class: a non-finite tolerance makes every comparison
+                # False - the detector would pass anything
+                raise ValueError(
+                    f"{task_file}: plant.requirements.{key} must be finite, got {value}"
+                )
         disturbances = plant_section.get("disturbances", [])
         if not isinstance(disturbances, list):
             raise TypeError(f"{task_file}: plant.disturbances must be a list of mappings")
@@ -409,6 +418,12 @@ def load_task(task_dir: Path) -> Task:
                 raise ValueError(f"{task_file}: disturbances.at must be a number >= 0")
             if isinstance(d["ambient"], bool) or not isinstance(d["ambient"], (int, float)):
                 raise ValueError(f"{task_file}: disturbances.ambient must be a number")  # noqa: TRY004
+            for key in ("at", "ambient"):
+                v = d[key]
+                if isinstance(v, float) and not math.isfinite(v):
+                    # a non-finite ambient poisons y from that point on - every
+                    # requirement comparison goes nan and auto-passes (IH-24 class)
+                    raise ValueError(f"{task_file}: disturbances.{key} must be finite, got {v}")
     tags = raw.get("tags", [])
     if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
         raise ValueError(f"{task_file}: tags must be a list of strings")

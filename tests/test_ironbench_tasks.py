@@ -300,6 +300,39 @@ def test_mqtt_collect_timeout_is_bounded(tmp_path):
         load_task(d)
 
 
+def test_mqtt_collect_nan_timeout_is_rejected(tmp_path):
+    """IH-46 review: YAML .nan passes both 0 < nan and nan > 600 checks -
+    a non-finite collect timeout must be rejected like an unbounded one."""
+    d = write_task(
+        tmp_path,
+        "name: m\ntarget: unix\nmqtt: {client_id: c}\ntimeout_sec: 5\n"
+        "stimulus:\n  - mqtt-collect: {topic: t, count: 1, timeout_sec: .nan}\n",
+    )
+    with pytest.raises(ValueError, match="mqtt-collect"):
+        load_task(d)
+
+
+def test_plant_nan_tolerance_and_disturbance_are_rejected(tmp_path):
+    """IH-46 review: a non-finite requirement tolerance makes every
+    comparison False (the detector passes anything) and a non-finite
+    disturbance ambient poisons y so all requirements auto-pass."""
+    base = "name: n\ntarget: plant\nplant:\n  K: 1\n  T: 1\n  duration: 100\n  setpoint: 50\n"
+    d = write_task(
+        tmp_path,
+        base + "  dt: 0.5\n  requirements: {steady_error: .inf}\n",
+    )
+    with pytest.raises(ValueError, match="finite"):
+        load_task(d)
+    d2 = write_task(
+        tmp_path,
+        base + "  dt: 0.5\n  requirements: {steady_error: 1.0}\n"
+        "  disturbances:\n    - {at: 5, ambient: .nan}\n",
+        dirname="n2",
+    )
+    with pytest.raises(ValueError, match="finite"):
+        load_task(d2)
+
+
 def test_plant_nan_numerics_are_rejected(tmp_path):
     """IH-46 review N4: YAML .nan floats bypass >-style bounds - reject them
     at load with an authoring error instead of crashing the runner."""

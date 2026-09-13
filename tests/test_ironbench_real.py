@@ -330,3 +330,4 @@ def test_real_pump_caps_retained_output():
         f"the real pump retained {len(out)} bytes - no cap"
     )
     assert "".join(c for _, c in repl.chunks()) == out
+    assert "truncated" in out, "the cap was hit silently - no truncation marker (IH-46)"
