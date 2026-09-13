@@ -16,9 +16,14 @@ classifiers = [
 ]
 
 dependencies = [
-    "mcp>=1.2.0",
+    # IH-41: the floors must be TESTED, not just tolerated - mcp 1.2.0 and
+    # pymodbus 3.7.0 legally satisfied the old metadata and broke core paths
+    # (mcp 1.2.0 has no MCPServer; pymodbus 3.7.0 has no device_id kwarg).
+    # The floors below are the lock-verified minimums the CI min-deps job
+    # installs exactly (scripts/min_deps.py parses them from here).
+    "mcp>=2.1.1",
     "paho-mqtt>=2.0",
-    "pymodbus>=3.7",
+    "pymodbus>=3.15.0",
     "pyserial>=3.5",
     "pyyaml>=6.0.3",
 ]

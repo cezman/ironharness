@@ -23,6 +23,27 @@ jobs:
       - name: Tests
         run: uv run pytest -q
 
+  min-deps:
+    # IH-41: the declared floors are TESTED, not just tolerated - an env that
+    # pins the minimum allowed versions must not break core imports/calls.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Resolve the exact pyproject floors
+        run: |
+          uv run --no-project python scripts/min_deps.py pyproject.toml > floors.txt
+          cat floors.txt
+      - name: Install the floors + the project (no newer deps allowed in)
+        run: |
+          uv venv .venv-min
+          uv pip install --python .venv-min/bin/python -r floors.txt "pytest>=8.0"
+          uv pip install --python .venv-min/bin/python --no-deps -e .
+      - name: Tests on the floors
+        run: .venv-min/bin/python -m pytest -q
+
   packaging:
     runs-on: ubuntu-latest
     steps:
