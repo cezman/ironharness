@@ -347,21 +347,34 @@ def test_real_target_without_port_is_infra_fail(tmp_path, monkeypatch):
 
 
 def test_renode_target_without_section_is_clean_fail(tmp_path, monkeypatch):
-    # a renode task without a renode section - a clean infrastructure FAIL without a run
+    # a renode task without a renode section - a clean infrastructure FAIL
+    # without a run (IH-38: the refusal now happens at the compat gate, before
+    # dispatch, with the same "platform and firmware" substance in the error)
     task = dataclasses.replace(make_task(tmp_path), target="renode")
 
     def forbidden_wokwi(*a, **k):
         raise AssertionError("the wokwi backend was called for the renode target")
 
+    def forbidden_renode(*a, **k):
+        raise AssertionError("the renode backend ran a task without platform/firmware")
+
     monkeypatch.setattr(runner_module, "_run_wokwi", forbidden_wokwi)
+    monkeypatch.setattr(runner_module, "_run_renode", forbidden_renode)
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
-    assert "failed to prepare task" in (res.error or "")
+    assert res.error_kind == runner_module.ERROR_INFRA
+    assert "not compatible" in (res.error or "")
     assert "platform and firmware" in (res.error or "")
 
 
 def test_renode_target_dispatches_to_renode_backend(tmp_path, monkeypatch):
-    task = dataclasses.replace(make_task(tmp_path), target="renode")
+    # IH-38: the dispatch test now needs a task the compat gate lets through -
+    # a renode section with platform and firmware.
+    task = dataclasses.replace(
+        make_task(tmp_path),
+        target="renode",
+        renode={"platform": "nucleo_f103rb", "firmware": "fw.elf"},
+    )
     seen = {}
 
     def fake_renode(task_, *, out_dir, renode_cmd=None, journal=None):

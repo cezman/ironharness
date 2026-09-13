@@ -19,7 +19,7 @@ from ironbench.journal_view import write_view
 from ironbench.publish import PublishError, publish_report
 from ironbench.report import render_leaderboard, write_report
 from ironbench.runner import clean_runs, run_task
-from ironbench.tasks import TASK_TARGETS, load_tasks
+from ironbench.tasks import TASK_TARGETS, check_target_compat, load_tasks
 
 DEFAULT_TASKS_DIR = Path(__file__).resolve().parent / "tasks"
 SOLVE_DIR_NAME = "solve"
@@ -172,6 +172,13 @@ def main(argv=None) -> int:
             return 2
         if args.target:
             task = dataclasses.replace(task, target=args.target)
+            # IH-38: load_task validated the NATIVE target; the override needs
+            # a re-check, otherwise a plant task on unix runs with no detector.
+            try:
+                check_target_compat(task)
+            except ValueError as e:
+                print(f"refused: {e}")
+                return 2
         cfg = resolve_llm_config()
         if args.iterations is not None:
             cfg = dataclasses.replace(cfg, max_iterations=args.iterations)
@@ -228,6 +235,14 @@ def main(argv=None) -> int:
         return 2
     if args.target:
         selected = [dataclasses.replace(t, target=args.target) for t in selected]
+        # IH-38: same re-validation as solve - the override bypassed the
+        # per-target rules from load_task.
+        for t in selected:
+            try:
+                check_target_compat(t)
+            except ValueError as e:
+                print(f"refused: {e}")
+                return 2
 
     with JsonlJournal(args.out / "journal.jsonl", actor="ironbench") as journal:
         all_passed = True
