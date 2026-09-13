@@ -72,3 +72,32 @@ def test_cli_refuses_incompatible_target(tmp_path, capsys):
     rc = main(["run", "--task", "p-regulator", "--target", "unix", "--out", str(tmp_path)])
     assert rc == 2
     assert "not compatible" in capsys.readouterr().out
+
+
+def test_cli_solve_refuses_incompatible_target(tmp_path, capsys):
+    # IH-38 review N3: the solve site refuses before any LLM config resolution,
+    # so the negative path is testable with no LLM environment.
+    from ironbench.cli import main
+
+    rc = main(["solve", "--task", "p-regulator", "--target", "unix", "--out", str(tmp_path)])
+    assert rc == 2
+    assert "not compatible" in capsys.readouterr().out
+
+
+def test_runtime_infra_refusal_survives_for_programmatic_mutation(tmp_path):
+    """The set-control/unix authoring error moved to load_task (review N1), but
+    a Task mutated programmatically AFTER load must still get the clean infra
+    refusal from run_task - the solve loop depends on error_kind=infra."""
+    from ironbench.tasks import check_target_compat
+
+    task = dataclasses.replace(
+        _task("uart-echo"),
+        target="unix",
+        stimulus=({"set-control": "button0: true"},),
+    )
+    with pytest.raises(ValueError, match="not compatible"):
+        check_target_compat(task)
+    res = run_task(task, out_dir=tmp_path / "out", unix_cmd=[sys.executable, "-c", "pass"])
+    assert not res.passed
+    assert res.error_kind == runner_module.ERROR_INFRA
+    assert "set-control" in (res.error or "")

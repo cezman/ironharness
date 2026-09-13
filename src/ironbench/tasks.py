@@ -182,6 +182,12 @@ def load_task(task_dir: Path) -> Task:
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
         raise ValueError(f"{task_file}: unknown target {target!r} (allowed: {TASK_TARGETS})")
+    if target == "unix" and "set-control" in {k for step in stimulus for k in step}:
+        # authoring error at load time (IH-38 review N1): the unix runner has
+        # no Wokwi buttons/sensors, so the step can never execute
+        raise ValueError(
+            f"{task_file}: set-control steps are not supported by the unix target"
+        )
     # anti-cheat (IH-14): on the runner-anchored targets a wait-serial answer is
     # anchored to the stimulus that asked for it (a preceding write-serial or
     # mqtt-publish). A wait without any preceding trigger would false-flag
@@ -481,6 +487,10 @@ def check_target_compat(task: Task) -> None:
         problems.append("the mqtt section (broker) is only supported by the unix target")
     if t == "unix" and any("set-control" in step for step in task.stimulus):
         problems.append("set-control steps are not supported by the unix target")
+    if t != "unix" and MQTT_STEP_KEYS & {k for step in task.stimulus for k in step}:
+        # direct rule (IH-38 review N2): mqtt stimulus steps are unix-only,
+        # not only transitively through the mqtt section
+        problems.append("mqtt stimulus steps are only supported by the unix target")
     if t == "renode":
         missing = {"platform", "firmware"} - set(task.renode)
         if missing:
@@ -499,9 +509,11 @@ def check_target_compat(task: Task) -> None:
                     "(the answer is anchored to the stimulus that asked for it)"
                 )
                 break
-    has_detector = bool(task.expect) or bool(task.events) and t == "unix" or bool(
-        task.plant
-    ) and t == "plant"
+    has_detector = (
+        bool(task.expect)
+        or (bool(task.events) and t == "unix")
+        or (bool(task.plant) and t == "plant")
+    )
     if not has_detector:
         problems.append(
             "no scoring detector on this target (expect patterns, unix events, "
