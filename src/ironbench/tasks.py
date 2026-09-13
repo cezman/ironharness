@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import re
 from pathlib import Path
 
@@ -140,6 +141,9 @@ def load_task(task_dir: Path) -> Task:
         timeout_sec = int(raw.get("timeout_sec", 30))
     except (TypeError, ValueError):
         raise ValueError(f"{task_file}: timeout_sec must be an integer") from None
+    if not 1 <= timeout_sec <= 600:
+        # IH-46: the wall deadline derives from this - keep it meaningful
+        raise ValueError(f"{task_file}: timeout_sec must be within 1..600, got {timeout_sec}")
     stimulus = raw.get("stimulus", [])
     if not isinstance(stimulus, list) or not all(isinstance(s, dict) for s in stimulus):
         raise ValueError(f"{task_file}: stimulus must be a list of steps (mappings)")
@@ -179,6 +183,12 @@ def load_task(task_dir: Path) -> Task:
             ts = col.get("timeout_sec", 10)
             if isinstance(ts, bool) or not isinstance(ts, (int, float)) or ts <= 0:
                 raise ValueError(f"{task_file}: mqtt-collect.timeout_sec must be a number > 0")
+            if ts > 600:
+                # IH-46 review F2: the collect deadline derives from this -
+                # an unbounded value defeats the task wall deadline
+                raise ValueError(
+                    f"{task_file}: mqtt-collect.timeout_sec must be <= 600, got {ts}"
+                )
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
         raise ValueError(f"{task_file}: unknown target {target!r} (allowed: {TASK_TARGETS})")
@@ -343,6 +353,9 @@ def load_task(task_dir: Path) -> Task:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 # loader contract - every format error is a ValueError
                 raise ValueError(f"{task_file}: plant.{key} must be a number")  # noqa: TRY004
+            if isinstance(value, float) and not math.isfinite(value):
+                # IH-46 review N4: YAML .nan/.inf bypass every >-style bound
+                raise ValueError(f"{task_file}: plant.{key} must be finite, got {value}")
         if plant_section["K"] <= 0:
             raise ValueError(f"{task_file}: plant.K must be > 0")
         if plant_section["T"] <= 0:
@@ -350,6 +363,15 @@ def load_task(task_dir: Path) -> Task:
         dt = float(plant_section.get("dt", 0.5))
         if dt <= 0 or dt > float(plant_section["duration"]):
             raise ValueError(f"{task_file}: plant.dt must be > 0 and no greater than duration")
+        if dt < 0.01:
+            raise ValueError(f"{task_file}: plant.dt must be >= 0.01")
+        if float(plant_section["duration"]) / dt > 20_000:
+            # IH-46: duration/dt is the closed-loop step count - keep the run
+            # length bounded
+            raise ValueError(
+                f"{task_file}: plant duration/dt must be <= 20000 steps "
+                f"(got {float(plant_section['duration']) / dt:g})"
+            )
         if float(plant_section.get("u_min", 0.0)) >= float(plant_section.get("u_max", 1.0)):
             raise ValueError(f"{task_file}: plant.u_min must be less than u_max")
         if float(plant_section.get("noise_std", 0.0)) < 0:

@@ -11,6 +11,7 @@ import socket
 import sys
 import tarfile
 import textwrap
+import time
 
 import pytest
 
@@ -71,6 +72,17 @@ FAKE_RENODE = textwrap.dedent(
         conn.settimeout(5)
         data = conn.recv(4096)
         conn.sendall(b"echo: " + data.strip(b"\\r\\n") + b"\\r\\n>>> ")
+    elif mode == "flood":
+        sent = 0
+        try:
+            while sent < (4 << 20):
+                conn.sendall(b"A" * 4096)
+                sent += 4096
+        except OSError:
+            pass
+        import time
+
+        time.sleep(30)
     conn.close()
     """
 )
@@ -295,7 +307,7 @@ def test_renode_oserror_while_starting_is_infra(tmp_path, monkeypatch):
 
 def test_renode_hang_repl_deadline(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
-    task = make_renode_task(tmp_path, timeout_sec=0)
+    task = make_renode_task(tmp_path, timeout_sec=1)
     res = run_fake_renode(tmp_path, task, "hang")
     assert not res.passed
     assert res.missed == task.expect  # silence in serial -> everything missed
@@ -413,3 +425,42 @@ def test_is_infra_error_marks():
     assert not is_infra_error(None)
     # a firmware error of its own is not an infrastructure one, attempts continue
     assert not is_infra_error("check failed: an error in the firmware code")
+
+
+def test_recv_until_caps_buffer_under_flood():
+    """IH-46: a UART flood with no needle used to grow the per-call buffer
+    until the deadline. The buffer is capped: the call gives up (ok=False,
+    the wait honestly misses) instead of buffering unbounded output."""
+    from ironbench.runner_renode import _recv_until, _TelnetFilter
+
+    class FloodSock:
+        def __init__(self) -> None:
+            self.left = 2 << 20  # 2 MB served, then EOF
+
+        def settimeout(self, t) -> None:
+            pass
+
+        def recv(self, n: int) -> bytes:
+            n = min(n, self.left)
+            self.left -= n
+            return b"A" * n
+
+    buf, ok = _recv_until(FloodSock(), ("never",), time.monotonic() + 30, _TelnetFilter())
+    assert ok is False
+    assert len(buf) <= (1 << 20) + 65536, f"_recv_until buffered {len(buf)} bytes - no cap"
+
+
+def test_renode_flood_cannot_balloon_serial_text(tmp_path, monkeypatch):
+    """IH-46 review F1: the tail-read loop (after the stimulus) had no byte
+    cap - a firmware printing forever without a prompt grew serial_text to
+    the wall deadline. The cap must bound the retained serial text."""
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    from ironbench.runner_common import MAX_SERIAL_TEXT
+
+    task = make_renode_task(tmp_path, expect=("never printed",), timeout_sec=1)
+    res = run_fake_renode(tmp_path, task, "flood")
+    assert not res.passed
+    assert res.serial_log is not None
+    assert res.serial_log.stat().st_size <= MAX_SERIAL_TEXT + 262144, (
+        f"serial log grew to {res.serial_log.stat().st_size} bytes - tail loop uncapped"
+    )

@@ -101,14 +101,14 @@ def test_unix_finite_program_exits_zero(tmp_path):
 
 
 def test_unix_fail_on_missed_pattern(tmp_path):
-    task = make_unix_task(tmp_path, expect=("never printed",), timeout_sec=0)
+    task = make_unix_task(tmp_path, expect=("never printed",), timeout_sec=1)
     res = run_fake_unix(tmp_path, task, "echo")
     assert not res.passed
     assert res.missed == ("never printed",)
 
 
 def test_unix_fail_on_missed_pattern_with_expected_present(tmp_path):
-    task = make_unix_task(tmp_path, expect=("boot ok", "nope"), timeout_sec=0)
+    task = make_unix_task(tmp_path, expect=("boot ok", "nope"), timeout_sec=1)
     res = run_fake_unix(tmp_path, task, "echo")
     assert not res.passed
     assert res.missed == ("nope",)
@@ -124,7 +124,7 @@ def test_unix_nonzero_exit_is_error(tmp_path):
 
 def test_unix_hang_until_wall_deadline(tmp_path):
     # the pattern is never printed - the task fails on the deadline, the process is killed
-    task = make_unix_task(tmp_path, expect=("never printed",), timeout_sec=0)
+    task = make_unix_task(tmp_path, expect=("never printed",), timeout_sec=1)
     res = run_fake_unix(tmp_path, task, "hang")
     assert not res.passed
     assert res.exit_code is None  # killed on the deadline, did not exit on its own
@@ -408,7 +408,7 @@ def test_unix_cli_target_override(tmp_path):
     assert dataclasses.replace(uart, target="unix").target == "unix"
 
 
-def make_noise_task(tmp_path, noise_yaml, stimulus, expect=("echo: one",), timeout_sec=0):
+def make_noise_task(tmp_path, noise_yaml, stimulus, expect=("echo: one",), timeout_sec=1):
     d = tmp_path / "tn"
     d.mkdir()
     text = f"""

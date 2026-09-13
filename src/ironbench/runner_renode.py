@@ -193,7 +193,9 @@ def _recv_until(
     tel: _TelnetFilter,
 ) -> tuple[str, bool]:
     """Reads the socket (stripping telnet IAC) until one of the needles
-    appears or the deadline expires."""
+    appears or the deadline expires. IH-46: the buffer is capped at 1 MiB -
+    past it the call gives up early (ok=False, the wait honestly misses)
+    instead of buffering unbounded UART output."""
     buf = ""
     while time.monotonic() < deadline:
         sock.settimeout(max(0.05, min(0.2, deadline - time.monotonic())))
@@ -208,6 +210,8 @@ def _recv_until(
         buf += tel.feed(data)
         if any(n in buf for n in needles):
             return buf, True
+        if len(buf) >= common.MAX_SERIAL_TEXT:
+            return buf, False
     return buf, False
 
 
@@ -308,6 +312,10 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
             break
         buf += tel.feed(data)
         if (plain and all(p in buf for p in plain)) or common.REPL_PROMPT in buf:
+            break
+        if len(buf) >= common.MAX_SERIAL_TEXT:
+            # IH-46 review F1: same cap as _recv_until - an infinite firmware
+            # loop (no prompt) must not retain output to the wall deadline
             break
     parts.append(buf)
     return "".join(parts), None, common.ERROR_NONE

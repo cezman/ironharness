@@ -300,3 +300,33 @@ def test_real_target_no_answer_is_honest_miss(tmp_path):
     assert not res.passed
     assert res.error is None
     assert any("T=" in m for m in res.missed)
+
+
+def test_real_pump_caps_retained_output():
+    """IH-46: a board printing without pause grew _text/_chunks without bound
+    (rate-bounded only by baud). Retained output is capped at MAX_SERIAL_TEXT
+    and (text, chunks) stay position-consistent for the anticheat mapping."""
+    from ironbench.runner_common import MAX_SERIAL_TEXT
+
+    class FloodBoard:
+        def __init__(self) -> None:
+            self.left = 2 << 20  # 2 MB pending: twice the cap
+
+        @property
+        def in_waiting(self) -> int:
+            return min(4096, self.left)
+
+        def read(self, n: int) -> bytes:
+            n = min(n, self.left)
+            self.left -= n
+            return b"A" * n
+
+        def write(self, data: bytes) -> None:
+            pass
+
+    repl = RealRepl(FloodBoard(), boot_quiet_sec=0)
+    out = repl.output()
+    assert len(out) <= MAX_SERIAL_TEXT + 65536, (
+        f"the real pump retained {len(out)} bytes - no cap"
+    )
+    assert "".join(c for _, c in repl.chunks()) == out
