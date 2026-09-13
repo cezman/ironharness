@@ -378,16 +378,30 @@ def _run_unix(
                     return  # truncation already hit: drain, discard, keep order
                 if len(box["text"]) + len(chunk) > max_serial_text:
                     box["dropped"] = True
-                    chunk += (
+                    # the offending chunk is DISCARDED, not retained: only the
+                    # marker crosses the cap line (IH-48 breaker repro)
+                    marker = (
                         f"\n[ironharness: serial output truncated at "
                         f"{max_serial_text} bytes - further output discarded]\n"
                     )
+                    box["chunks"].append((time.monotonic(), marker))
+                    box["text"] += marker
+                    return
                 box["chunks"].append((time.monotonic(), chunk))
                 box["text"] += chunk
 
         def reader():
+            # IH-48: readline takes a size cap - without it a newline-less
+            # flood (one endless line) accumulated unboundedly INSIDE readline
+            # and the 1 MiB retained-text cap never saw the bytes; a giant
+            # line arrives here in 256 KiB partial chunks instead
+            max_line = 262_144
+
+            def read_chunk():
+                return proc.stdout.readline(max_line)
+
             try:
-                for line in iter(proc.stdout.readline, b""):
+                for line in iter(read_chunk, b""):
                     # the ingestion stamp powers the anti-cheat: a chunk cannot
                     # be ingested before it was printed, so "first occurrence
                     # of the needle stamped strictly before the stimulus write"

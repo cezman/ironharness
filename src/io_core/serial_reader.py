@@ -84,9 +84,12 @@ class SerialReader:
     # --- lifecycle ---
 
     def start(self) -> None:
-        """Starts the background thread; idempotent."""
+        """Starts the background thread; idempotent. Restarting a confirmedly
+        stopped reader works (IH-48): _stop used to stay set, so the new
+        thread exited immediately and the reader silently drained nothing."""
         if self._thread is not None:
             return
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="serial-reader", daemon=True)
         self._thread.start()
 

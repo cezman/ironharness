@@ -430,14 +430,14 @@ def test_stderr_pump_caps_bytes_not_just_lines():
 
 
 def test_stdout_pump_sink_is_bounded():
-    """IH-45 review N2: the controller's real stdout (reachable via
+    """IH-45 review N2 / IH-48: the controller's real stdout (reachable via
     sys.__stdout__/os.write, past the stderr redirect) fed an UNBOUNDED
     queue - a valid-float flood grew it for the whole loop. The sink is now
-    bounded: past 8192 lines the pump drops the oldest and inserts the
-    _FLOOD_MARK sentinel, and EOF still arrives into a full sink."""
+    bounded: past 8192 lines the pump drops the oldest and counts the drops,
+    and EOF still arrives into a full sink."""
     import queue as q
 
-    from ironbench.runner_plant import _FLOOD_MARK, _pump_lines
+    from ironbench.runner_plant import _pump_lines
 
     class FloodSrc:
         def __init__(self):
@@ -455,9 +455,58 @@ def test_stdout_pump_sink_is_bounded():
         def close(self):
             pass
 
-    sink: q.Queue = q.Queue(maxsize=8192)
-    _pump_lines(FloodSrc(), sink)
+    sink: q.Queue = q.Queue()
+    dropped: dict = {"lines": 0}
+    _pump_lines(FloodSrc(), sink, dropped)
     assert sink.qsize() <= 8192, f"sink grew to {sink.qsize()} - the bound is decorative"
+    assert dropped["lines"] > 90_000, f"the flood was not counted: {dropped}"
     items = [sink.get_nowait() for _ in range(sink.qsize())]
     assert items[-1] is None, "EOF sentinel lost in a full sink"
-    assert any(i is _FLOOD_MARK for i in items), "the flood never surfaced in the sink"
+
+
+def test_plant_stdout_flood_cannot_balloon_the_run(tmp_path):
+    """IH-48 breaker P1: the production wiring constructed an UNBOUNDED
+    queue - the _pump_lines bound was dead code (the unit test above built
+    its own bounded queue). A controller flooding its real stdout via
+    os.write(1, ...) - past the stderr redirect - must abort the run via the
+    flood sentinel, not pass while the harness buffers megabytes."""
+    d = tmp_path / "flood"
+    d.mkdir()
+    (d / "task.yaml").write_text(
+        textwrap.dedent(
+            """
+    name: flood-controller
+    description: fake
+    entry: solution.py
+    target: plant
+    timeout_sec: 8
+    plant:
+      model: heater
+      K: 60.0
+      T: 30.0
+      duration: 40
+      setpoint: 74.0
+      requirements: {steady_error: 5.0}
+    """
+        ),
+        encoding="utf-8",
+    )
+    (d / "solution.py").write_text(
+        textwrap.dedent(
+            """
+    import os, sys
+    def control(t, y, setpoint):
+        if t == 0.0:
+            for _ in range(50_000):
+                os.write(1, b"1.0\\n")
+        return 0.5
+    """
+        ),
+        encoding="utf-8",
+    )
+    task = load_task(d)
+    res = run_task(task, out_dir=tmp_path / "out")
+    print("DEBUG res:", res.passed, res.error_kind, res.error, res.missed)
+    assert not res.passed, "a stdout-flooding controller PASSED while the queue ballooned"
+    assert res.error_kind == "run"
+    assert "flooded the answer channel" in (res.error or ""), res.error
