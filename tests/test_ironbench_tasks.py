@@ -286,3 +286,27 @@ def test_plant_loop_length_is_bounded(tmp_path):
     )
     with pytest.raises(ValueError, match="duration/dt"):
         load_task(d)
+
+
+def test_mqtt_collect_timeout_is_bounded(tmp_path):
+    """IH-46 review F2: mqtt-collect.timeout_sec derives a runner deadline -
+    a billion-second collect would defeat the wall deadline."""
+    d = write_task(
+        tmp_path,
+        "name: m\ntarget: unix\nmqtt: {client_id: c}\ntimeout_sec: 5\n"
+        "stimulus:\n  - mqtt-collect: {topic: t, count: 1, timeout_sec: 1000000000}\n",
+    )
+    with pytest.raises(ValueError, match="mqtt-collect"):
+        load_task(d)
+
+
+def test_plant_nan_numerics_are_rejected(tmp_path):
+    """IH-46 review N4: YAML .nan floats bypass >-style bounds - reject them
+    at load with an authoring error instead of crashing the runner."""
+    d = write_task(
+        tmp_path,
+        "name: n\ntarget: plant\nplant:\n  K: 1\n  T: 1\n  duration: 100\n"
+        "  setpoint: 50\n  dt: .nan\n  requirements: {steady_error: 1.0}\n",
+    )
+    with pytest.raises(ValueError, match="finite"):
+        load_task(d)

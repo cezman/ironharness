@@ -52,14 +52,15 @@ class RealRepl:
         # with _text (IH-33): the runner maps a needle's first occurrence back
         # to its chunk stamp for the anti-cheat anchor
         self._chunks: list[tuple[float, str]] = []
+        self._truncated = False  # IH-46: the retention cap was hit
         time.sleep(_BOOT_QUIET_SEC if boot_quiet_sec is None else boot_quiet_sec)
         self.interrupt()
 
     def _pump(self) -> None:
         """Забирает из транспорта всё, что пришло (без блокировки на холостом ходу).
         IH-46: удерживаемый текст ограничен MAX_SERIAL_TEXT — после переполнения
-        чтение продолжается (ссылка остаётся чистой), но в буфер ничего не
-        попадает; (text, chunks) остаются позиционно согласованными."""
+        чтение продолжается (ссылка остаётся чистой), в буфер попадает только
+        маркер усечения; (text, chunks) остаются позиционно согласованными."""
         while True:
             in_waiting = getattr(self._t, "in_waiting", None)
             if in_waiting:
@@ -71,6 +72,15 @@ class RealRepl:
             if not data:
                 return
             if len(self._text) >= MAX_SERIAL_TEXT:
+                if not self._truncated:
+                    self._truncated = True
+                    marker = (
+                        f"\n[ironharness: serial output truncated at "
+                        f"{MAX_SERIAL_TEXT} bytes - further output discarded]\n"
+                    )
+                    stamp = time.monotonic()
+                    self._chunks.append((stamp, marker))
+                    self._text += marker
                 continue  # кап достигнут: дренируем, но не удерживаем
             chunk = data.decode("utf-8", "replace")
             self._chunks.append((time.monotonic(), chunk))

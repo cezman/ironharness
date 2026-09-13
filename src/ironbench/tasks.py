@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import re
 from pathlib import Path
 
@@ -182,6 +183,12 @@ def load_task(task_dir: Path) -> Task:
             ts = col.get("timeout_sec", 10)
             if isinstance(ts, bool) or not isinstance(ts, (int, float)) or ts <= 0:
                 raise ValueError(f"{task_file}: mqtt-collect.timeout_sec must be a number > 0")
+            if ts > 600:
+                # IH-46 review F2: the collect deadline derives from this -
+                # an unbounded value defeats the task wall deadline
+                raise ValueError(
+                    f"{task_file}: mqtt-collect.timeout_sec must be <= 600, got {ts}"
+                )
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
         raise ValueError(f"{task_file}: unknown target {target!r} (allowed: {TASK_TARGETS})")
@@ -346,6 +353,9 @@ def load_task(task_dir: Path) -> Task:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 # loader contract - every format error is a ValueError
                 raise ValueError(f"{task_file}: plant.{key} must be a number")  # noqa: TRY004
+            if isinstance(value, float) and not math.isfinite(value):
+                # IH-46 review N4: YAML .nan/.inf bypass every >-style bound
+                raise ValueError(f"{task_file}: plant.{key} must be finite, got {value}")
         if plant_section["K"] <= 0:
             raise ValueError(f"{task_file}: plant.K must be > 0")
         if plant_section["T"] <= 0:

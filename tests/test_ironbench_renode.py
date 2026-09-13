@@ -72,6 +72,17 @@ FAKE_RENODE = textwrap.dedent(
         conn.settimeout(5)
         data = conn.recv(4096)
         conn.sendall(b"echo: " + data.strip(b"\\r\\n") + b"\\r\\n>>> ")
+    elif mode == "flood":
+        sent = 0
+        try:
+            while sent < (4 << 20):
+                conn.sendall(b"A" * 4096)
+                sent += 4096
+        except OSError:
+            pass
+        import time
+
+        time.sleep(30)
     conn.close()
     """
 )
@@ -437,3 +448,19 @@ def test_recv_until_caps_buffer_under_flood():
     buf, ok = _recv_until(FloodSock(), ("never",), time.monotonic() + 30, _TelnetFilter())
     assert ok is False
     assert len(buf) <= (1 << 20) + 65536, f"_recv_until buffered {len(buf)} bytes - no cap"
+
+
+def test_renode_flood_cannot_balloon_serial_text(tmp_path, monkeypatch):
+    """IH-46 review F1: the tail-read loop (after the stimulus) had no byte
+    cap - a firmware printing forever without a prompt grew serial_text to
+    the wall deadline. The cap must bound the retained serial text."""
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    from ironbench.runner_common import MAX_SERIAL_TEXT
+
+    task = make_renode_task(tmp_path, expect=("never printed",), timeout_sec=1)
+    res = run_fake_renode(tmp_path, task, "flood")
+    assert not res.passed
+    assert res.serial_log is not None
+    assert res.serial_log.stat().st_size <= MAX_SERIAL_TEXT + 262144, (
+        f"serial log grew to {res.serial_log.stat().st_size} bytes - tail loop uncapped"
+    )
