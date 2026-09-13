@@ -396,3 +396,28 @@ def test_unready_target_journaled(tmp_path):
         run_task(task, out_dir=tmp_path / "out", cli_path=["never"], journal=jr)
     kinds = [json.loads(line)["kind"] for line in jpath.read_text(encoding="utf-8").splitlines()]
     assert kinds == ["task_result"]  # no task_start - there was no run
+
+
+def test_push_to_wsl_clean_wipes_the_real_remote_dir(monkeypatch):
+    """IH-42: rm_part was built as a plain (non-f) string - the literal
+    `rm -rf {remote_dir}` reached bash (a silent no-op on a relative dir of
+    that name) while mkdir/tar got the real path, so clean=True never cleaned
+    and a stale machine.py from a shim run leaked into a shim-less re-run."""
+    seen: dict = {}
+
+    class FakeProc:
+        stdout = b"STAGE-PUSHED\n"
+        stderr = b""
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return FakeProc()
+
+    monkeypatch.setattr(runner_common.subprocess, "run", fake_run)
+    runner_common._push_to_wsl(b"blob", "$HOME/ironharness-runs/t-unix", "STAGE-PUSHED", clean=True)
+    bash = seen["cmd"][-1]
+    assert "rm -rf $HOME/ironharness-runs/t-unix && " in bash, bash
+    assert "{remote_dir}" not in bash, "uninterpolated placeholder reached the shell"
+    # clean=False (default) must not remove anything
+    runner_common._push_to_wsl(b"blob", "$HOME/ironharness-runs/t-unix", "STAGE-PUSHED")
+    assert "rm -rf" not in seen["cmd"][-1]

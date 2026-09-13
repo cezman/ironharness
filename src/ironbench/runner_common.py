@@ -359,7 +359,7 @@ def _push_to_wsl(blob: bytes, remote_dir: str, marker: str, *, clean: bool = Fal
     clean=True wipes the remote dir first - for per-run dirs whose stale
     files (e.g. a leftover machine.py from a removed `shim:`) must not leak
     into the next run. Never use it on shared directories."""
-    rm_part = "rm -rf {remote_dir} && " if clean else ""
+    rm_part = f"rm -rf {remote_dir} && " if clean else ""
     try:
         proc = subprocess.run(
             [
