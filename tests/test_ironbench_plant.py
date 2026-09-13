@@ -506,7 +506,6 @@ def test_plant_stdout_flood_cannot_balloon_the_run(tmp_path):
     )
     task = load_task(d)
     res = run_task(task, out_dir=tmp_path / "out")
-    print("DEBUG res:", res.passed, res.error_kind, res.error, res.missed)
     assert not res.passed, "a stdout-flooding controller PASSED while the queue ballooned"
     assert res.error_kind == "run"
     assert "flooded the answer channel" in (res.error or ""), res.error

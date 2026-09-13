@@ -379,7 +379,13 @@ def _run_unix(
                 if len(box["text"]) + len(chunk) > max_serial_text:
                     box["dropped"] = True
                     # the offending chunk is DISCARDED, not retained: only the
-                    # marker crosses the cap line (IH-48 breaker repro)
+                    # marker crosses the cap line (IH-48 breaker repro). Up to
+                    # one 256 KiB chunk of legitimately scored output can be
+                    # lost here - the accepted cost of an exact bound; a task
+                    # whose answer lives past 1 MiB of output is pathological.
+                    # Note readline(262144) also splits any single line bigger
+                    # than 256 KiB, so a >256 KiB line cannot be matched whole
+                    # by a per-chunk event pattern (IH-48 review).
                     marker = (
                         f"\n[ironharness: serial output truncated at "
                         f"{max_serial_text} bytes - further output discarded]\n"

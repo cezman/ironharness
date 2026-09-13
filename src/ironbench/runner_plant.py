@@ -200,10 +200,12 @@ def _run_plant(
     pump_thread = None  # the stdout pump thread; joined after the child dies
     dropped = None  # the pump's flood counter; bound after the process spawns
     stderr_lines: list[str] = []
-    out_q: queue.Queue = queue.Queue(maxsize=8192)  # IH-48: the bound must live
-    # HERE, at the production construction site - _pump_lines' drop-oldest
-    # logic only fires on a bounded queue (the breaker pass found the bound
-    # was dead code: the test built its own bounded queue)
+    out_q: queue.Queue = queue.Queue(
+        maxsize=8192
+    )  # IH-48: the bound must live HERE, at the production construction site -
+    # _pump_lines' drop-oldest logic only fires on a bounded queue (the
+    # breaker pass found the bound was dead code: the test built its own
+    # bounded queue). Must match _pump_lines' max_lines.
     try:
         proc = subprocess.Popen(
             cmd,
@@ -330,9 +332,11 @@ def _run_plant(
 
     metrics = compute_metrics(rows, spec)
     # IH-48: the deterministic flood verdict - after the finally, the child is
-    # dead and the pump joined, so dropped["lines"] is final (the in-loop
-    # per-step check above aborts promptly when it wins the race; this one
-    # catches a flood that finished between steps)
+    # dead and the pump joined, so dropped["lines"] is final modulo the 2 s
+    # join cap (a grandchild holding the stdout write-end could keep the pump
+    # reading; a partial count still exceeds 0 for any real flood). The
+    # in-loop per-step check above aborts promptly when it wins the race;
+    # this one catches a flood that finished between steps.
     if error is None and dropped is not None and dropped["lines"]:
         error = (
             f"controller flooded the answer channel: {dropped['lines']} "
