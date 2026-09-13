@@ -182,11 +182,37 @@ def test_noise_terminator_bypasses_the_fault_layer_offline(tmp_path):
     # the payload was dropped: "echo: hello" can never appear - but the
     # terminator was delivered unwrapped, so the firmware answered empty lines
     assert not res.passed
-    assert "echo: hello" in res.missed[0] or res.missed
+    assert res.missed == task.expect
     assert text.count("echo: ") >= 1, (
         "the terminator never reached the firmware - it went through the "
         "noise layer instead of bypassing it"
     )
+
+
+def test_stdin_backlog_overflow_is_a_run_error(tmp_path, monkeypatch):
+    """IH-39 review B1: a stimulus beyond the 1 MiB pump cap against a
+    never-reading firmware latches the overflow - the run must end within the
+    wall deadline and classify the undelivered stimulus as a run error, not
+    an infra failure."""
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    big = "X" * (1 << 21)  # a single chunk larger than the whole 1 MiB cap
+    task = make_unix_task(
+        tmp_path, expect=("never printed",), timeout_sec=1, stimulus=[f'write-serial: "{big}"']
+    )
+    box: dict = {}
+    wall = 1 * 2 + 1
+
+    def go():
+        box["res"] = run_fake_unix(tmp_path, task, "hang")
+
+    th = threading.Thread(target=go, daemon=True)
+    th.start()
+    th.join(timeout=wall + 15)
+    assert not th.is_alive(), "overflow did not stop the run from finishing"
+    res = box["res"]
+    assert not res.passed
+    assert res.error_kind == "run"
+    assert "stimulus not delivered" in (res.error or "")
 
 
 def test_unix_set_control_rejected_at_load(tmp_path):

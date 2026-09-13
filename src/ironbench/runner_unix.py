@@ -565,6 +565,9 @@ def _run_unix(
                         "stimulus"
                     )
                 error_kind = common.ERROR_RUN
+            # broken() is deliberately unreported here (IH-39 review N3): a
+            # firmware that died mid-stimulus is already scored via the missed
+            # patterns, the anti-cheat verdicts and the exit code below
             if error is None and writer is not None and writer.overflow():
                 error = (
                     "stimulus not delivered: the firmware never read stdin and the "
@@ -583,9 +586,15 @@ def _run_unix(
                 # before touching the pipe; a still-running child here has no
                 # exit code worth keeping (the deadline already passed)
                 proc.kill()
-            if writer is not None:
-                writer.join(timeout=2)
-            if proc.stdin is not None:
+            # stdin.close() takes the pipe's I/O lock: if the pump is still
+            # stuck inside a blocking write (join timed out), closing here
+            # could block this thread - the OS reaps the handle at process
+            # exit instead (IH-39 review N2)
+            if (
+                proc is not None
+                and proc.stdin is not None
+                and (writer is None or writer.join(timeout=2))
+            ):
                 try:
                     proc.stdin.close()
                 except OSError:

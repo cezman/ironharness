@@ -15,12 +15,13 @@ outside its cwd is out of scope).
 Protocol: the harness writes one step per line ("t,y_meas,setpoint"), the
 controller answers one line (repr(u)) on stdout; controller print()s are
 redirected to stderr by the bootstrap, so they land in the feedback log and
-cannot garble the answer channel. The run loop writes stdin directly (one
-~60-byte line in flight: a hung controller that never reads it cannot fill
-the pipe) and reads answers through a queue thread with the wall deadline -
-silence/EOF/exit classify as run results, never as harness crashes. Both
-pipes decode with errors="replace": hostile non-UTF8 output degrades into
-the feedback log instead of killing the pump threads.
+cannot garble the answer channel. Setpoint writes go through the shared
+async stdin pump (IH-39): the backlog is capped at 1 MiB and overflowing it
+is a run error - a controller that never reads stdin cannot hang the loop
+past the wall deadline. Answers are read through a queue thread with the
+wall deadline - silence/EOF/exit classify as run results, never as harness
+crashes. Both pipes decode with errors="replace": hostile non-UTF8 output
+degrades into the feedback log instead of killing the pump threads.
 """
 
 from __future__ import annotations
@@ -258,9 +259,11 @@ def _run_plant(
             if proc.poll() is None:
                 # unblock a pump possibly stuck in a blocking write (IH-39)
                 proc.kill()
-            if writer is not None:
-                writer.join(timeout=2)
-            if proc.stdin is not None:
+            # stdin.close() takes the pipe's I/O lock: if the pump is still
+            # stuck inside a blocking write (join timed out), closing here
+            # could block this thread - the OS reaps the handle at process
+            # exit instead (IH-39 review N2)
+            if proc.stdin is not None and (writer is None or writer.join(timeout=2)):
                 try:
                     proc.stdin.close()
                 except OSError:
