@@ -640,3 +640,27 @@ def test_session_close_journals_failed_implicit_stop(session, tmp_path, monkeypa
     assert failed, "a failed implicit stop was journaled as a clean reader_stop"
     assert failed[-1].get("conn") == name
     assert failed[-1].get("implicit") is True
+
+
+def test_reader_restarts_after_confirmed_stop():
+    """IH-48: start() after a confirmed stop used to leave _stop set - the new
+    thread exited immediately and the reader silently drained nothing. A
+    restart must actually drain (fails without the _stop.clear() fix)."""
+    fake = FakeSerial()
+    r = SerialReader(fake, max_bytes=4096)
+    r.start()
+    try:
+        r.stop()
+        assert not r.running
+        fake.feed(b"after restart\n")
+        r.start()  # the restart under test
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if r.tail(4096)["text"]:
+                break
+            time.sleep(0.02)
+        assert r.tail(4096)["text"].endswith("after restart\n"), (
+            "the restarted reader never drained new data"
+        )
+    finally:
+        r.stop()

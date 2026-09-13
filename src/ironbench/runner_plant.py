@@ -65,29 +65,25 @@ for line in sys.stdin:
 """
 
 
-_FLOOD_MARK = object()  # sink sentinel: lines were dropped (answer channel flooded)
-
-
-def _pump_lines(src, sink: queue.Queue, *, max_lines: int = 8192) -> None:
-    """Thread body: lines from src into sink (None on EOF). IH-45: the sink
-    is BOUNDED - a controller flooding valid floats via sys.__stdout__/os.write
-    (bypassing the stderr redirect) used to grow the unbounded queue for the
-    whole loop. Past max_lines the pump drops the OLDEST line and inserts the
-    _FLOOD_MARK sentinel: a legit controller answers one line per step and
-    never approaches the bound; the mark floats through the non-number check
-    in ipc_control and aborts the run honestly. EOF is never lost."""
+def _pump_lines(src, sink: queue.Queue, dropped: dict, *, max_lines: int = 8192) -> None:
+    """Thread body: lines from src into sink (None on EOF). IH-45/IH-48: the
+    sink is BOUNDED at max_lines - a controller flooding valid floats via
+    sys.__stdout__/os.write (bypassing the stderr redirect) used to grow an
+    unbounded queue for the whole loop. Past max_lines the OLDEST line is
+    dropped and dropped['lines'] is counted: ipc_control aborts the run at
+    the first step that sees the counter (a legit controller answers one
+    line per step and never approaches the bound). EOF is never lost."""
     try:
         for line in src:
-            try:
-                sink.put_nowait(line)
-            except queue.Full:
-                sink.get_nowait()  # drop the oldest flood line, keep the bound
-                sink.put_nowait(_FLOOD_MARK)
-        try:
-            sink.put_nowait(None)
-        except queue.Full:
-            sink.get_nowait()  # EOF must arrive even into a full sink
-            sink.put_nowait(None)
+            if sink.qsize() >= max_lines:
+                dropped["lines"] = dropped.get("lines", 0) + 1
+                sink.get_nowait()  # drop the oldest, keep the bound
+            sink.put_nowait(line)
+        if sink.qsize() >= max_lines:
+            # EOF into a full sink: the oldest line gives way, None must land
+            dropped["lines"] = dropped.get("lines", 0) + 1
+            sink.get_nowait()
+        sink.put_nowait(None)
     finally:
         try:
             src.close()
@@ -201,8 +197,15 @@ def _run_plant(
         journal("task_start", {"task": task.name})
     proc: subprocess.Popen | None = None
     writer = None  # the async stdin pump; bound after the process spawns
+    pump_thread = None  # the stdout pump thread; joined after the child dies
+    dropped = None  # the pump's flood counter; bound after the process spawns
     stderr_lines: list[str] = []
-    out_q: queue.Queue = queue.Queue()
+    out_q: queue.Queue = queue.Queue(
+        maxsize=8192
+    )  # IH-48: the bound must live HERE, at the production construction site -
+    # _pump_lines' drop-oldest logic only fires on a bounded queue (the
+    # breaker pass found the bound was dead code: the test built its own
+    # bounded queue). Must match _pump_lines' max_lines.
     try:
         proc = subprocess.Popen(
             cmd,
@@ -215,7 +218,11 @@ def _run_plant(
             errors="replace",
             bufsize=1,
         )
-        threading.Thread(target=_pump_lines, args=(proc.stdout, out_q), daemon=True).start()
+        dropped: dict = {"lines": 0}  # stdout flood counter (IH-48), read per step
+        pump_thread = threading.Thread(
+            target=_pump_lines, args=(proc.stdout, out_q, dropped), daemon=True
+        )
+        pump_thread.start()
         err_thread = threading.Thread(
             target=_pump_stderr, args=(proc.stderr, stderr_lines), daemon=True
         )
@@ -243,6 +250,13 @@ def _run_plant(
                     _death_error(proc, stderr_lines, err_thread, f"before step t={t:g}"),
                     kind="run",
                 )
+            if dropped["lines"]:
+                raise ControlAbort(
+                    f"controller flooded the answer channel: {dropped['lines']} "
+                    f"unread stdout line(s) dropped by step t={t:g} - control "
+                    "must answer exactly one line per step",
+                    kind="run",
+                )
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -262,7 +276,7 @@ def _run_plant(
                     )
                 try:
                     return float(item)
-                except ValueError:
+                except (ValueError, TypeError):
                     raise ControlAbort(
                         f"controller returned a non-number ({item.strip()[:60]!r}) "
                         f"at t={t:g} s - control must answer one float per step",
@@ -270,6 +284,14 @@ def _run_plant(
                     ) from None
 
         rows, error = run_closed_loop(ipc_control, spec)
+        if error is None and dropped["lines"]:
+            # a flood that ended before a per-step check saw it (a short loop)
+            error = (
+                f"controller flooded the answer channel: {dropped['lines']} "
+                "unread stdout line(s) dropped - control must answer exactly "
+                "one line per step"
+            )
+            error_kind = common.ERROR_RUN
         if error is None:
             # the controller survived the whole loop: stop the pump and close
             # stdin so it exits
@@ -292,10 +314,10 @@ def _run_plant(
             if proc.poll() is None:
                 # unblock a pump possibly stuck in a blocking write (IH-39)
                 proc.kill()
-            # stdin.close() takes the pipe's I/O lock: if the pump is still
-            # stuck inside a blocking write (join timed out), closing here
-            # could block this thread - the OS reaps the handle at process
-            # exit instead (IH-39 review N2)
+            if pump_thread is not None:
+                # let the stdout pump finish draining the pipe so the flood
+                # counter is final before scoring reads it (IH-48)
+                pump_thread.join(timeout=2)
             if proc.stdin is not None and (writer is None or writer.join(timeout=2)):
                 try:
                     proc.stdin.close()
@@ -309,6 +331,19 @@ def _run_plant(
                 exit_code = proc.poll()
 
     metrics = compute_metrics(rows, spec)
+    # IH-48: the deterministic flood verdict - after the finally, the child is
+    # dead and the pump joined, so dropped["lines"] is final modulo the 2 s
+    # join cap (a grandchild holding the stdout write-end could keep the pump
+    # reading; a partial count still exceeds 0 for any real flood). The
+    # in-loop per-step check above aborts promptly when it wins the race;
+    # this one catches a flood that finished between steps.
+    if error is None and dropped is not None and dropped["lines"]:
+        error = (
+            f"controller flooded the answer channel: {dropped['lines']} "
+            "unread stdout line(s) dropped - control must answer exactly "
+            "one line per step"
+        )
+        error_kind = common.ERROR_RUN
     missed: list[str] = check_requirements(metrics, spec.requirements) if metrics else []
     if error is None and exit_code not in (0, None):
         error = f"controller process exited with code {exit_code}"
