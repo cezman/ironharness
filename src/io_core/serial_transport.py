@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import math
 import queue
 import time
 from collections.abc import Callable
@@ -168,16 +169,49 @@ class SerialTransport:
         и socket:// принимают присваивания как no-op (журнал честно
         отметить это не может), ptys дают OSError — отказ журналируется
         (reset_failed) и пробрасывается.
+
+        IH-43: pulse_sec/settle_sec валидируются ДО воздействия на линии
+        (конечные, неотрицательные, в разумном верхнем пределе), а линии
+        освобождаются в finally — раньше time.sleep(-1) бросал ValueError
+        после rts=True, обработчик ловил только OSError, и плата оставалась
+        удержанной в сбросе после неуспешного вызова.
         """
         if self._serial is None:
             raise TransportClosedError("port is not open")
+        error = self._validate_reset_durations(pulse_sec, settle_sec)
+        if error is not None:
+            self._emit("reset_failed", {"error": error})
+            raise ValueError(error)
         try:
             self._serial.dtr = False  # IO0 high: normal boot, не download mode
             self._serial.rts = True  # EN low: удерживаем чип в сбросе
             time.sleep(pulse_sec)
-            self._serial.rts = False  # EN high: чип стартует
         except OSError as e:
             self._emit("reset_failed", {"error": str(e)})
             raise
+        finally:
+            try:
+                self._serial.rts = False  # EN high: чип стартует - в любом случае
+            except OSError as e:
+                # best-effort: мёртвый/зависший адаптер может не отпустить
+                # линию, но отказ релиза тоже обязан попасть в журнал
+                self._emit("reset_failed", {"error": f"rts release: {e}"})
         time.sleep(settle_sec)  # boot-тишина: вывод стартующей прошивки пойдёт в ридер/чтения
         self._emit("reset", {"pulse_sec": pulse_sec, "settle_sec": settle_sec})
+
+    @staticmethod
+    def _validate_reset_durations(pulse_sec: float, settle_sec: float) -> str | None:
+        """None = допустимы; иначе текст отказа (IH-43)."""
+        for name, value, cap in (
+            ("pulse_sec", pulse_sec, 5.0),
+            ("settle_sec", settle_sec, 60.0),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return f"{name} must be a number, got {value!r}"
+            if not math.isfinite(value):
+                return f"{name} must be finite, got {value!r}"
+            if value < 0:
+                return f"{name} must be >= 0, got {value!r}"
+            if value > cap:
+                return f"{name} must be <= {cap:g} s, got {value!r}"
+        return None
