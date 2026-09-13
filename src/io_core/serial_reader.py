@@ -101,6 +101,8 @@ class SerialReader:
         orphaned buffer, stealing them from the next operation, and `running`
         reported False while the thread was alive.)"""
         self._stop.set()
+        if self._thread is None:
+            return True  # already stopped (or never started): idempotent
         # Cancel the in-flight read only when the transport cannot be polled:
         # with in_waiting support the reader is never stuck in a long read,
         # and cancelling is not free even there - pyserial's loop:// implements
@@ -117,8 +119,6 @@ class SerialReader:
                     cancel()
                 except (AttributeError, OSError, ValueError, TransportClosedError):
                     pass  # a racy port close (or a backend without cancel support) must not break the stop path
-        if self._thread is None:
-            return True
         self._thread.join(timeout=timeout)
         if self._thread.is_alive():
             return False  # still draining: the reference stays, running stays True

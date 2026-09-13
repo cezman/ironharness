@@ -621,3 +621,22 @@ def test_session_reader_stop_failure_keeps_registration(session, tmp_path, monke
     monkeypatch.undo()
     assert session.serial_reader_stop(name)["stopped"] is True
     assert name not in session._readers
+
+
+def test_session_close_journals_failed_implicit_stop(session, tmp_path, monkeypatch):
+    """IH-40 review: an implicit stop (transport close / session close) that
+    cannot confirm the thread dead must be journaled as reader_stop_failed
+    with the implicit flag - not silently as a clean reader_stop."""
+    name = loop_session(session)
+    session.serial_reader_start(name)
+    reader = session._readers[name]
+    monkeypatch.setattr(reader, "stop", lambda timeout=5.0: False)
+    session.close()
+    failed = [
+        e
+        for e in read_events(tmp_path / "journal.jsonl")
+        if e["kind"] == "reader_stop_failed"
+    ]
+    assert failed, "a failed implicit stop was journaled as a clean reader_stop"
+    assert failed[-1].get("conn") == name
+    assert failed[-1].get("implicit") is True

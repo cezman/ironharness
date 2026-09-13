@@ -360,8 +360,11 @@ class Session:
         deregistered). "stopped": False means the thread is still draining an
         in-flight read: the registration is KEPT (a deregistered zombie would
         steal bytes from the next serial_read/serial_put - IH-40), serial_read
-        stays refused, and a retry stop (it cancels the in-flight read first)
-        finishes the job."""
+        stays refused, and a retry stop finishes the job once the read ends
+        (guaranteed promptly for transports with in_waiting or cancel_read;
+        on a transport with neither, only its death does). Bytes still in the
+        reader buffer at a successful stop are dropped with the registration -
+        drain serial_tail first if they matter."""
         with self._lock:
             reader = self._readers.get(name)
             if reader is None:
