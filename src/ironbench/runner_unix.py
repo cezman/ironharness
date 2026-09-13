@@ -236,6 +236,29 @@ def _first_answer_stamp(box, needle: str, since: float | None) -> float | None:
         return common.first_occurrence_stamp(box["text"], box["chunks"], needle, since)
 
 
+def _wait_quiet(box, deadline: float, *, quiet_sec: float = 0.15) -> None:
+    """IH-47: before a trigger write, wait until output ingestion has been
+    quiet for quiet_sec (bounded by the wall deadline). The pre-printed
+    verdict compares the answer's ingestion stamp against the trigger stamp -
+    output printed before the write but still in flight inside the OS pipe
+    would be ingested after the trigger and credit an unprompted dump as a
+    genuine answer. That ingestion-lag race is what made the anticheat tests
+    flake under load (the cheater won) and what this quiesce window closes:
+    by the time the stamp is taken, everything printed so far has been
+    ingested and stamped before it."""
+    quiet_for = 0.0
+    seen = -1
+    while quiet_for < quiet_sec and time.monotonic() < deadline:
+        time.sleep(0.05)
+        with box["lock"]:
+            now = len(box["chunks"])
+        if now != seen:
+            seen = now
+            quiet_for = 0.0
+        else:
+            quiet_for += 0.05
+
+
 def _run_unix(
     task: Task,
     *,
@@ -478,6 +501,7 @@ def _run_unix(
                         min(common._parse_delay(step["delay"]), max(0.0, deadline - time.monotonic()))
                     )
                 elif "write-serial" in step:
+                    _wait_quiet(box, deadline)
                     last_trigger_stamp = time.monotonic()  # the anti-cheat anchor point
                     trigger_stamps.append(last_trigger_stamp)
                     raw = str(step["write-serial"]).replace("\r\n", "\n").replace("\r", "\n")
@@ -493,6 +517,7 @@ def _run_unix(
                     pub = step["mqtt-publish"]
                     # a retained/published command is what the firmware reacts to:
                     # it anchors the wait-serial anti-cheat just like write-serial
+                    _wait_quiet(box, deadline)
                     last_trigger_stamp = time.monotonic()
                     trigger_stamps.append(last_trigger_stamp)
                     mqtt_client.publish(
