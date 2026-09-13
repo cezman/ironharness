@@ -266,3 +266,23 @@ def test_wait_serial_requires_preceding_trigger(tmp_path):
     (d / "solution.py").write_text("print('boot')\n", encoding="utf-8")
     with pytest.raises(ValueError, match="wait-serial must be preceded"):
         load_task(d)
+
+
+def test_timeout_sec_is_bounded(tmp_path):
+    """IH-46: numeric caps on operator-authored fields - a billion-second
+    timeout would make the wall deadline meaningless."""
+    d = write_task(tmp_path, "name: t\nexpect:\n  - 'x'\ntimeout_sec: 1000000000\n")
+    with pytest.raises(ValueError, match="timeout_sec"):
+        load_task(d)
+
+
+def test_plant_loop_length_is_bounded(tmp_path):
+    """IH-46: duration/dt defines the closed-loop step count - an unbounded
+    ratio means an unbounded run. 10^6 s at dt=0.05 is 2*10^7 steps."""
+    d = write_task(
+        tmp_path,
+        "name: p\ntarget: plant\nplant:\n  K: 1\n  T: 1\n  duration: 1000000\n"
+        "  setpoint: 50\n  dt: 0.05\n  requirements: {steady_error: 1.0}\n",
+    )
+    with pytest.raises(ValueError, match="duration/dt"):
+        load_task(d)

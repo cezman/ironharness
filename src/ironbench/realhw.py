@@ -24,6 +24,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from ironbench.runner_common import MAX_SERIAL_TEXT
+
 CTRL_C = b"\x03"
 CTRL_D = b"\x04"
 CTRL_E = b"\x05"
@@ -54,7 +56,10 @@ class RealRepl:
         self.interrupt()
 
     def _pump(self) -> None:
-        """Забирает из транспорта всё, что пришло (без блокировки на холостом ходу)."""
+        """Забирает из транспорта всё, что пришло (без блокировки на холостом ходу).
+        IH-46: удерживаемый текст ограничен MAX_SERIAL_TEXT — после переполнения
+        чтение продолжается (ссылка остаётся чистой), но в буфер ничего не
+        попадает; (text, chunks) остаются позиционно согласованными."""
         while True:
             in_waiting = getattr(self._t, "in_waiting", None)
             if in_waiting:
@@ -65,6 +70,8 @@ class RealRepl:
                 data = self._t.read(256)  # фейки без in_waiting: read неблокирующий
             if not data:
                 return
+            if len(self._text) >= MAX_SERIAL_TEXT:
+                continue  # кап достигнут: дренируем, но не удерживаем
             chunk = data.decode("utf-8", "replace")
             self._chunks.append((time.monotonic(), chunk))
             self._text += chunk

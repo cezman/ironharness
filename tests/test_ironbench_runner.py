@@ -120,7 +120,7 @@ def test_timeout_exit_with_missed_pattern_fails(tmp_path):
 
 def test_wall_clock_timeout_kills_run(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
-    task = dataclasses.replace(make_task(tmp_path), timeout_sec=0)
+    task = dataclasses.replace(make_task(tmp_path), timeout_sec=1)
     res = run_fake(tmp_path, task, {"FAKE_SLEEP": "10"})
     assert not res.passed
     assert res.exit_code is None

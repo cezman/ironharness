@@ -193,7 +193,9 @@ def _recv_until(
     tel: _TelnetFilter,
 ) -> tuple[str, bool]:
     """Reads the socket (stripping telnet IAC) until one of the needles
-    appears or the deadline expires."""
+    appears or the deadline expires. IH-46: the buffer is capped at 1 MiB -
+    past it the call gives up early (ok=False, the wait honestly misses)
+    instead of buffering unbounded UART output."""
     buf = ""
     while time.monotonic() < deadline:
         sock.settimeout(max(0.05, min(0.2, deadline - time.monotonic())))
@@ -208,6 +210,8 @@ def _recv_until(
         buf += tel.feed(data)
         if any(n in buf for n in needles):
             return buf, True
+        if len(buf) >= (1 << 20):
+            return buf, False
     return buf, False
 
 

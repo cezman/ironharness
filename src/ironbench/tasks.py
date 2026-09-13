@@ -140,6 +140,9 @@ def load_task(task_dir: Path) -> Task:
         timeout_sec = int(raw.get("timeout_sec", 30))
     except (TypeError, ValueError):
         raise ValueError(f"{task_file}: timeout_sec must be an integer") from None
+    if not 1 <= timeout_sec <= 600:
+        # IH-46: the wall deadline derives from this - keep it meaningful
+        raise ValueError(f"{task_file}: timeout_sec must be within 1..600, got {timeout_sec}")
     stimulus = raw.get("stimulus", [])
     if not isinstance(stimulus, list) or not all(isinstance(s, dict) for s in stimulus):
         raise ValueError(f"{task_file}: stimulus must be a list of steps (mappings)")
@@ -350,6 +353,15 @@ def load_task(task_dir: Path) -> Task:
         dt = float(plant_section.get("dt", 0.5))
         if dt <= 0 or dt > float(plant_section["duration"]):
             raise ValueError(f"{task_file}: plant.dt must be > 0 and no greater than duration")
+        if dt < 0.01:
+            raise ValueError(f"{task_file}: plant.dt must be >= 0.01")
+        if float(plant_section["duration"]) / dt > 20_000:
+            # IH-46: duration/dt is the closed-loop step count - keep the run
+            # length bounded
+            raise ValueError(
+                f"{task_file}: plant duration/dt must be <= 20000 steps "
+                f"(got {float(plant_section['duration']) / dt:g})"
+            )
         if float(plant_section.get("u_min", 0.0)) >= float(plant_section.get("u_max", 1.0)):
             raise ValueError(f"{task_file}: plant.u_min must be less than u_max")
         if float(plant_section.get("noise_std", 0.0)) < 0:
