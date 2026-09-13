@@ -65,31 +65,64 @@ for line in sys.stdin:
 """
 
 
-def _pump_lines(src, sink: queue.Queue) -> None:
-    """Thread body: lines from src into sink (None on EOF)."""
+_FLOOD_MARK = object()  # sink sentinel: lines were dropped (answer channel flooded)
+
+
+def _pump_lines(src, sink: queue.Queue, *, max_lines: int = 8192) -> None:
+    """Thread body: lines from src into sink (None on EOF). IH-45: the sink
+    is BOUNDED - a controller flooding valid floats via sys.__stdout__/os.write
+    (bypassing the stderr redirect) used to grow the unbounded queue for the
+    whole loop. Past max_lines the pump drops the OLDEST line and inserts the
+    _FLOOD_MARK sentinel: a legit controller answers one line per step and
+    never approaches the bound; the mark floats through the non-number check
+    in ipc_control and aborts the run honestly. EOF is never lost."""
     try:
         for line in src:
-            sink.put(line)
+            try:
+                sink.put_nowait(line)
+            except queue.Full:
+                sink.get_nowait()  # drop the oldest flood line, keep the bound
+                sink.put_nowait(_FLOOD_MARK)
+        try:
+            sink.put_nowait(None)
+        except queue.Full:
+            sink.get_nowait()  # EOF must arrive even into a full sink
+            sink.put_nowait(None)
     finally:
         try:
             src.close()
         except OSError:
             pass
-        sink.put(None)
 
 
-def _pump_stderr(src, sink: list) -> None:
-    """Thread body: accumulate stderr until the 500-line cap (controller
+def _pump_stderr(src, sink: list, *, max_bytes: int = 262_144) -> None:
+    """Thread body: accumulate stderr until the byte cap (controller
     prints + tracebacks; the thread is a daemon - it ends when the process
     dies). IH-25: the controller is untrusted - after the cap the pipe stops
     being drained, so a stderr flood BLOCKS the controller on write (killed
     by the wall deadline) instead of eating harness memory. Only the captured
-    head lands in the feedback log anyway."""
+    head lands in the feedback log anyway. IH-45: the cap is BYTES, not
+    lines - a single giant line used to pass through whole; line boundaries
+    are preserved for complete lines, the truncated tail is included as-is.
+    """
+    total = 0
+    partial = ""
     try:
-        for chunk in src:
-            sink.extend(chunk.splitlines(keepends=True))
-            if len(sink) >= 500:
-                break
+        while total < max_bytes:
+            chunk = src.read(8192)
+            if not chunk:
+                if partial:
+                    sink.append(partial)
+                return
+            total += len(chunk)
+            buf = partial + chunk
+            lines = buf.splitlines(keepends=True)
+            partial = ""
+            while lines and not lines[-1].endswith(("\n", "\r")):
+                partial = lines.pop()
+            sink.extend(lines)
+        if partial:
+            sink.append(partial)
     finally:
         try:
             src.close()
