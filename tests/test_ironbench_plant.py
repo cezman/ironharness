@@ -427,3 +427,37 @@ def test_stderr_pump_caps_bytes_not_just_lines():
     _pump_stderr(HugeStderr(), sink)
     total = sum(len(s) for s in sink)
     assert total <= 512_000, f"stderr pump buffered {total} bytes - byte cap missing"
+
+
+def test_stdout_pump_sink_is_bounded():
+    """IH-45 review N2: the controller's real stdout (reachable via
+    sys.__stdout__/os.write, past the stderr redirect) fed an UNBOUNDED
+    queue - a valid-float flood grew it for the whole loop. The sink is now
+    bounded: past 8192 lines the pump drops the oldest and inserts the
+    _FLOOD_MARK sentinel, and EOF still arrives into a full sink."""
+    import queue as q
+
+    from ironbench.runner_plant import _FLOOD_MARK, _pump_lines
+
+    class FloodSrc:
+        def __init__(self):
+            self.n = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            self.n += 1
+            if self.n > 100_000:
+                raise StopIteration
+            return "1.0\n"  # valid floats: a genuine answers-channel flood
+
+        def close(self):
+            pass
+
+    sink: q.Queue = q.Queue(maxsize=8192)
+    _pump_lines(FloodSrc(), sink)
+    assert sink.qsize() <= 8192, f"sink grew to {sink.qsize()} - the bound is decorative"
+    items = [sink.get_nowait() for _ in range(sink.qsize())]
+    assert items[-1] is None, "EOF sentinel lost in a full sink"
+    assert any(i is _FLOOD_MARK for i in items), "the flood never surfaced in the sink"
