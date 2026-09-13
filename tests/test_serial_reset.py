@@ -176,6 +176,8 @@ def test_reset_serialized_against_reader_drain(tmp_path: Path):
         class BlockingRead:
             dtr = None
             rts = None
+            in_waiting = 1  # IH-40: the reader polls in_waiting before reading -
+            # without a pending byte it would idle-sleep instead of blocking
 
             def read(self, size: int) -> bytes:
                 entered_read.set()
