@@ -34,13 +34,14 @@ def _check_events(serial_text: str, events: tuple[dict, ...]) -> tuple[str, ...]
     declared bounds. A cheater printing bare expected strings produces no
     parseable events and fails the count.
 
-    Accepted residual (narrowed by IH-24): a cheater that SIMULATES the shim
-    line format with well-timed fake timestamps now ALSO fails when the run
-    carries chunk-stamp anchors (see _check_events_realtime) - fake lines
-    printed in one dump are ingested within milliseconds, which violates the
-    declared period. Only output paced like real hardware passes; the
-    residual is a simulated device paced by real sleeps. Passive tasks (no
-    stimulus triggers) keep the old text-only scoring."""
+    Accepted residual (narrowed by IH-24 and closed for passives by IH-44):
+    a cheater that SIMULATES the shim line format with well-timed fake
+    timestamps also fails when the run carries chunk-stamp anchors (see
+    _check_events_realtime) - which now covers EVERY events task, passive
+    ones included; fake lines printed in one burst are ingested within
+    milliseconds, which violates the declared period. Only output paced like
+    real hardware passes.
+    """
     missed: list[str] = []
     for ev in events:
         stamps: list[float] = []
