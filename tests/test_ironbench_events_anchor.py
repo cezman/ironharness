@@ -79,9 +79,14 @@ def test_real_paced_events_pass_the_anchor(tmp_path):
     assert res.passed, (res.error, res.missed)
 
 
-def test_passive_events_task_keeps_text_only_scoring(tmp_path):
-    # no stimulus triggers: the anchor legitimately does not apply (there is
-    # no stimulus to anchor to) - the documented residual stays for passives
+def test_passive_events_task_fake_paced_dump_fails(tmp_path):
+    # IH-44: a passive task (no stimulus) used to skip the realtime anchor -
+    # its old contract ("the fake-timestamp dump PASSES: no anchor is
+    # possible without a trigger") was the last fake-PASS hole. The anchor
+    # now runs for every events task: ingestion deltas between event lines
+    # must satisfy the declared period, so a burst dump of well-timestamped
+    # lines printed within milliseconds fails on the (real-time) check even
+    # though its embedded timestamps look perfect.
     d = tmp_path / "passive"
     d.mkdir()
     text = textwrap.dedent(
@@ -105,8 +110,8 @@ def test_passive_events_task_keeps_text_only_scoring(tmp_path):
     import sys
 
     res = run_task(task, out_dir=tmp_path / "out", unix_cmd=[sys.executable, str(d / "solution.py")])
-    # the fake-timestamp dump PASSES: no anchor is possible without a trigger
-    assert res.passed, (res.error, res.missed)
+    assert not res.passed, "a burst dump with fake timestamps passed on a passive task"
+    assert any("(real-time)" in m for m in res.missed), res.missed
 
 
 def test_task_without_detector_is_rejected(tmp_path):
