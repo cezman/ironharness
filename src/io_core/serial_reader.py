@@ -90,13 +90,40 @@ class SerialReader:
         self._thread = threading.Thread(target=self._run, name="serial-reader", daemon=True)
         self._thread.start()
 
-    def stop(self, timeout: float = 5.0) -> None:
-        """Stops the thread and joins it. The transport is NOT closed here:
-        the owner (Session) manages the transport lifetime."""
+    def stop(self, timeout: float = 5.0) -> bool:
+        """Stops the thread and joins it. Returns True when the thread is
+        confirmed dead; False when it is still draining an in-flight read -
+        the caller must keep treating the reader as attached (Session keeps
+        the registration; a retry stop finishes the job). The transport is
+        NOT closed here: the owner (Session) manages the transport lifetime.
+        (IH-40: stop() used to drop the reference after a timed-out join
+        without checking the thread - the zombie kept draining bytes into an
+        orphaned buffer, stealing them from the next operation, and `running`
+        reported False while the thread was alive.)"""
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=timeout)
-            self._thread = None
+        if self._thread is None:
+            return True  # already stopped (or never started): idempotent
+        # Cancel the in-flight read only when the transport cannot be polled:
+        # with in_waiting support the reader is never stuck in a long read,
+        # and cancelling is not free even there - pyserial's loop:// implements
+        # cancel_read as queue.put_nowait(None), a poison pill that makes the
+        # NEXT direct read return empty (IH-40).
+        try:
+            pollable = self._transport.in_waiting is not None
+        except (AttributeError, OSError, ValueError, TransportClosedError):
+            pollable = False  # dead/closed or poll-less transport: try to cancel
+        if not pollable:
+            cancel = getattr(self._transport, "cancel_read", None)
+            if cancel is not None:
+                try:
+                    cancel()
+                except (AttributeError, OSError, ValueError, TransportClosedError):
+                    pass  # a racy port close (or a backend without cancel support) must not break the stop path
+        self._thread.join(timeout=timeout)
+        if self._thread.is_alive():
+            return False  # still draining: the reference stays, running stays True
+        self._thread = None
+        return True
 
     @property
     def running(self) -> bool:
@@ -114,7 +141,7 @@ class SerialReader:
             # I/O operation.
             try:
                 in_waiting = getattr(self._transport, "in_waiting", None)
-            except (OSError, ValueError):
+            except (OSError, ValueError, TransportClosedError):
                 in_waiting = None  # dead/closed port: let read() below raise the real error
             data = b""
             if in_waiting:

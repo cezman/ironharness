@@ -528,3 +528,115 @@ def test_live_ch340_reader_write_no_nul_bursts(tmp_path):
     finally:
         reader.stop()
         t.close()
+
+
+# --- IH-40: stop() must cancel the in-flight read and never abandon a live thread ---
+
+
+class BlockingNoInWaiting:
+    """No in_waiting support (this is what SerialTransport looked like to the
+    reader before IH-40) and no cancel_read: read() blocks until released."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+
+    def read(self, size: int) -> bytes:
+        while not self.release.wait(0.05):
+            pass
+        raise OSError("port gone after release")
+
+    def write(self, data: bytes) -> int:
+        return len(data)
+
+
+class CancellingFake(BlockingNoInWaiting):
+    """A transport the reader can cancel: cancel_read unblocks the read."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancel_requested = threading.Event()
+
+    def cancel_read(self) -> None:
+        self.cancel_requested.set()
+        self.release.set()
+
+
+def test_stop_cancels_inflight_read_and_confirms_the_thread_dead():
+    t = CancellingFake()
+    r = SerialReader(t, max_bytes=4096)
+    r.start()
+    time.sleep(0.2)  # the thread enters its blocking read
+    t0 = time.monotonic()
+    stopped = r.stop(timeout=5)
+    assert stopped is True, "stop() must report a confirmed stop (IH-40)"
+    assert time.monotonic() - t0 < 4.5, "stop() waited out the in-flight read"
+    assert not r.running
+    assert t.cancel_requested.is_set(), "the in-flight read was never cancelled"
+
+
+def test_stop_timeout_keeps_the_thread_and_running_stays_true():
+    t = BlockingNoInWaiting()
+    r = SerialReader(t, max_bytes=4096)
+    r.start()
+    time.sleep(0.2)
+    stopped = r.stop(timeout=0.5)
+    assert stopped is False, "a timed-out stop must not report success"
+    assert r.running, "stop() abandoned a live thread (running=False while alive)"
+    t.release.set()  # the in-flight read finally ends; the thread sees _stop
+    assert r.stop(timeout=5) is True, "the retry stop did not finish the thread"
+    assert not r.running
+
+
+def test_stop_with_long_transport_timeout_stops_promptly():
+    # the external-review repro: loop:// opened with timeout=20 - on the old
+    # code the reader sat in a blocking read(512) for the whole timeout and
+    # stop()'s join(5) expired, silently abandoning a live thread
+    from io_core.serial_transport import SerialTransport
+
+    t = SerialTransport("loop://", timeout=20)
+    t.open()
+    try:
+        r = SerialReader(t, max_bytes=4096)
+        r.start()
+        time.sleep(0.2)
+        t0 = time.monotonic()
+        stopped = r.stop(timeout=5)
+        assert stopped is True, "stop() did not confirm the thread dead"
+        assert time.monotonic() - t0 < 4.5, "stop() blocked for the read timeout"
+        assert not r.running
+    finally:
+        t.close()
+
+
+def test_session_reader_stop_failure_keeps_registration(session, tmp_path, monkeypatch):
+    name = loop_session(session)
+    session.serial_reader_start(name)
+    reader = session._readers[name]
+    monkeypatch.setattr(reader, "stop", lambda timeout=5.0: False)
+    res = session.serial_reader_stop(name)
+    assert res["stopped"] is False
+    assert name in session._readers, "a failed stop deregistered a live reader"
+    kinds = [e["kind"] for e in read_events(tmp_path / "journal.jsonl")]
+    assert "reader_stop_failed" in kinds, "a failed stop was journaled as a clean stop"
+    monkeypatch.undo()
+    assert session.serial_reader_stop(name)["stopped"] is True
+    assert name not in session._readers
+
+
+def test_session_close_journals_failed_implicit_stop(session, tmp_path, monkeypatch):
+    """IH-40 review: an implicit stop (transport close / session close) that
+    cannot confirm the thread dead must be journaled as reader_stop_failed
+    with the implicit flag - not silently as a clean reader_stop."""
+    name = loop_session(session)
+    session.serial_reader_start(name)
+    reader = session._readers[name]
+    monkeypatch.setattr(reader, "stop", lambda timeout=5.0: False)
+    session.close()
+    failed = [
+        e
+        for e in read_events(tmp_path / "journal.jsonl")
+        if e["kind"] == "reader_stop_failed"
+    ]
+    assert failed, "a failed implicit stop was journaled as a clean reader_stop"
+    assert failed[-1].get("conn") == name
+    assert failed[-1].get("implicit") is True

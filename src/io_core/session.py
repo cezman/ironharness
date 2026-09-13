@@ -354,15 +354,30 @@ class Session:
             reader.start()
         return reader.stats()
 
-    def serial_reader_stop(self, name: str) -> dict[str, int]:
+    def serial_reader_stop(self, name: str) -> dict[str, object]:
+        """Stops the background reader. Returns the final buffer stats plus
+        "stopped": True when the thread is confirmed dead (the reader is
+        deregistered). "stopped": False means the thread is still draining an
+        in-flight read: the registration is KEPT (a deregistered zombie would
+        steal bytes from the next serial_read/serial_put - IH-40), serial_read
+        stays refused, and a retry stop finishes the job once the read ends
+        (guaranteed promptly for transports with in_waiting or cancel_read;
+        on a transport with neither, only its death does). Bytes still in the
+        reader buffer at a successful stop are dropped with the registration -
+        drain serial_tail first if they matter."""
         with self._lock:
-            reader = self._readers.pop(name, None)
+            reader = self._readers.get(name)
             if reader is None:
                 raise KeyError(f"transport {name!r} has no background reader")
-            reader.stop()
+            stopped = reader.stop()
+            if stopped:
+                self._readers.pop(name, None)
             stats = reader.stats()
-        self.journal("reader_stop", {"conn": name, **stats})
-        return stats
+        self.journal(
+            "reader_stop" if stopped else "reader_stop_failed",
+            {"conn": name, **stats},
+        )
+        return {**stats, "stopped": stopped}
 
     def serial_tail(self, name: str, size: int = 4096) -> dict[str, object]:
         """Newest `size` bytes from the reader buffer (non-destructive)."""
@@ -383,12 +398,17 @@ class Session:
     def _stop_reader(self, name: str, *, implicit: bool = False) -> None:
         """Stops and drops the reader if one is attached (under the session
         lock). An implicit stop (transport close) is journaled too: the
-        journal must show the reader ending, not vanishing."""
+        journal must show the reader ending, not vanishing - and honestly
+        (IH-40): a thread still draining its last in-flight read is journaled
+        as reader_stop_failed, not as a clean stop. The reference is dropped
+        even on a failed stop because the transport is closing anyway - the
+        dying port ends the thread."""
         reader = self._readers.pop(name, None)
         if reader is not None:
-            reader.stop()
+            stopped = reader.stop()
             if implicit:
-                self.journal("reader_stop", {"conn": name, "implicit": True, **reader.stats()})
+                kind = "reader_stop" if stopped else "reader_stop_failed"
+                self.journal(kind, {"conn": name, "implicit": True, **reader.stats()})
 
     # --- modbus ---
 
@@ -567,10 +587,12 @@ class Session:
             self._readers.clear()
         for name, reader in readers:  # stop readers before their transports close
             try:
-                reader.stop()
+                stopped = reader.stop()
                 # an implicit stop must end in the journal like any other
-                # (a reader that merely vanishes breaks the audit trail)
-                self.journal("reader_stop", {"conn": name, "implicit": True, **reader.stats()})
+                # (a reader that merely vanishes breaks the audit trail) -
+                # and honestly: a still-draining thread is reader_stop_failed
+                kind = "reader_stop" if stopped else "reader_stop_failed"
+                self.journal(kind, {"conn": name, "implicit": True, **reader.stats()})
             except Exception as e:  # noqa: BLE001 - one bad reader must not leak the rest
                 if first_error is None:
                     first_error = e

@@ -127,6 +127,33 @@ class SerialTransport:
         self._emit("read_line", {"data_hex": data.hex(), "bytes": len(data)})
         return data
 
+    @property
+    def in_waiting(self) -> int:
+        """Bytes in the receive buffer (IH-40): lets the background reader
+        poll for data instead of blocking in read() for the transport's whole
+        read timeout. Not journaled - the reader polls it up to ~20 times a
+        second; journaling would flood the event stream."""
+        if self._serial is None:
+            raise TransportClosedError("port is not open")
+        try:
+            return self._serial.in_waiting
+        except OSError as e:
+            self._emit("read_failed", {"error": f"in_waiting: {e}"})
+            raise
+
+    def cancel_read(self) -> None:
+        """Aborts an in-flight blocking read() from another thread (IH-40):
+        lets SerialReader.stop() confirm the thread dead promptly instead of
+        waiting out the transport's read timeout. No-op when the port is not
+        open (nothing can be in flight)."""
+        if self._serial is None:
+            return
+        try:
+            self._serial.cancel_read()
+        except OSError as e:
+            self._emit("read_failed", {"error": f"cancel_read: {e}"})
+            raise
+
     def reset(self, *, pulse_sec: float = 0.1, settle_sec: float = 2.0) -> None:
         """Управляемый сброс платы: импульс RTS (asserted на pulse_sec) при
         отпущенном DTR (IH-19).

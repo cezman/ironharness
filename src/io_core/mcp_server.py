@@ -190,7 +190,10 @@ def serial_reader_start(name: str, max_bytes: int = 65536) -> dict:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
 def serial_reader_stop(name: str) -> dict:
-    """Stops the background reader of the named serial port (returns final buffer stats)."""
+    """Stops the background reader of the named serial port (returns final
+    buffer stats plus stopped). stopped=false means the reader thread is
+    still draining an in-flight read: the connection keeps its reader (a
+    retry stop cancels the read and finishes it)."""
     return get_session().serial_reader_stop(name)
 
 
