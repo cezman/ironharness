@@ -192,8 +192,10 @@ class SerialTransport:
         finally:
             try:
                 self._serial.rts = False  # EN high: чип стартует - в любом случае
-            except OSError:
-                pass  # мёртвый порт и линию не держит - отказ уже в журнале
+            except OSError as e:
+                # best-effort: мёртвый/зависший адаптер может не отпустить
+                # линию, но отказ релиза тоже обязан попасть в журнал
+                self._emit("reset_failed", {"error": f"rts release: {e}"})
         time.sleep(settle_sec)  # boot-тишина: вывод стартующей прошивки пойдёт в ридер/чтения
         self._emit("reset", {"pulse_sec": pulse_sec, "settle_sec": settle_sec})
 
