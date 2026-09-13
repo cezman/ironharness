@@ -14,6 +14,7 @@ one namespace (`ironbench.runner_common`) and every target honors it.
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import io
 import os
@@ -52,6 +53,95 @@ ERROR_NONE = "none"
 ERROR_INFRA = "infra"
 ERROR_TIMEOUT = "timeout"
 ERROR_RUN = "run"
+
+
+class _StdinWriter:
+    """Asynchronous stdin pump for runner child processes (IH-39).
+
+    write() enqueues and returns; a daemon thread performs the blocking
+    write+flush. A synchronous write to a pipe the child never drains blocks
+    forever - and the run's wall-deadline checks live on the main thread, so
+    the whole runner used to hang past its deadline (proven with a 500 KB
+    stimulus to a firmware that never reads stdin). The pump turns that hang
+    into a bounded backlog: past MAX_PENDING_BYTES the child is provably not
+    reading and write() stops accepting data (overflow() reports it). close()
+    + join() during teardown never block the runner for long: killing the
+    process breaks any write stuck inside the pipe.
+
+    data is whatever the child's stdin accepts: bytes for a binary pipe,
+    str for a text-mode one (the plant target); the pending-bytes cap counts
+    len(data) either way.
+    """
+
+    MAX_PENDING_BYTES = 1 << 20
+
+    def __init__(self, stdin) -> None:
+        self._stdin = stdin
+        self._queue: collections.deque = collections.deque()
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._pending = 0
+        self._overflow = False
+        self._broken = False  # the pipe died (child gone / closed): nothing more can be delivered
+        self._closing = False
+        self._thread = threading.Thread(target=self._pump, name="stdin-pump", daemon=True)
+        self._thread.start()
+
+    def write(self, data) -> None:
+        with self._lock:
+            if self._broken or self._overflow:
+                return
+            if self._pending + len(data) > self.MAX_PENDING_BYTES:
+                self._overflow = True
+                return
+            self._queue.append(data)
+            self._pending += len(data)
+        self._wake.set()
+
+    def overflow(self) -> bool:
+        with self._lock:
+            return self._overflow
+
+    def broken(self) -> bool:
+        with self._lock:
+            return self._broken
+
+    def close(self) -> None:
+        """Signals the pump to exit once drained; never blocks on a stuck write."""
+        with self._lock:
+            self._closing = True
+        self._wake.set()
+
+    def join(self, timeout: float) -> bool:
+        self._thread.join(timeout=timeout)
+        return not self._thread.is_alive()
+
+    def _pump(self) -> None:
+        while True:
+            self._wake.wait()
+            while True:
+                with self._lock:
+                    data = self._queue.popleft() if self._queue else None
+                    if data is not None:
+                        self._pending -= len(data)
+                if data is None:
+                    break
+                try:
+                    self._stdin.write(data)
+                    self._stdin.flush()
+                except (OSError, ValueError):
+                    # the child is gone or the pipe closed under us: drop the
+                    # backlog and exit - further writes are silently refused
+                    with self._lock:
+                        self._broken = True
+                        self._queue.clear()
+                        self._pending = 0
+                    return
+            with self._lock:
+                if not self._queue:
+                    if self._closing:
+                        return
+                    self._wake.clear()
 
 
 @dataclasses.dataclass(frozen=True)

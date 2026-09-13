@@ -15,12 +15,13 @@ outside its cwd is out of scope).
 Protocol: the harness writes one step per line ("t,y_meas,setpoint"), the
 controller answers one line (repr(u)) on stdout; controller print()s are
 redirected to stderr by the bootstrap, so they land in the feedback log and
-cannot garble the answer channel. The run loop writes stdin directly (one
-~60-byte line in flight: a hung controller that never reads it cannot fill
-the pipe) and reads answers through a queue thread with the wall deadline -
-silence/EOF/exit classify as run results, never as harness crashes. Both
-pipes decode with errors="replace": hostile non-UTF8 output degrades into
-the feedback log instead of killing the pump threads.
+cannot garble the answer channel. Setpoint writes go through the shared
+async stdin pump (IH-39): the backlog is capped at 1 MiB and overflowing it
+is a run error - a controller that never reads stdin cannot hang the loop
+past the wall deadline. Answers are read through a queue thread with the
+wall deadline - silence/EOF/exit classify as run results, never as harness
+crashes. Both pipes decode with errors="replace": hostile non-UTF8 output
+degrades into the feedback log instead of killing the pump threads.
 """
 
 from __future__ import annotations
@@ -166,6 +167,7 @@ def _run_plant(
     if journal:
         journal("task_start", {"task": task.name})
     proc: subprocess.Popen | None = None
+    writer = None  # the async stdin pump; bound after the process spawns
     stderr_lines: list[str] = []
     out_q: queue.Queue = queue.Queue()
     try:
@@ -185,6 +187,10 @@ def _run_plant(
             target=_pump_stderr, args=(proc.stderr, stderr_lines), daemon=True
         )
         err_thread.start()
+        # IH-39: the setpoint write used to be a synchronous stdin write - the
+        # same hang class as the unix runner (a controller that never reads
+        # stdin fills the pipe and blocks the loop past the wall deadline)
+        writer = common._StdinWriter(proc.stdin)
 
         deadline = time.monotonic() + wall_timeout
 
@@ -192,14 +198,18 @@ def _run_plant(
             """The closed-loop control adapter over the pipes; raises
             ControlAbort on silence, EOF, exit, or a non-numeric answer."""
             assert proc is not None and proc.stdin is not None
-            try:
-                proc.stdin.write(f"{t!r},{y_meas!r},{setpoint!r}\n")
-                proc.stdin.flush()
-            except (OSError, ValueError):
+            writer.write(f"{t!r},{y_meas!r},{setpoint!r}\n")
+            if writer.overflow():
+                raise ControlAbort(
+                    "controller does not read stdin: the setpoint write backlog "
+                    f"exceeded the 1 MiB cap before step t={t:g}",
+                    kind="run",
+                )
+            if writer.broken():
                 raise ControlAbort(
                     _death_error(proc, stderr_lines, err_thread, f"before step t={t:g}"),
                     kind="run",
-                ) from None
+                )
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -228,7 +238,9 @@ def _run_plant(
 
         rows, error = run_closed_loop(ipc_control, spec)
         if error is None:
-            # the controller survived the whole loop: close stdin so it exits
+            # the controller survived the whole loop: stop the pump and close
+            # stdin so it exits
+            writer.close()
             try:
                 proc.stdin.close()  # type: ignore[union-attr]
             except OSError:
@@ -242,13 +254,20 @@ def _run_plant(
         error_kind = common.ERROR_TIMEOUT if e.kind == "timeout" else common.ERROR_RUN
     finally:
         if proc is not None:
-            if proc.stdin is not None:
+            if writer is not None:
+                writer.close()
+            if proc.poll() is None:
+                # unblock a pump possibly stuck in a blocking write (IH-39)
+                proc.kill()
+            # stdin.close() takes the pipe's I/O lock: if the pump is still
+            # stuck inside a blocking write (join timed out), closing here
+            # could block this thread - the OS reaps the handle at process
+            # exit instead (IH-39 review N2)
+            if proc.stdin is not None and (writer is None or writer.join(timeout=2)):
                 try:
                     proc.stdin.close()
                 except OSError:
                     pass
-            if proc.poll() is None:
-                proc.kill()
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:

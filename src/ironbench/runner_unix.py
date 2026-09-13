@@ -136,17 +136,10 @@ def _unix_cmd(remote_entry: str, env_prefix: str = "") -> list[str]:
     ]
 
 
-class _StdinWriter:
-    """Adapts the process stdin to the Transport.write protocol - the
-    FaultyTransport target."""
-
-    def __init__(self, stdin) -> None:
-        self._stdin = stdin
-
-    def write(self, data: bytes) -> None:
-        assert self._stdin is not None
-        self._stdin.write(data)
-        self._stdin.flush()
+# the shared async stdin pump (IH-39) lives in runner_common so the plant
+# target uses the same mechanism - its sync `proc.stdin.write` per setpoint
+# was the same hang class; re-exported here for runner.py and tests
+_StdinWriter = common._StdinWriter
 
 
 # mqtt_sim lives next to the io_core sources (staged into WSL for the firmware)
@@ -284,6 +277,7 @@ def _run_unix(
     # finally block, and an infra failure must land as a clean TaskResult,
     # not as an UnboundLocalError piercing run_task
     proc = None
+    writer = None  # the async stdin pump; bound after the process spawns
     mqtt_client: MqttTransport | None = None
     broker_proc: subprocess.Popen | None = None
     broker_pid: int | None = None
@@ -393,7 +387,8 @@ def _run_unix(
         # reproducibility is the point, this is not cryptography (see
         # io_core/faults.py). One op of the counter = one write-serial stimulus
         # step. Firmware output (stdout) is not noised: pattern scoring stays fair.
-        writer = _StdinWriter(proc.stdin)
+        writer = common._StdinWriter(proc.stdin)
+        raw_writer = writer  # the terminator bypasses the noise wrapper (see below)
         if task.noise:
             writer = FaultyTransport(
                 writer, task.noise.get("faults", []), rng=random.Random(task.noise.get("seed", 0))
@@ -450,8 +445,7 @@ def _run_unix(
                         # the terminator is not noised: corrupting \n would glue
                         # frames into a stream input() can never recover from, retry or not
                         writer.write(raw[:-1])
-                        proc.stdin.write(b"\n")
-                        proc.stdin.flush()
+                        raw_writer.write(b"\n")
                     else:
                         writer.write(raw)
                 elif "mqtt-publish" in step and mqtt_client is not None:
@@ -571,11 +565,36 @@ def _run_unix(
                         "stimulus"
                     )
                 error_kind = common.ERROR_RUN
+            # broken() is deliberately unreported here (IH-39 review N3): a
+            # firmware that died mid-stimulus is already scored via the missed
+            # patterns, the anti-cheat verdicts and the exit code below
+            if error is None and writer is not None and writer.overflow():
+                error = (
+                    "stimulus not delivered: the firmware never read stdin and the "
+                    "write backlog exceeded the 1 MiB cap - later answers could not "
+                    "be produced in response to the stimulus"
+                )
+                error_kind = common.ERROR_RUN
             if exit_code not in (0, None):
                 error = f"micropython exited with code {exit_code}"
                 error_kind = common.ERROR_RUN
         finally:
-            if proc.stdin is not None:
+            if writer is not None:
+                writer.close()
+            if proc is not None and proc.poll() is None:
+                # unblock a pump possibly stuck in a blocking write (IH-39)
+                # before touching the pipe; a still-running child here has no
+                # exit code worth keeping (the deadline already passed)
+                proc.kill()
+            # stdin.close() takes the pipe's I/O lock: if the pump is still
+            # stuck inside a blocking write (join timed out), closing here
+            # could block this thread - the OS reaps the handle at process
+            # exit instead (IH-39 review N2)
+            if (
+                proc is not None
+                and proc.stdin is not None
+                and (writer is None or writer.join(timeout=2))
+            ):
                 try:
                     proc.stdin.close()
                 except OSError:

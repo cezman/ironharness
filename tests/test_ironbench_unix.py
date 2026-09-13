@@ -9,6 +9,7 @@ import json
 import subprocess
 import sys
 import textwrap
+import threading
 from pathlib import Path
 
 import pytest
@@ -128,6 +129,90 @@ def test_unix_hang_until_wall_deadline(tmp_path):
     assert not res.passed
     assert res.exit_code is None  # killed on the deadline, did not exit on its own
     assert res.missed == task.expect
+
+
+def test_never_reading_firmware_cannot_hang_the_runner_past_deadline(tmp_path, monkeypatch):
+    """IH-39: a firmware that never reads stdin + a stimulus larger than the
+    OS pipe buffer used to block the runner's main thread inside a synchronous
+    stdin write - the wall deadline checks live on that same thread, so the
+    run hung forever. The run must end (clean FAIL) within the wall deadline."""
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    big = "X" * 500_000 + "\r"  # far beyond any default pipe buffer
+    task = make_unix_task(
+        tmp_path, expect=("never printed",), timeout_sec=1, stimulus=[f'write-serial: "{big}"']
+    )
+    box: dict = {}
+    wall = 1 * 2 + 1  # timeout_sec * 2 + WALL_GRACE_SEC
+
+    def go():
+        box["res"] = run_fake_unix(tmp_path, task, "hang")
+
+    th = threading.Thread(target=go, daemon=True)
+    th.start()
+    th.join(timeout=wall + 15)
+    assert not th.is_alive(), (
+        "the runner hung past the wall deadline: the stimulus write blocked "
+        "on a stdin the firmware never reads"
+    )
+    res = box["res"]
+    assert not res.passed
+    assert res.missed == task.expect
+    assert res.duration_sec <= wall + 5
+
+
+def test_noise_terminator_bypasses_the_fault_layer_offline(tmp_path):
+    """IH-39 pin, offline (the golden noisy tests need WSL and are skipped on
+    CI): the \r->\n terminator must reach the firmware even when the noise
+    layer drops every payload write - a terminator that itself went through
+    FaultyTransport would glue frames and the firmware would starve (that
+    regression happened when the async stdin pump landed)."""
+    task = make_unix_task(
+        tmp_path,
+        expect=("echo: hello",),
+        timeout_sec=5,
+        stimulus=['write-serial: "hello\\r"'],
+    )
+    # task.noise is loader-validated only on load; mutate programmatically
+    task = dataclasses.replace(
+        task, noise={"seed": 0, "faults": [{"action": "drop", "probability": 1.0}]}
+    )
+    res = run_fake_unix(tmp_path, task, "echo")
+    log = (tmp_path / "out").rglob("*.serial.log")
+    text = "".join(p.read_text(encoding="utf-8") for p in log)
+    # the payload was dropped: "echo: hello" can never appear - but the
+    # terminator was delivered unwrapped, so the firmware answered empty lines
+    assert not res.passed
+    assert res.missed == task.expect
+    assert text.count("echo: ") >= 1, (
+        "the terminator never reached the firmware - it went through the "
+        "noise layer instead of bypassing it"
+    )
+
+
+def test_stdin_backlog_overflow_is_a_run_error(tmp_path, monkeypatch):
+    """IH-39 review B1: a stimulus beyond the 1 MiB pump cap against a
+    never-reading firmware latches the overflow - the run must end within the
+    wall deadline and classify the undelivered stimulus as a run error, not
+    an infra failure."""
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    big = "X" * (1 << 21)  # a single chunk larger than the whole 1 MiB cap
+    task = make_unix_task(
+        tmp_path, expect=("never printed",), timeout_sec=1, stimulus=[f'write-serial: "{big}"']
+    )
+    box: dict = {}
+    wall = 1 * 2 + 1
+
+    def go():
+        box["res"] = run_fake_unix(tmp_path, task, "hang")
+
+    th = threading.Thread(target=go, daemon=True)
+    th.start()
+    th.join(timeout=wall + 15)
+    assert not th.is_alive(), "overflow did not stop the run from finishing"
+    res = box["res"]
+    assert not res.passed
+    assert res.error_kind == "run"
+    assert "stimulus not delivered" in (res.error or "")
 
 
 def test_unix_set_control_rejected_at_load(tmp_path):
