@@ -230,3 +230,62 @@ def test_reset_settle_waits_for_the_boot(tmp_path: Path):
         assert elapsed >= 0.3, f"reset returned in {elapsed:.3f}s - no settle wait"
     finally:
         s.close()
+
+
+def test_reset_negative_pulse_rejected_before_touching_lines():
+    """IH-43: a negative pulse_sec used to raise ValueError from time.sleep
+    AFTER rts=True with only OSError caught - the board (RTS->EN) stayed held
+    in reset after the failed call. Now the duration is validated first: the
+    rejection happens before any line is touched."""
+    t = SerialTransport("loop://", timeout=0.05)
+    t.open()
+    inner = TrackingLines()
+    t._serial = inner
+    with pytest.raises(ValueError, match=">= 0"):
+        t.reset(pulse_sec=-1.0)
+    assert inner.log == [], f"a rejected reset touched the lines: {inner.log}"
+    t.close()
+
+
+def test_reset_midpulse_failure_still_releases_rts(monkeypatch):
+    """The finally pin (IH-43): whatever fails during the pulse (a driver
+    OSError mid-sleep, a KeyboardInterrupt), the RTS line must be released -
+    the board may never stay held in reset because an exception flew by."""
+    t = SerialTransport("loop://", timeout=0.05)
+    t.open()
+    inner = TrackingLines()
+    t._serial = inner
+
+    def boom(_seconds):
+        raise OSError("driver gone mid-pulse")
+
+    monkeypatch.setattr("io_core.serial_transport.time.sleep", boom)
+    with pytest.raises(OSError, match="driver gone"):
+        t.reset(pulse_sec=0.01, settle_sec=0.01)
+    assert inner.log == ["dtr=False", "rts=True", "rts=False"], (
+        f"RTS left asserted after a mid-pulse failure: {inner.log}"
+    )
+    t.close()
+
+
+def test_reset_rejects_bad_durations_before_touching_lines():
+    """IH-43: durations are validated (finite, in range) before any line is
+    touched - a rejected reset must leave the board completely alone."""
+    t = SerialTransport("loop://", timeout=0.05)
+    t.open()
+    inner = TrackingLines()
+    t._serial = inner
+    bad_kwargs = [
+        {"pulse_sec": float("nan")},
+        {"pulse_sec": float("inf")},
+        {"pulse_sec": -0.001},
+        {"pulse_sec": 30.0},  # above the 5 s pulse cap
+        {"settle_sec": -1.0},
+        {"settle_sec": float("inf")},
+        {"settle_sec": 61.0},  # above the 60 s settle cap
+    ]
+    for kwargs in bad_kwargs:
+        with pytest.raises(ValueError):
+            t.reset(**kwargs)
+    assert inner.log == [], f"a rejected reset touched the lines: {inner.log}"
+    t.close()
