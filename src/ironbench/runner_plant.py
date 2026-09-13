@@ -78,18 +78,34 @@ def _pump_lines(src, sink: queue.Queue) -> None:
         sink.put(None)
 
 
-def _pump_stderr(src, sink: list) -> None:
-    """Thread body: accumulate stderr until the 500-line cap (controller
+def _pump_stderr(src, sink: list, *, max_bytes: int = 262_144) -> None:
+    """Thread body: accumulate stderr until the byte cap (controller
     prints + tracebacks; the thread is a daemon - it ends when the process
     dies). IH-25: the controller is untrusted - after the cap the pipe stops
     being drained, so a stderr flood BLOCKS the controller on write (killed
     by the wall deadline) instead of eating harness memory. Only the captured
-    head lands in the feedback log anyway."""
+    head lands in the feedback log anyway. IH-45: the cap is BYTES, not
+    lines - a single giant line used to pass through whole; line boundaries
+    are preserved for complete lines, the truncated tail is included as-is.
+    """
+    total = 0
+    partial = ""
     try:
-        for chunk in src:
-            sink.extend(chunk.splitlines(keepends=True))
-            if len(sink) >= 500:
-                break
+        while total < max_bytes:
+            chunk = src.read(8192)
+            if not chunk:
+                if partial:
+                    sink.append(partial)
+                return
+            total += len(chunk)
+            buf = partial + chunk
+            lines = buf.splitlines(keepends=True)
+            partial = ""
+            while lines and not lines[-1].endswith(("\n", "\r")):
+                partial = lines.pop()
+            sink.extend(lines)
+        if partial:
+            sink.append(partial)
     finally:
         try:
             src.close()

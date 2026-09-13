@@ -54,6 +54,11 @@ ERROR_INFRA = "infra"
 ERROR_TIMEOUT = "timeout"
 ERROR_RUN = "run"
 
+# IH-45: the unix target's retained serial output cap (bytes). The plant
+# target caps its stderr separately (_pump_stderr, 256 KiB). Real golden
+# tasks produce kilobytes - only a flooding firmware hits this.
+MAX_SERIAL_TEXT = 1 << 20
+
 
 class _StdinWriter:
     """Asynchronous stdin pump for runner child processes (IH-39).

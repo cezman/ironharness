@@ -398,3 +398,32 @@ def test_golden_plant_tasks_pass(name, tmp_path):
     assert task.target == "plant"
     res = run_task(task, out_dir=tmp_path / name)
     assert res.passed, (res.error, res.missed)
+
+
+def test_stderr_pump_caps_bytes_not_just_lines():
+    """IH-45: the 500-line cap counted LINES - one giant line (a hostile or
+    broken controller printing a single endless string) passed through whole
+    into the sink. The cap must be byte-based."""
+    huge = "X" * (8 << 20)  # 8 MB on a single line
+
+    class HugeStderr:
+        # both interfaces: the old pump iterates (lines), the fixed one reads
+        def __init__(self) -> None:
+            self._left = huge
+
+        def __iter__(self):
+            yield huge
+
+        def read(self, n):
+            out, self._left = self._left[:n], self._left[n:]
+            return out
+
+        def close(self):
+            pass
+
+    sink: list[str] = []
+    from ironbench.runner_plant import _pump_stderr
+
+    _pump_stderr(HugeStderr(), sink)
+    total = sum(len(s) for s in sink)
+    assert total <= 512_000, f"stderr pump buffered {total} bytes - byte cap missing"

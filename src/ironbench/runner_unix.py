@@ -355,12 +355,24 @@ def _run_unix(
             stderr=subprocess.STDOUT,  # the unix port writes tracebacks to stderr
         )
         box = {"text": "", "chunks": [], "eof": False, "lock": threading.Lock()}
+        # IH-45: the output cap - the plant target's flood protection got its
+        # unix counterpart. Once the cap is hit, the reader keeps draining and
+        # discarding (no pipe backpressure) but retains nothing more.
+        max_serial_text = common.MAX_SERIAL_TEXT
 
         def _box_append(chunk: str) -> None:
             # text and chunks must stay position-consistent (the anti-cheat
             # maps a needle position back to its chunk); collect-appends and
             # the reader thread both land here under the same lock
             with box["lock"]:
+                if box.get("dropped"):
+                    return  # truncation already hit: drain, discard, keep order
+                if len(box["text"]) + len(chunk) > max_serial_text:
+                    box["dropped"] = True
+                    chunk += (
+                        f"\n[ironharness: serial output truncated at "
+                        f"{max_serial_text} bytes - further output discarded]\n"
+                    )
                 box["chunks"].append((time.monotonic(), chunk))
                 box["text"] += chunk
 

@@ -215,6 +215,35 @@ def test_stdin_backlog_overflow_is_a_run_error(tmp_path, monkeypatch):
     assert "stimulus not delivered" in (res.error or "")
 
 
+def test_unbounded_firmware_output_is_capped_offline(tmp_path, monkeypatch):
+    """IH-45: a firmware printing without end used to be accumulated whole in
+    memory (bounded only by the wall deadline) and written whole to the
+    serial log - while the plant target's flood protection (IH-25) had no
+    unix counterpart. The retained serial text must be byte-capped."""
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    task = make_unix_task(tmp_path, expect=("never printed",), timeout_sec=1)
+    script = tmp_path / "fake_upy.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import sys
+            while True:
+                sys.stdout.write("X" * 4096 + "\\n")
+                sys.stdout.flush()
+            """
+        ),
+        encoding="utf-8",
+    )
+    res = run_task(
+        task, out_dir=tmp_path / "out", unix_cmd=[sys.executable, str(script)]
+    )
+    assert not res.passed
+    assert res.serial_log is not None
+    assert res.serial_log.stat().st_size <= (1 << 20) + 65536, (
+        f"serial log grew to {res.serial_log.stat().st_size} bytes - no output cap"
+    )
+
+
 def test_unix_set_control_rejected_at_load(tmp_path):
     # IH-38 review N1: a natively-authored unix task with set-control is an
     # authoring error - it surfaces at load_task, before any run.
