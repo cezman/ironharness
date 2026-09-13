@@ -127,6 +127,9 @@ def test_journal_lands_in_home(mcp_env):
 
 def test_esp_image_info_offline(mcp_env):
     """Разбор реального образа через MCP без железа."""
+    # esptool is the optional [flash] extra: the CI min-deps job (IH-41)
+    # installs the runtime floors only, so this must skip, not fail
+    pytest.importorskip("esptool", reason="esp tests need the [flash] extra (esptool)")
     info = esp_image_info(str(FIRMWARE))
     assert info["chip"] == "esp32"
     assert len(info["segments"]) >= 3
