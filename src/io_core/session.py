@@ -16,7 +16,7 @@ from typing import Any
 import serial.tools.list_ports
 
 from io_core import mprepl
-from io_core.errors import PolicyViolation
+from io_core.errors import PolicyViolation, TransportClosedError
 from io_core.file_sandbox import FileSandbox
 from io_core.journal import JsonlJournal
 from io_core.limits import (
@@ -70,6 +70,7 @@ class Session:
         # owner to serialize against it (CH340 single-threaded link)
         self._serial_base: dict[str, Any] = {}
         self._readers: dict[str, SerialReader] = {}
+        self._transfers: set[str] = set()  # IH-37: serial_put/get in flight (reader gate)
         self._closed = False
         self._lock = threading.RLock()
 
@@ -205,15 +206,25 @@ class Session:
         # e.g. in _get) plus a concurrent reader_stop (session lock held,
         # joining a reader thread that waits for io_lock) is a deadlock cycle.
         with self._lock:
-            t = self._get(name)
-            reader = self._readers.get(name)
-        if reader is not None:
-            # CH340: serialize against the background read (racing them on a
-            # live link bursts NUL bytes); limits still apply - the wrapper's
-            # write goes under the reader's I/O lock
-            with reader.io_lock:
-                return t.write(data)
-        return t.write(data)
+            try:
+                t = self._get(name)
+                reader = self._readers.get(name)
+            except Exception as e:
+                # IH-37: a write to an unknown/closed transport journals too
+                self.journal("write_failed", {"conn": name, "error": str(e)})
+                raise
+        try:
+            if reader is not None:
+                # CH340: serialize against the background read (racing them on a
+                # live link bursts NUL bytes); limits still apply - the wrapper's
+                # write goes under the reader's I/O lock
+                with reader.io_lock:
+                    return t.write(data)
+            return t.write(data)
+        except TransportClosedError as e:
+            # IH-37: a write past the port's death journals before raising
+            self.journal("write_failed", {"conn": name, "error": str(e)})
+            raise
 
     def serial_read(self, name: str, size: int = 64) -> str:
         with self._lock:
@@ -279,6 +290,9 @@ class Session:
                     f"transport {name!r} has a background reader - stop it before "
                     "serial_put (the transfer reads the board's answers)"
                 )
+            if name in self._transfers:
+                raise RuntimeError(f"a serial transfer is already in progress on {name!r}")
+            self._transfers.add(name)  # IH-37: the gate is symmetric now
             t = self._get(name)
         try:
             mprepl.put_file(t, data, target_path)
@@ -288,6 +302,9 @@ class Session:
                 {"conn": name, "source": source_path, "target": target_path, "error": str(e)},
             )
             raise
+        finally:
+            with self._lock:
+                self._transfers.discard(name)
         self.journal(
             "serial_put",
             {"conn": name, "source": source_path, "target": target_path, "bytes": len(data)},
@@ -309,23 +326,30 @@ class Session:
                     f"transport {name!r} has a background reader - stop it before "
                     "serial_get (the transfer reads the board's answers)"
                 )
+            if name in self._transfers:
+                raise RuntimeError(f"a serial transfer is already in progress on {name!r}")
+            self._transfers.add(name)  # IH-37: the gate is symmetric now
             t = self._get(name)
         try:
-            data = mprepl.get_file(t, target_path)
-        except Exception as e:
-            self.journal(
-                "serial_get_failed",
-                {"conn": name, "source": target_path, "target": dest_path, "error": str(e)},
-            )
-            raise
-        try:
-            written = self.sandbox.write_file(dest_path, data, overwrite=True)
-        except Exception as e:
-            self.journal(
-                "serial_get_failed",
-                {"conn": name, "source": target_path, "target": dest_path, "error": str(e)},
-            )
-            raise
+            try:
+                data = mprepl.get_file(t, target_path)
+            except Exception as e:
+                self.journal(
+                    "serial_get_failed",
+                    {"conn": name, "source": target_path, "target": dest_path, "error": str(e)},
+                )
+                raise
+            try:
+                written = self.sandbox.write_file(dest_path, data, overwrite=True)
+            except Exception as e:
+                self.journal(
+                    "serial_get_failed",
+                    {"conn": name, "source": target_path, "target": dest_path, "error": str(e)},
+                )
+                raise
+        finally:
+            with self._lock:
+                self._transfers.discard(name)
         self.journal(
             "serial_get",
             {"conn": name, "source": target_path, "target": dest_path, "bytes": written},
@@ -346,6 +370,13 @@ class Session:
                 raise KeyError(f"serial transport {name!r} is not open")
             if name in self._readers:
                 raise KeyError(f"transport {name!r} already has a background reader")
+            if name in self._transfers:
+                # IH-37: the gate is symmetric - a transfer that passed the
+                # reader check must not get a reader started mid-flight
+                raise RuntimeError(
+                    f"a serial transfer is in progress on {name!r} - serial_reader_start "
+                    "would race it for the board's answers"
+                )
             reader = SerialReader(base, max_bytes=max_bytes)
             self._readers[name] = reader
             # journaled BEFORE the thread starts: a journal where the first

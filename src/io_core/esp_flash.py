@@ -96,29 +96,38 @@ class EspFlasher:
             error = f"image not found: {path}"
             self._emit("esp_image_info_failed", {"path": str(path), "error": error})
             raise FileNotFoundError(error)
-        _require_esptool()
-        img = LoadFirmwareImage(self._chip, str(path))
-        segments = [{"addr": hex(s.addr), "size": len(s.data)} for s in img.segments]
-        # flash_size_freq: high nibble is size, low nibble is frequency; tables live on the target class
-        size_nibble = (img.flash_size_freq >> 4) & 0xF
-        freq_nibble = img.flash_size_freq & 0xF
-        target = CHIP_DEFS[self._chip]
-        info = {
-            "chip": self._chip,
-            "path": str(path),
-            "size": path.stat().st_size,
-            "entrypoint": hex(img.entrypoint),
-            "segments": segments,
-            "flash_mode": _reverse_lookup(FLASH_MODES, img.flash_mode, str(img.flash_mode)),
-            "flash_size": _reverse_lookup(
-                {name: (v >> 4) & 0xF for name, v in target.FLASH_SIZES.items()},
-                size_nibble,
-                hex(size_nibble),
-            ),
-            "flash_freq": _reverse_lookup(
-                dict(target.FLASH_FREQUENCY), freq_nibble, hex(freq_nibble)
-            ),
-        }
+        # IH-37: everything past the not-found check (missing optional
+        # esptool, corrupt image, decode errors - esptool raises an assorted
+        # set) is journaled before raising: no log = didn't happen
+        try:
+            _require_esptool()
+            img = LoadFirmwareImage(self._chip, str(path))
+            segments = [{"addr": hex(s.addr), "size": len(s.data)} for s in img.segments]
+            # flash_size_freq: high nibble is size, low nibble is frequency; tables live on the target class
+            size_nibble = (img.flash_size_freq >> 4) & 0xF
+            freq_nibble = img.flash_size_freq & 0xF
+            target = CHIP_DEFS[self._chip]
+            info = {
+                "chip": self._chip,
+                "path": str(path),
+                "size": path.stat().st_size,
+                "entrypoint": hex(img.entrypoint),
+                "segments": segments,
+                "flash_mode": _reverse_lookup(FLASH_MODES, img.flash_mode, str(img.flash_mode)),
+                "flash_size": _reverse_lookup(
+                    {name: (v >> 4) & 0xF for name, v in target.FLASH_SIZES.items()},
+                    size_nibble,
+                    hex(size_nibble),
+                ),
+                "flash_freq": _reverse_lookup(
+                    dict(target.FLASH_FREQUENCY), freq_nibble, hex(freq_nibble)
+                ),
+            }
+        except Exception as e:
+            # the journal boundary is deliberate: esptool raises an assorted
+            # set (ImageError, struct.error, ValueError) - all must journal
+            self._emit("esp_image_info_failed", {"path": str(path), "error": str(e)})
+            raise
         self._emit("esp_image_info", info)
         return info
 

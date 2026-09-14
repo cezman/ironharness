@@ -110,9 +110,10 @@ class MqttTransport:
                 raise ConnectionError(
                     f"failed to connect to mqtt broker {self._host}:{self._port}"
                 )
-        except OSError as e:
-            # policy refusals are journaled by the policy itself; connect
-            # failures are ours to record
+        except (OSError, ValueError) as e:
+            # IH-37: paho raises ValueError for bad parameters (not OSError) -
+            # every open failure must land in the journal. Policy refusals are
+            # journaled by the policy itself.
             self._teardown()
             self._emit(
                 "mqtt_open_failed",
