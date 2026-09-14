@@ -42,8 +42,8 @@ def expect_read(
             time.sleep(min(0.01, max(deadline - clock(), 0)))
         if len(buf) > MAX_EXPECT_BUF:
             raise VerificationError(
-                f"буфер превысил {MAX_EXPECT_BUF} байт без {expected!r}; "
-                f"хвост: {bytes(buf[-64:])!r}"
+                f"answer buffer exceeded {MAX_EXPECT_BUF} bytes without "
+                f"{expected!r}; tail: {bytes(buf[-64:])!r}"
             )
     return bytes(buf)
 

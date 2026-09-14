@@ -30,10 +30,18 @@ def test_gate_refusals_are_journaled(tmp_path):
         (tmp_path / "sb" / "src.txt").write_bytes(b"x")
         with pytest.raises(RuntimeError):
             s.serial_put("loop", "src.txt", "dst.txt")
+        with pytest.raises(RuntimeError):
+            s.serial_get("loop", "main.py", "dump.py")
         with pytest.raises(KeyError):
             s.serial_reader_start("loop")
         ks = {e["kind"] for e in read_events(tmp_path / "j.jsonl")}
-        for kind in ("read_refused", "read_line_refused", "put_refused", "reader_start_refused"):
+        for kind in (
+            "read_refused",
+            "read_line_refused",
+            "put_refused",
+            "get_refused",
+            "reader_start_refused",
+        ):
             assert kind in ks, f"the {kind} refusal passed unjournaled"
         s.serial_reader_stop("loop")
     finally:
@@ -93,5 +101,5 @@ def test_expect_read_buffer_is_bounded():
         def read(self, n: int) -> bytes:
             return b"Z" * 4096
 
-    with pytest.raises(VerificationError, match="превысил"):
+    with pytest.raises(VerificationError, match="exceeded"):
         expect_read(Flood(), b"needle", timeout=30)

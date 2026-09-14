@@ -238,7 +238,12 @@ class Session:
                     f"transport {name!r} has a background reader - use serial_tail/"
                     "serial_read_until (a direct read would race the reader for bytes)"
                 )
-            t = self._get(name)
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                # IH-37 precedent (serial_write): an unknown conn journals too
+                self.journal("read_failed", {"conn": name, "error": str(e)})
+                raise
         return t.read(size).hex()
 
     def serial_read_line(self, name: str, max_len: int = 256) -> str:
@@ -252,7 +257,11 @@ class Session:
                     f"transport {name!r} has a background reader - use serial_tail/"
                     "serial_read_until (a direct read would race the reader for bytes)"
                 )
-            t = self._get(name)
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("read_line_failed", {"conn": name, "error": str(e)})
+                raise
         return t.read_line(max_len).hex()
 
     def serial_reset(self, name: str, *, pulse_sec: float = 0.1, settle_sec: float = 2.0) -> None:
@@ -305,8 +314,13 @@ class Session:
                 )
             # _get runs BEFORE the registration: a failed _get must not leave
             # the name in _transfers (the finally below never covers the gate
-            # block - the IH-48-class stale-state wedge, review B1)
-            t = self._get(name)
+            # block - the IH-48-class stale-state wedge, review B1). The
+            # unknown-conn KeyError journals (IH-37 precedent, serial_write).
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("put_failed", {"conn": name, "error": str(e)})
+                raise
             if name in self._transfers:
                 # IH-51: the second transfer is a refusal, and refusals journal
                 self.journal(
@@ -353,8 +367,13 @@ class Session:
                 )
             # _get runs BEFORE the registration: a failed _get must not leave
             # the name in _transfers (the finally below never covers the gate
-            # block - the IH-48-class stale-state wedge, review B1)
-            t = self._get(name)
+            # block - the IH-48-class stale-state wedge, review B1). The
+            # unknown-conn KeyError journals (IH-37 precedent, serial_write).
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("get_failed", {"conn": name, "error": str(e)})
+                raise
             if name in self._transfers:
                 # IH-51: the second transfer is a refusal, and refusals journal
                 self.journal(
