@@ -136,13 +136,14 @@ def test_failed_open_is_journaled(tmp_path, monkeypatch):
 
 
 def test_failed_open_bad_protocol_is_journaled(tmp_path):
-    # unknown URL scheme -> ValueError from serial_for_url; the refusal is
-    # still journaled (the port string comes from an untrusted agent)
+    # unknown URL scheme -> refused by the IH-50 whitelist BEFORE serial_for_url
+    # (an unknown scheme might be a network one); the refusal is still journaled
+    # (the port string comes from an untrusted agent)
     jpath = tmp_path / "j.jsonl"
     with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ValueError):
         SerialTransport("nosuchproto://x", on_event=jr).open()
     events = read_events(jpath)
-    assert [e["kind"] for e in events] == ["open_failed"]
+    assert [e["kind"] for e in events] == ["serial_open_failed"]
 
 
 def test_failed_read_line_is_journaled(tmp_path, monkeypatch):
@@ -154,3 +155,36 @@ def test_failed_read_line_is_journaled(tmp_path, monkeypatch):
         t.read_line()
     failed = [e for e in read_events(jpath) if e["kind"] == "read_line_failed"]
     assert len(failed) == 1 and failed[0]["max_len"] == 256
+
+
+def test_network_serial_urls_are_rejected_and_journaled(tmp_path):
+    """IH-50: pyserial URLs can be NETWORK sockets (socket://, rfc2217://) -
+    an agent-facing open is whitelisted to local ports only. The refusal
+    journals serial_open_failed; local ports keep working."""
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr:
+        for url in ("socket://127.0.0.1:9999", "rfc2217://127.0.0.1:9999"):
+            t = SerialTransport(url, on_event=jr)
+            with pytest.raises(ValueError, match="not allowed"):
+                t.open()
+    failed = [e for e in read_events(jpath) if e["kind"] == "serial_open_failed"]
+    assert len(failed) == 2, "a network URL opened without a journal trace"
+    assert all("not allowed" in e["error"] for e in failed)
+
+    # the whitelist still opens local ports (loop:// exercised everywhere else)
+    with SerialTransport(LOOP) as t:
+        assert t._serial is not None
+
+
+def test_session_serial_open_rejects_network_urls(tmp_path):
+    from io_core.session import Session
+
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    try:
+        with pytest.raises(ValueError, match="not allowed"):
+            s.serial_open("s", "socket://127.0.0.1:9999")
+        ks = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+        assert "serial_open_failed" in ks, "session-level refusal passed unjournaled"
+        s.serial_open("loop", LOOP)
+    finally:
+        s.close()
