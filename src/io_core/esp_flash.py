@@ -36,7 +36,6 @@ try:  # esptool is an optional dependency — see the [flash] extra
     from esptool.cmds import (
         CHIP_DEFS,
         FLASH_MODES,
-        FatalError,
         LoadFirmwareImage,
         attach_flash,
         connect_esp,
@@ -96,29 +95,38 @@ class EspFlasher:
             error = f"image not found: {path}"
             self._emit("esp_image_info_failed", {"path": str(path), "error": error})
             raise FileNotFoundError(error)
-        _require_esptool()
-        img = LoadFirmwareImage(self._chip, str(path))
-        segments = [{"addr": hex(s.addr), "size": len(s.data)} for s in img.segments]
-        # flash_size_freq: high nibble is size, low nibble is frequency; tables live on the target class
-        size_nibble = (img.flash_size_freq >> 4) & 0xF
-        freq_nibble = img.flash_size_freq & 0xF
-        target = CHIP_DEFS[self._chip]
-        info = {
-            "chip": self._chip,
-            "path": str(path),
-            "size": path.stat().st_size,
-            "entrypoint": hex(img.entrypoint),
-            "segments": segments,
-            "flash_mode": _reverse_lookup(FLASH_MODES, img.flash_mode, str(img.flash_mode)),
-            "flash_size": _reverse_lookup(
-                {name: (v >> 4) & 0xF for name, v in target.FLASH_SIZES.items()},
-                size_nibble,
-                hex(size_nibble),
-            ),
-            "flash_freq": _reverse_lookup(
-                dict(target.FLASH_FREQUENCY), freq_nibble, hex(freq_nibble)
-            ),
-        }
+        # IH-37: everything past the not-found check (missing optional
+        # esptool, corrupt image, decode errors - esptool raises an assorted
+        # set) is journaled before raising: no log = didn't happen
+        try:
+            _require_esptool()
+            img = LoadFirmwareImage(self._chip, str(path))
+            segments = [{"addr": hex(s.addr), "size": len(s.data)} for s in img.segments]
+            # flash_size_freq: high nibble is size, low nibble is frequency; tables live on the target class
+            size_nibble = (img.flash_size_freq >> 4) & 0xF
+            freq_nibble = img.flash_size_freq & 0xF
+            target = CHIP_DEFS[self._chip]
+            info = {
+                "chip": self._chip,
+                "path": str(path),
+                "size": path.stat().st_size,
+                "entrypoint": hex(img.entrypoint),
+                "segments": segments,
+                "flash_mode": _reverse_lookup(FLASH_MODES, img.flash_mode, str(img.flash_mode)),
+                "flash_size": _reverse_lookup(
+                    {name: (v >> 4) & 0xF for name, v in target.FLASH_SIZES.items()},
+                    size_nibble,
+                    hex(size_nibble),
+                ),
+                "flash_freq": _reverse_lookup(
+                    dict(target.FLASH_FREQUENCY), freq_nibble, hex(freq_nibble)
+                ),
+            }
+        except Exception as e:
+            # the journal boundary is deliberate: esptool raises an assorted
+            # set (ImageError, struct.error, ValueError) - all must journal
+            self._emit("esp_image_info_failed", {"path": str(path), "error": str(e)})
+            raise
         self._emit("esp_image_info", info)
         return info
 
@@ -143,14 +151,26 @@ class EspFlasher:
                 {"port": port, "addr": addr, "baud": baud, "path": str(path), "error": error},
             )
             raise FileNotFoundError(error)
-        _require_esptool()
+        # IH-37 review: everything past the gate is journaled - the missing
+        # optional esptool (ImportError) and esptool's assorted parse/handler
+        # errors used to escape unjournaled
         try:
+            _require_esptool()
             with connect_esp(port=port, chip=self._chip) as esp:
                 esp = run_stub(esp)
                 esp.change_baud(baud)
                 attach_flash(esp)
                 write_flash(esp, [(addr, str(path))])
-        except (OSError, FatalError) as e:
+        except ImportError:
+            # environment signal, not a flashing failure: journal and re-raise
+            # unchanged (the gate test pins the ImportError contract)
+            self._emit(
+                "esp_flash_failed",
+                {"port": port, "addr": addr, "baud": baud, "path": str(path),
+                 "error": "esptool is not installed ([flash] extra)"},
+            )
+            raise
+        except Exception as e:  # noqa: BLE001 - the journal boundary is deliberate
             self._emit(
                 "esp_flash_failed",
                 {"port": port, "addr": addr, "baud": baud, "path": str(path), "error": str(e)},
@@ -161,14 +181,20 @@ class EspFlasher:
 
     def erase(self, port: str, *, baud: int = 921600) -> str:
         self._require_real_flash_allowed("erase", port)
-        _require_esptool()
         try:
+            _require_esptool()
             with connect_esp(port=port, chip=self._chip) as esp:
                 esp = run_stub(esp)
                 esp.change_baud(baud)
                 attach_flash(esp)
                 erase_flash(esp)
-        except (OSError, FatalError) as e:
+        except ImportError:
+            self._emit(
+                "esp_erase_failed",
+                {"port": port, "baud": baud, "error": "esptool is not installed ([flash] extra)"},
+            )
+            raise
+        except Exception as e:  # noqa: BLE001 - the journal boundary is deliberate
             self._emit("esp_erase_failed", {"port": port, "baud": baud, "error": str(e)})
             raise ConnectionError(f"esp {port}: failed to erase ({e})") from None
         self._emit("esp_erase", {"port": port, "baud": baud})

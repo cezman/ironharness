@@ -10,12 +10,14 @@ ConnectionException и есть самый реалистичный отказ �
 
 from __future__ import annotations
 
+import struct
 from collections.abc import Callable, Sequence
 from typing import Any, Self
 
 from pymodbus.client import ModbusTcpClient
 from pymodbus.exceptions import ModbusException
 
+from io_core.errors import TransportClosedError
 from io_core.policy import AccessPolicy
 
 EventHook = Callable[[str, dict[str, Any]], None]
@@ -48,7 +50,7 @@ class ModbusTransport:
             self._client = ModbusTcpClient(self._host, port=self._port, timeout=self._timeout)
             if not self._client.connect():
                 raise ConnectionError(f"failed to connect to {self._host}:{self._port}")
-        except (OSError, ModbusException) as e:
+        except (OSError, ModbusException, ValueError) as e:
             # policy refusals are journaled by the policy itself; connect
             # failures are ours to record
             self._emit(
@@ -72,7 +74,10 @@ class ModbusTransport:
         self.close()
 
     def _require_client(self) -> ModbusTcpClient:
-        assert self._client is not None, "connection is not open"
+        if self._client is None:
+            # not a bare assert: must hold under python -O (IH-37), and the
+            # caller journals it like any other failed operation
+            raise TransportClosedError("connection is not open")
         return self._client
 
     def _check(self, result: Any, op: str) -> None:
@@ -85,7 +90,7 @@ class ModbusTransport:
                 address, count=count, device_id=self._device_id
             )
             self._check(result, "read_holding")
-        except (OSError, ModbusException) as e:
+        except (OSError, ModbusException, struct.error, ValueError, TransportClosedError) as e:
             self._emit(
                 "modbus_read_failed", {"address": address, "count": count, "error": str(e)}
             )
@@ -100,7 +105,7 @@ class ModbusTransport:
                 address, value, device_id=self._device_id
             )
             self._check(result, "write_register")
-        except (OSError, ModbusException) as e:
+        except (OSError, ModbusException, struct.error, ValueError, TransportClosedError) as e:
             self._emit(
                 "modbus_write_failed", {"address": address, "values": [value], "error": str(e)}
             )
@@ -114,7 +119,7 @@ class ModbusTransport:
                 address, values, device_id=self._device_id
             )
             self._check(result, "write_registers")
-        except (OSError, ModbusException) as e:
+        except (OSError, ModbusException, struct.error, ValueError, TransportClosedError) as e:
             self._emit(
                 "modbus_write_failed", {"address": address, "values": values, "error": str(e)}
             )

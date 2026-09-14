@@ -101,29 +101,53 @@ class FileSandbox:
         with self._lock:
             target = self.resolve(rel_path)
             if target.exists() and not overwrite:
+                self._emit("file_write_failed", {"path": rel_path, "error": "already exists"})
                 raise FileExistsError(rel_path)
-            adding = len(data) - (target.stat().st_size if target.exists() else 0)
-            self._check_quota(max(adding, 0), 0 if target.exists() else 1, rel_path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
+            try:
+                adding = len(data) - (target.stat().st_size if target.exists() else 0)
+                self._check_quota(max(adding, 0), 0 if target.exists() else 1, rel_path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            except OSError as e:
+                # IH-37 review P1: real I/O failures (disk full, a directory
+                # component that is a file, ...) used to pass unjournaled
+                self._emit("file_write_failed", {"path": rel_path, "error": str(e)})
+                raise
         self._emit("file_write", {"path": rel_path, "bytes": len(data)})
         return len(data)
 
     def read_file(self, rel_path: str) -> bytes:
-        data = self.resolve(rel_path).read_bytes()
+        try:
+            data = self.resolve(rel_path).read_bytes()
+        except OSError as e:
+            # IH-37: quota/sandbox denials journal themselves; an OSError
+            # (missing file, ...) used to pass unjournaled
+            self._emit("file_read_failed", {"path": rel_path, "error": str(e)})
+            raise
         self._emit("file_read", {"path": rel_path, "bytes": len(data)})
         return data
 
     def list_dir(self, rel_path: str = ".") -> list[str]:
         target = self.resolve(rel_path)
         if not target.is_dir():
+            self._emit("file_list_failed", {"path": rel_path, "error": "not a directory"})
             raise NotADirectoryError(rel_path)
-        entries = sorted(p.relative_to(self._root).as_posix() for p in target.rglob("*"))
+        try:
+            entries = sorted(p.relative_to(self._root).as_posix() for p in target.rglob("*"))
+        except OSError as e:
+            self._emit("file_list_failed", {"path": rel_path, "error": str(e)})
+            raise
         self._emit("file_list", {"path": rel_path, "count": len(entries)})
         return entries
 
     def delete_file(self, rel_path: str) -> None:
         with self._lock:
             target = self.resolve(rel_path)
-            target.unlink()
+            try:
+                target.unlink()
+            except OSError as e:
+                # IH-37: a missing file / OS-level delete failure used to pass
+                # without a journal entry
+                self._emit("file_delete_failed", {"path": rel_path, "error": str(e)})
+                raise
         self._emit("file_delete", {"path": rel_path})
