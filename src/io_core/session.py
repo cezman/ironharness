@@ -229,6 +229,11 @@ class Session:
     def serial_read(self, name: str, size: int = 64) -> str:
         with self._lock:
             if name in self._readers:
+                # IH-51: refusals are events too - "no log = didn't happen"
+                self.journal(
+                    "read_refused",
+                    {"conn": name, "reason": "background reader attached"},
+                )
                 raise RuntimeError(
                     f"transport {name!r} has a background reader - use serial_tail/"
                     "serial_read_until (a direct read would race the reader for bytes)"
@@ -239,6 +244,10 @@ class Session:
     def serial_read_line(self, name: str, max_len: int = 256) -> str:
         with self._lock:
             if name in self._readers:
+                self.journal(
+                    "read_line_refused",
+                    {"conn": name, "reason": "background reader attached"},
+                )
                 raise RuntimeError(
                     f"transport {name!r} has a background reader - use serial_tail/"
                     "serial_read_until (a direct read would race the reader for bytes)"
@@ -286,6 +295,10 @@ class Session:
             raise
         with self._lock:
             if name in self._readers:
+                self.journal(
+                    "put_refused",
+                    {"conn": name, "reason": "background reader attached"},
+                )
                 raise RuntimeError(
                     f"transport {name!r} has a background reader - stop it before "
                     "serial_put (the transfer reads the board's answers)"
@@ -295,6 +308,11 @@ class Session:
             # block - the IH-48-class stale-state wedge, review B1)
             t = self._get(name)
             if name in self._transfers:
+                # IH-51: the second transfer is a refusal, and refusals journal
+                self.journal(
+                    "transfer_refused",
+                    {"conn": name, "reason": "transfer in progress"},
+                )
                 raise RuntimeError(f"a serial transfer is already in progress on {name!r}")
             self._transfers.add(name)  # IH-37: the gate is symmetric now
         try:
@@ -325,6 +343,10 @@ class Session:
         self._check_kind("serial")
         with self._lock:
             if name in self._readers:
+                self.journal(
+                    "get_refused",
+                    {"conn": name, "reason": "background reader attached"},
+                )
                 raise RuntimeError(
                     f"transport {name!r} has a background reader - stop it before "
                     "serial_get (the transfer reads the board's answers)"
@@ -334,6 +356,11 @@ class Session:
             # block - the IH-48-class stale-state wedge, review B1)
             t = self._get(name)
             if name in self._transfers:
+                # IH-51: the second transfer is a refusal, and refusals journal
+                self.journal(
+                    "transfer_refused",
+                    {"conn": name, "reason": "transfer in progress"},
+                )
                 raise RuntimeError(f"a serial transfer is already in progress on {name!r}")
             self._transfers.add(name)  # IH-37: the gate is symmetric now
         try:
@@ -375,10 +402,18 @@ class Session:
             if base is None:
                 raise KeyError(f"serial transport {name!r} is not open")
             if name in self._readers:
+                self.journal(
+                    "reader_start_refused",
+                    {"conn": name, "reason": "background reader already attached"},
+                )
                 raise KeyError(f"transport {name!r} already has a background reader")
             if name in self._transfers:
                 # IH-37: the gate is symmetric - a transfer that passed the
                 # reader check must not get a reader started mid-flight
+                self.journal(
+                    "reader_start_refused",
+                    {"conn": name, "reason": "serial transfer in progress"},
+                )
                 raise RuntimeError(
                     f"a serial transfer is in progress on {name!r} - serial_reader_start "
                     "would race it for the board's answers"

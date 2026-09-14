@@ -10,6 +10,8 @@ from io_core.errors import VerificationError
 
 Clock = Callable[[], float]
 
+MAX_EXPECT_BUF = 256 * 1024  # IH-52: expect_read buffer cap
+
 
 def expect_read(
     transport: Any,
@@ -21,7 +23,8 @@ def expect_read(
     """Читает из транспорта, пока expected не появится в накопленном буфере.
 
     Возвращает весь накопленный буфер (вместе с мусором до ожидания).
-    VerificationError — если за timeout ожидание не подтвердилось.
+    VerificationError — если за timeout ожидание не подтвердилось. IH-52:
+    буфер ограничен и по байтам — несовпадающий флуд раньше рос до таймаута.
     """
     if not expected:
         return b""
@@ -37,6 +40,11 @@ def expect_read(
             buf += chunk
         else:
             time.sleep(min(0.01, max(deadline - clock(), 0)))
+        if len(buf) > MAX_EXPECT_BUF:
+            raise VerificationError(
+                f"буфер превысил {MAX_EXPECT_BUF} байт без {expected!r}; "
+                f"хвост: {bytes(buf[-64:])!r}"
+            )
     return bytes(buf)
 
 

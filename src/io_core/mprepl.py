@@ -26,11 +26,15 @@ import contextlib
 import time
 from typing import Any
 
+from io_core.errors import TransportIoError
+
 CTRL_A = b"\x01"
 CTRL_B = b"\x02"
 CTRL_C = b"\x03"
 CTRL_D = b"\x04"
 PROMPT = b">"
+
+MAX_STREAM_BUF = 256 * 1024  # IH-52: raw-REPL response cap
 
 DEFAULT_CHUNK = 256  # bytes per exec; hex-doubled on the wire (512 printable chars)
 EXEC_TIMEOUT_SEC = 10.0
@@ -59,6 +63,7 @@ class _Stream:
                     f"board did not answer within {EXEC_TIMEOUT_SEC}s (raw REPL)"
                 )
             self._buf += self._t.read(256)
+            self._check_buf()
 
     def until(self, terminator: bytes, deadline: float) -> bytes:
         """Bytes before the next `terminator`; the terminator is consumed."""
@@ -68,9 +73,21 @@ class _Stream:
                     f"board did not answer within {EXEC_TIMEOUT_SEC}s (raw REPL)"
                 )
             self._buf += self._t.read(256)
+            self._check_buf()
         idx = self._buf.index(terminator)
         piece, self._buf = self._buf[:idx], self._buf[idx + len(terminator) :]
         return piece
+
+    def _check_buf(self) -> None:
+        # IH-52: the buffer is deadline-bounded but not byte-bounded - a
+        # garbage flood with no terminator grew it for the whole window
+        # (baud-limited on a real link, unbounded on faster fakes). Past the
+        # cap the transfer is a failure: abort instead of eating memory.
+        if len(self._buf) > MAX_STREAM_BUF:
+            raise TransportIoError(
+                f"raw REPL response exceeded {MAX_STREAM_BUF} bytes without "
+                "the expected terminator"
+            )
 
     def until_prompt(self, deadline: float) -> bytes:
         return self.until(PROMPT, deadline)
