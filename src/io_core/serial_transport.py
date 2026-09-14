@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import queue
+import re
 import time
 from collections.abc import Callable
 from typing import Any, Self
@@ -20,6 +21,12 @@ import serial
 from io_core.errors import TransportClosedError, TransportIoError
 
 EventHook = Callable[[str, dict[str, Any]], None]
+
+# IH-50: the agent-facing serial port whitelist - local ports only. pyserial
+# URLs also cover NETWORK sockets (socket://host:port = outbound TCP,
+# rfc2217:// = remote serial over TCP) and those must not be openable from
+# the sandbox. Everything under /dev/ covers ttyUSB/ttyACM/ttyS and ptys.
+_LOCAL_PORT_RE = re.compile(r"^(COM\d+|/dev/|loop://|pty://)", re.IGNORECASE)
 
 
 class SerialTransport:
@@ -44,6 +51,17 @@ class SerialTransport:
             self._on_event(event, data)
 
     def open(self) -> None:
+        # IH-50: pyserial URLs include NETWORK sockets (socket://, rfc2217://)
+        # - an agent-facing serial open is whitelisted to local ports only.
+        # The refusal journals serial_open_failed before raising.
+        if not _LOCAL_PORT_RE.match(self._port):
+            error = (
+                f"serial port {self._port!r} is not allowed: only local ports "
+                "(COM*, /dev/*, loop://, pty://) can be opened - socket-based "
+                "URLs are outside the sandbox policy"
+            )
+            self._emit("serial_open_failed", {"port": self._port, "error": error})
+            raise ValueError(error)
         try:
             self._serial = serial.serial_for_url(
                 self._port,
