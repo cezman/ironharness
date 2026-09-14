@@ -17,7 +17,7 @@ An agent harness for I/O and firmware. Two modules:
   file sandbox), a Modbus simulator, ESP32 flashing tools (esptool: offline image
   inspection, flash/erase on a live board), a JSONL journal of every operation, a
   replayer, limits (rate limit, deadlines), effect verification (`expect_read`), and
-  an MCP server (22 tools).
+  an MCP server (30 tools).
 - **ironbench** — a benchmark for firmware agents: golden tasks in simulators
   (Wokwi ESP32/MicroPython, plus Renode), an agent loop over an OpenAI-compatible chat API, pass@k reports.
 
@@ -39,7 +39,7 @@ uv run ironharness-mcp               # MCP server (stdio; or: python -m io_core.
 
 ## Agent tools (MCP)
 
-`echo` · `serial_open/write/read/read_line/close` · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (background reader: device output between tool calls is buffered, not lost) · `serial_reset` (RTS-pulse board reset between solve attempts) · `modbus_open/read/write/close` ·
+`echo` · `serial_list` (ports with VID/PID) · `serial_open/write/read/read_line/close` · `serial_put/get` (file transfer to/from the board over the raw REPL) · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (background reader: device output between tool calls is buffered, not lost) · `serial_reset` (RTS-pulse board reset between solve attempts) · `modbus_open/read/write/close` ·
 `mqtt_open/publish/subscribe/read/close` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
 
 Every operation is journaled to JSONL (`$IRONHARNESS_HOME/journal.jsonl`,
@@ -116,6 +116,12 @@ classes, not a single number. LLM config — environment variables: `LLM_BASE_UR
   the solving model's prompt as feedback. It cannot flip the PASS/FAIL verdict
   (scoring is done by the runner), but a model can be steered by its own
   firmware's output - an accepted distortion of the benchmark.
+- **Serial ports are whitelisted to local ports only** — `COM*`, `/dev/tty*`,
+  `/dev/pts/*`, `loop://`, `pty://`. pyserial also supports network URLs
+  (`socket://host:port` is an outbound TCP connection, `rfc2217://` is remote
+  serial over TCP) — `serial_open` refuses those with a journaled
+  `serial_open_failed` event. Modbus/MQTT destinations are operator-controlled
+  via the access policy below.
 - Transports are not restricted to specific hosts/ports by default — the operator
   (you) decides what the agent may reach, optionally via the access policy below;
   every operation is journaled for audit. Flash/erase failures are journaled with

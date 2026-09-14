@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import queue
 import re
+import sys
 import time
 from collections.abc import Callable
 from typing import Any, Self
@@ -25,8 +26,23 @@ EventHook = Callable[[str, dict[str, Any]], None]
 # IH-50: the agent-facing serial port whitelist - local ports only. pyserial
 # URLs also cover NETWORK sockets (socket://host:port = outbound TCP,
 # rfc2217:// = remote serial over TCP) and those must not be openable from
-# the sandbox. Everything under /dev/ covers ttyUSB/ttyACM/ttyS and ptys.
+# the sandbox.
 _LOCAL_PORT_RE = re.compile(r"^(COM\d+|/dev/|loop://|pty://)", re.IGNORECASE)
+
+
+def _port_allowed(port: str) -> bool:
+    """IH-53: a whitelisted prefix must never open a FILE. Tightened from a
+    bare prefix match: no backslashes, no .. segments, COM ports exact
+    (COM1/x and COM1\\x are path tricks; on POSIX a bare COM1 is ./COM1 -
+    a relative file), and POSIX serial ports must be under /dev/tty* or
+    /dev/pts (the /dev/shm/x file is not a serial port)."""
+    if "\\" in port or ".." in port:
+        return False
+    if re.fullmatch(r"COM\d+", port, re.IGNORECASE):
+        return sys.platform == "win32"
+    if re.fullmatch(r"/dev/(tty\S*|pts/\d+)", port):
+        return sys.platform != "win32"
+    return bool(re.fullmatch(r"loop://\S*|pty://\S*", port, re.IGNORECASE))
 
 
 class SerialTransport:
@@ -54,7 +70,7 @@ class SerialTransport:
         # IH-50: pyserial URLs include NETWORK sockets (socket://, rfc2217://)
         # - an agent-facing serial open is whitelisted to local ports only.
         # The refusal journals serial_open_failed before raising.
-        if not _LOCAL_PORT_RE.match(self._port):
+        if not _port_allowed(self._port):
             error = (
                 f"serial port {self._port!r} is not allowed: only local ports "
                 "(COM*, /dev/*, loop://, pty://) can be opened - socket-based "

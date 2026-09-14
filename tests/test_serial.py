@@ -188,3 +188,20 @@ def test_session_serial_open_rejects_network_urls(tmp_path):
         s.serial_open("loop", LOOP)
     finally:
         s.close()
+
+
+def test_whitelist_rejects_path_tricks():
+    """IH-53: the whitelist must not open arbitrary FILES via the POSIX
+    raw-path fallback (/dev/../../etc/passwd, /dev/shm/x) or separator
+    tricks (COM1/x, COM1\\x)."""
+    for url in (
+        "/dev/../../etc/passwd",
+        "/dev/shm/evil",
+        "COM1/evil",
+        "COM1\\evil",
+        "..",
+        "loop://../../../etc/passwd",
+    ):
+        t = SerialTransport(url)
+        with pytest.raises(ValueError, match="not allowed"):
+            t.open()

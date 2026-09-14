@@ -416,7 +416,7 @@ provides-extras = ["flash"]
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8.0" },
-    { name = "ruff", specifier = ">=0.6" },
+    { name = "ruff", specifier = "==0.16.6" },
 ]
 
 [[package]]
