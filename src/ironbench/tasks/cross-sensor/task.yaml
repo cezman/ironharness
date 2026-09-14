@@ -1,0 +1,56 @@
+# Task description for ironbench: see AGENTS.md / ironbench-task skill.
+# Second live-board golden (IH-49): multi-sensor integration - a BME280 over
+# I2C plus a DS18B20 over OneWire, cross-checked against each other. The
+# cross-check raises the reactive-cheater bar on bme-read: the two sensors
+# sit on the same breadboard, so their temperatures must agree to within
+# 2 deg C - fabricating one value without reading its sensor is not
+# detectable, but fabricating a coherent PAIR requires knowing both physical
+# readings, and a broken DS18B20 driver (scan, conversion timing, pull-up)
+# fails on format/timeouts instead.
+name: cross-sensor
+description: >-
+  Two sensors are wired to the board: a BME280 on the I2C bus (SDA GPIO21,
+  SCL GPIO22, address 0x76, 400 kHz) and a DS18B20 on GPIO4 as a OneWire
+  device with the internal pull-up enabled (no external resistor needed).
+  Write firmware that on startup prints exactly "sensors ready", then in an
+  infinite loop waits for lines on the serial console. Every received line
+  (ignore empty ones) triggers one measurement round: read the BME280
+  temperature (forced mode, datasheet compensation) and the DS18B20
+  temperature (scan once at startup, convert_temp + 750 ms wait), then
+  answer with a single line of the exact form
+  "BME=<temp> DS=<temp> D=<delta>" where both temperatures are in degrees
+  Celsius with two decimals and <delta> is the absolute difference
+  |T_BME - T_DS| with two decimals. The two sensors sit on the same
+  breadboard: the delta must stay below 2 degrees C, a larger value means
+  one of the readings is wrong. The program never exits.
+entry: solution.py
+target: real
+timeout_sec: 25
+tags: [data]
+level: 4
+expect:
+  - 'sensors ready'
+  - 'BME=-?\d+\.\d{2}'
+  - 'DS=-?\d+\.\d{2}'
+  - 'D=\d+\.\d{2}'
+fail:
+  - 'Traceback'
+  - 'BME ERR'
+  - 'DS ERR'
+  # |delta| >= 2.00 C: the sensors disagree - one reading is wrong
+  - 'D=(?:[2-9]|\d{2,})\.\d{2}'
+stimulus:
+  # "sensors ready" is boot output scored from the whole log; the reading is
+  # anchored to the request line - the real target carries the IH-14
+  # chunk-stamp anchor (IH-33). The wait needle 'DS=' is deliberately
+  # task-specific (it lives only in reading lines).
+  - delay: 1500ms
+  - write-serial: "read\r"
+  - wait-serial: 'DS='
+notes:
+  - 'The DS18B20 is OneWire, NOT I2C: it hangs off GPIO4 alone.'
+  - 'The internal GPIO pull-up is enough for one DS18B20 on short wires - no external 4.7k resistor needed.'
+  - 'DS18B20 conversion takes 750 ms: convert_temp() then sleep at least 750 ms before read_temp.'
+  - 'Scan the OneWire bus once at startup (ds.scan()) - the bus has exactly one device.'
+  - 'The REPL eats cooked UTF-8: keep firmware output ASCII.'
+  - 'The COM port number changes across USB re-plugs: re-enumerate ports before opening.'
