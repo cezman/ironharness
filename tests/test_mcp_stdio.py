@@ -160,6 +160,40 @@ def test_wire_initialize_tools_call(server, tmp_path):
     assert (tmp_path / "home" / "journal.jsonl").is_file()
 
 
+def test_wire_every_tool_is_annotated(server):
+    """IH-50 lesson sweep: MCP clients surface readOnly/destructive hints to
+    the user BEFORE the call - every tool must carry them, and hardware- or
+    data-destroying tools must be flagged destructive."""
+    client = WireClient(server)
+    client.request(INITIALIZE)
+    client.notify({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    listing = client.request({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    tools = {t["name"]: t for t in listing["result"]["tools"]}
+    assert len(tools) >= 25
+    for name, tool in tools.items():
+        ann = tool.get("annotations") or {}
+        assert ann.get("readOnlyHint") is not None, f"{name}: readOnlyHint missing"
+        assert ann.get("destructiveHint") is not None, f"{name}: destructiveHint missing"
+
+    destructive = {
+        name
+        for name, tool in tools.items()
+        if tool["annotations"]["destructiveHint"] is True
+    }
+    assert {"esp_flash", "esp_erase", "file_delete", "serial_reset"} <= destructive, (
+        "hardware/data destroying tools must be flagged destructive"
+    )
+    read_only = {
+        name
+        for name, tool in tools.items()
+        if tool["annotations"]["readOnlyHint"] is True
+    }
+    assert {"echo", "serial_list", "serial_tail", "modbus_read", "esp_image_info"} <= read_only, (
+        "pure read tools must keep readOnlyHint"
+    )
+    assert not (read_only & destructive), read_only & destructive
+
+
 def test_wire_unknown_tool_is_a_clean_jsonrpc_error(server):
     client = WireClient(server)
     client.request(INITIALIZE)

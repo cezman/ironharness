@@ -16,7 +16,7 @@
 - **io-core** — безопасный I/O-слой для агентов: транспорты (serial, Modbus TCP, MQTT,
   файловая песочница), симулятор Modbus, инструменты прошивки ESP32 (esptool: разбор образа
   офлайн, flash/erase на живой плате), JSONL-журнал всех операций, реплеер, лимиты
-  (rate-limit, дедлайны), верификация эффектов (`expect_read`), MCP-сервер (22 инструмента).
+  (rate-limit, дедлайны), верификация эффектов (`expect_read`), MCP-сервер (30 инструментов).
 - **ironbench** — бенчмарк для firmware-агентов: золотые задачи в симуляторах
   (Wokwi ESP32/MicroPython, плюс Renode), агентский цикл поверх LLM API, отчёты pass@k.
 
@@ -38,7 +38,7 @@ uv run ironharness-mcp               # MCP-сервер (stdio; или: python -
 
 ## Инструменты агента (MCP)
 
-`echo` · `serial_open/write/read/read_line/close` · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (фоновый ридер: вывод устройства между вызовами инструментов буферизуется, а не теряется) · `serial_reset` (сброс платы импульсом RTS между попытками solve) · `modbus_open/read/write/close` ·
+`echo` · `serial_list` (порты с VID/PID) · `serial_open/write/read/read_line/close` · `serial_put/get` (перекачка файлов на плату и обратно через raw REPL) · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (фоновый ридер: вывод устройства между вызовами инструментов буферизуется, а не теряется) · `serial_reset` (сброс платы импульсом RTS между попытками solve) · `modbus_open/read/write/close` ·
 `mqtt_open/publish/subscribe/read/close` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
 
 Все операции автоматически пишутся в JSONL-журнал (`$IRONHARNESS_HOME/journal.jsonl`,
@@ -108,6 +108,11 @@ LLM-конфиг — переменные окружения: `LLM_BASE_URL` (п
 - **Граница античита (wokwi)**: на wokwi-мишени expect/fail-паттерны скорятся по всему
   serial-логу; «решение», тупо печатающее ожидаемые строки, не ловится там якорем wait-serial
   (unix/real ловят). Граница задокументирована в PLAN.md (IH-14), не скрываем.
+- **Serial-порты от белый список локальных портов** — `COM*`, `/dev/tty*`,
+  `/dev/pts/*`, `loop://`, `pty://`. pyserial умеет и сетевые URL (`socket://host:port` —
+  исходящий TCP, `rfc2217://` — удалённый serial поверх TCP) — `serial_open` такие
+  отклоняет с журнальной записью `serial_open_failed`. Адреса Modbus/MQTT контролирует
+  оператор через политику доступа ниже.
 - Транспорты по умолчанию не ограничены по хостам/портам — что доступно агенту, решает
   оператор (вы), при желании — через политику доступа ниже; каждая операция журналуется
   для аудита.
