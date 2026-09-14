@@ -2,10 +2,11 @@
 # cross-checked. The BME temperature compensation is the proven live-bench
 # code (bme-read); only the temperature branch is kept. The DS18B20 uses the
 # stock MicroPython driver: scan once, convert_temp + 750 ms, read_temp.
-import ds18x20
-import onewire
 import struct
 import time
+
+import ds18x20
+import onewire
 from machine import Pin, SoftI2C
 
 ADDR = 0x76
