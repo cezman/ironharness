@@ -50,7 +50,7 @@ class ModbusTransport:
             self._client = ModbusTcpClient(self._host, port=self._port, timeout=self._timeout)
             if not self._client.connect():
                 raise ConnectionError(f"failed to connect to {self._host}:{self._port}")
-        except (OSError, ModbusException) as e:
+        except (OSError, ModbusException, ValueError) as e:
             # policy refusals are journaled by the policy itself; connect
             # failures are ours to record
             self._emit(

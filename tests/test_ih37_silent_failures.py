@@ -130,6 +130,7 @@ def test_esp_image_info_import_error_journaled(tmp_path, monkeypatch):
 
 
 def test_esp_image_info_parse_error_journaled(tmp_path, monkeypatch):
+    pytest.importorskip("esptool", reason="the parse path needs the [flash] extra")
     from io_core import esp_flash
 
     j = Journaling(tmp_path, "esp2")
@@ -234,3 +235,79 @@ def test_reader_cannot_start_during_transfer(tmp_path, monkeypatch):
         assert "error" not in result, result.get("error")
     finally:
         s.close()
+
+
+def test_failed_gate_does_not_wedge_the_name(tmp_path):
+    """IH-48-class stale state (review B1): a failed _get inside the gate used
+    to leave the name in _transfers forever - the wedge survived reopening
+    and blocked both serial_put and serial_reader_start. _get must run before
+    the registration."""
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    try:
+        (tmp_path / "sb" / "src.txt").write_bytes(b"x")  # serial_put reads it first
+        with pytest.raises(KeyError):
+            s.serial_put("typo", "src.txt", "dst.txt")  # unknown transport
+        s.serial_open("typo", "loop://")
+        # the name must NOT be wedged: reader_start consults _transfers
+        s.serial_reader_start("typo")
+        s.serial_reader_stop("typo")
+    finally:
+        s.close()
+
+
+def test_file_write_io_failure_journaled(tmp_path, monkeypatch):
+    """IH-37 review P1: real I/O failures of write_file (disk full, a path
+    component that is a file) journal file_write_failed."""
+    j = Journaling(tmp_path, "fs2")
+    sb = FileSandbox(tmp_path / "sb", on_event=j)
+    sb.write_file("ok.txt", b"x")
+
+    def disk_full(self, data):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", disk_full)
+    with pytest.raises(OSError):
+        sb.write_file("new.txt", b"y")
+    monkeypatch.undo()
+    assert "file_write_failed" in [k for k, _ in j.events]
+
+
+def test_mqtt_factory_error_journaled(tmp_path):
+    """IH-37 review P2: the client factory (paho import included) is inside
+    the open try - its failures journal mqtt_open_failed."""
+    j = Journaling(tmp_path, "mqtt2")
+
+    def bad_factory():
+        raise ValueError("paho missing")
+
+    t = MqttTransport("127.0.0.1", on_event=j, client_factory=bad_factory)
+    with pytest.raises(ValueError):
+        t.open()
+    assert "mqtt_open_failed" in [k for k, _ in j.events]
+
+
+def test_mqtt_publish_closed_transport_journaled(tmp_path):
+    j = Journaling(tmp_path, "mqtt3")
+    t = MqttTransport("127.0.0.1", on_event=j)
+    with pytest.raises(TransportClosedError):
+        t.publish("t", "p")
+    assert "mqtt_publish_failed" in [k for k, _ in j.events]
+
+
+def test_esp_flash_erase_import_error_journaled(tmp_path, monkeypatch):
+    """IH-37 review neighbor sweep: flash/erase past an open gate with the
+    optional esptool missing used to raise unjournaled."""
+    from io_core import esp_flash
+
+    monkeypatch.setenv(esp_flash.ALLOW_REAL_FLASH_ENV, "1")
+    monkeypatch.setattr(esp_flash, "_ESPTOOL_AVAILABLE", False)
+    j = Journaling(tmp_path, "esp4")
+    fw = tmp_path / "fw.bin"
+    fw.write_bytes(b"\x00" * 16)
+    f = esp_flash.EspFlasher(on_event=j)
+    with pytest.raises(ImportError):
+        f.flash("COMX", fw)
+    with pytest.raises(ImportError):
+        f.erase("COMX")
+    ks = [k for k, _ in j.events]
+    assert "esp_flash_failed" in ks and "esp_erase_failed" in ks, ks

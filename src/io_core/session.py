@@ -290,10 +290,13 @@ class Session:
                     f"transport {name!r} has a background reader - stop it before "
                     "serial_put (the transfer reads the board's answers)"
                 )
+            # _get runs BEFORE the registration: a failed _get must not leave
+            # the name in _transfers (the finally below never covers the gate
+            # block - the IH-48-class stale-state wedge, review B1)
+            t = self._get(name)
             if name in self._transfers:
                 raise RuntimeError(f"a serial transfer is already in progress on {name!r}")
             self._transfers.add(name)  # IH-37: the gate is symmetric now
-            t = self._get(name)
         try:
             mprepl.put_file(t, data, target_path)
         except Exception as e:
@@ -326,10 +329,13 @@ class Session:
                     f"transport {name!r} has a background reader - stop it before "
                     "serial_get (the transfer reads the board's answers)"
                 )
+            # _get runs BEFORE the registration: a failed _get must not leave
+            # the name in _transfers (the finally below never covers the gate
+            # block - the IH-48-class stale-state wedge, review B1)
+            t = self._get(name)
             if name in self._transfers:
                 raise RuntimeError(f"a serial transfer is already in progress on {name!r}")
             self._transfers.add(name)  # IH-37: the gate is symmetric now
-            t = self._get(name)
         try:
             try:
                 data = mprepl.get_file(t, target_path)

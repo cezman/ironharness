@@ -36,7 +36,6 @@ try:  # esptool is an optional dependency — see the [flash] extra
     from esptool.cmds import (
         CHIP_DEFS,
         FLASH_MODES,
-        FatalError,
         LoadFirmwareImage,
         attach_flash,
         connect_esp,
@@ -152,14 +151,26 @@ class EspFlasher:
                 {"port": port, "addr": addr, "baud": baud, "path": str(path), "error": error},
             )
             raise FileNotFoundError(error)
-        _require_esptool()
+        # IH-37 review: everything past the gate is journaled - the missing
+        # optional esptool (ImportError) and esptool's assorted parse/handler
+        # errors used to escape unjournaled
         try:
+            _require_esptool()
             with connect_esp(port=port, chip=self._chip) as esp:
                 esp = run_stub(esp)
                 esp.change_baud(baud)
                 attach_flash(esp)
                 write_flash(esp, [(addr, str(path))])
-        except (OSError, FatalError) as e:
+        except ImportError:
+            # environment signal, not a flashing failure: journal and re-raise
+            # unchanged (the gate test pins the ImportError contract)
+            self._emit(
+                "esp_flash_failed",
+                {"port": port, "addr": addr, "baud": baud, "path": str(path),
+                 "error": "esptool is not installed ([flash] extra)"},
+            )
+            raise
+        except Exception as e:  # noqa: BLE001 - the journal boundary is deliberate
             self._emit(
                 "esp_flash_failed",
                 {"port": port, "addr": addr, "baud": baud, "path": str(path), "error": str(e)},
@@ -170,14 +181,20 @@ class EspFlasher:
 
     def erase(self, port: str, *, baud: int = 921600) -> str:
         self._require_real_flash_allowed("erase", port)
-        _require_esptool()
         try:
+            _require_esptool()
             with connect_esp(port=port, chip=self._chip) as esp:
                 esp = run_stub(esp)
                 esp.change_baud(baud)
                 attach_flash(esp)
                 erase_flash(esp)
-        except (OSError, FatalError) as e:
+        except ImportError:
+            self._emit(
+                "esp_erase_failed",
+                {"port": port, "baud": baud, "error": "esptool is not installed ([flash] extra)"},
+            )
+            raise
+        except Exception as e:  # noqa: BLE001 - the journal boundary is deliberate
             self._emit("esp_erase_failed", {"port": port, "baud": baud, "error": str(e)})
             raise ConnectionError(f"esp {port}: failed to erase ({e})") from None
         self._emit("esp_erase", {"port": port, "baud": baud})

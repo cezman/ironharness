@@ -97,13 +97,16 @@ class MqttTransport:
 
     def open(self) -> None:
         AccessPolicy.from_env(on_event=self._on_event).check_host(self._host, self._port)
-        client = self._client_factory()
-        client.on_connect = self._on_connect
-        client.on_disconnect = self._on_disconnect
-        client.on_subscribe = self._on_subscribe
-        client.on_message = self._on_message
-        self._client = client
         try:
+            # the factory is inside the try (IH-37 review P2): paho's default
+            # factory imports lazily (ImportError without the dep) and the
+            # caller's factory may raise anything
+            client = self._client_factory()
+            client.on_connect = self._on_connect
+            client.on_disconnect = self._on_disconnect
+            client.on_subscribe = self._on_subscribe
+            client.on_message = self._on_message
+            self._client = client
             client.connect(self._host, port=self._port, keepalive=self._keepalive)
             client.loop_start()
             if not self._connected.wait(timeout=self._timeout):
@@ -164,8 +167,10 @@ class MqttTransport:
                 raise OSError(
                     f"mqtt publish {topic!r}: not acknowledged within {self._timeout}s"
                 )
-        except (OSError, ValueError) as e:
-            # ValueError: paho rejects invalid topics before anything hits the wire
+        except (OSError, ValueError, TransportClosedError) as e:
+            # ValueError: paho rejects invalid topics before anything hits the
+            # wire; TransportClosedError: a publish past close used to escape
+            # unjournaled (IH-37 review neighbor sweep)
             self._emit(
                 "mqtt_publish_failed",
                 {"topic": topic, "payload": payload, "error": str(e)},
@@ -174,8 +179,8 @@ class MqttTransport:
         self._emit("mqtt_publish", {"topic": topic, "payload": payload, "qos": qos, "retain": retain})
 
     def subscribe(self, topic: str, *, qos: int = 0) -> None:
-        client = self._require_client()
         try:
+            client = self._require_client()
             rc, mid = client.subscribe(topic, qos=qos)
             if rc != 0:
                 raise OSError(f"mqtt subscribe {topic!r}: rc={rc}")
@@ -194,7 +199,7 @@ class MqttTransport:
                 raise OSError(
                     f"mqtt subscribe {topic!r}: broker refused ({[str(c) for c in codes]})"
                 )
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, TransportClosedError) as e:
             self._emit("mqtt_subscribe_failed", {"topic": topic, "error": str(e)})
             raise
         self._emit("mqtt_subscribe", {"topic": topic, "qos": qos})
