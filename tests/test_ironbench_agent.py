@@ -406,3 +406,58 @@ def test_agent_solve_results_records_notes_fact(tmp_path, monkeypatch):
     cli_module.agent_solve_results(with_notes, cfg, attempts=1, solve_dir=tmp_path / "camp")
     record = json.loads((tmp_path / "camp" / "blink" / "results.jsonl").read_text("utf-8"))
     assert record["notes"] is True
+
+
+def test_parse_last_traceback_extracts_type_and_message():
+    """IH-66: the serial feedback must lead with a structured one-line
+    diagnosis of the LAST traceback - the agent fixes the failure class
+    without re-reading raw output."""
+    from ironbench.agent import _parse_last_traceback
+
+    lines = [
+        "bme ready",
+        "Traceback (most recent call last):",
+        '  File "<stdin>", line 5, in <module>',
+        "ImportError: no module named 'bme280'",
+        ">>> ",
+    ]
+    assert _parse_last_traceback(lines) == (
+        "ImportError: no module named 'bme280' (\"<stdin>\", line 5)"
+    )
+
+
+def test_parse_last_traceback_keeps_the_last_of_several():
+    from ironbench.agent import _parse_last_traceback
+
+    lines = [
+        "Traceback (most recent call last):",
+        "NameError: old",
+        ">>> ",
+        "Traceback (most recent call last):",
+        '  File "main.py", line 2, in <module>',
+        "MemoryError:",
+    ]
+    assert _parse_last_traceback(lines) == "MemoryError: (\"main.py\", line 2)"
+
+
+def test_serial_feedback_leads_with_diagnosis(tmp_path):
+    from ironbench.agent import _serial_feedback
+
+    log = tmp_path / "s.log"
+    log.write_text(
+        "Traceback (most recent call last):\n"
+        '  File "<stdin>", line 3\n'
+        "ImportError: no module named 'bme280'\n",
+        encoding="utf-8",
+    )
+    feedback = _serial_feedback(log)
+    assert feedback.startswith("DIAGNOSIS: ImportError"), feedback
+
+
+def test_serial_feedback_without_traceback_has_no_diagnosis(tmp_path):
+    from ironbench.agent import _serial_feedback
+
+    log = tmp_path / "s.log"
+    log.write_text("bme ready\nread\n", encoding="utf-8")
+    feedback = _serial_feedback(log)
+    assert "DIAGNOSIS" not in feedback
