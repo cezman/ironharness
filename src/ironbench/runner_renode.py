@@ -321,6 +321,35 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
     return "".join(parts), None, common.ERROR_NONE
 
 
+def _truncate_paste_echo(text: str, task: Task) -> tuple[str, str | None]:
+    """IH-55: legacy paste echoes the pasted source back - expect literals
+    inside the agent's own code used to be credited from the echo alone (a
+    firmware printing nothing passed). Cut everything through the last line
+    of the pasted source; runtime output starts after it. If the echo lost
+    its tail (emulator FIFO), the text cannot be scored - refuse as infra
+    instead of scoring a partial echo."""
+    try:
+        pasted = _paste_code((task.directory / task.entry).read_text(encoding="utf-8"))
+    except OSError:
+        return text, None
+    last = [ln for ln in pasted.splitlines() if ln.strip()]
+    if not last or "paste mode" not in text:
+        return text, None
+    if last[0] not in text:
+        # no echo happened at all (a board/fake that does not echo) - nothing
+        # to trim and nothing suspect
+        return text, None
+    pos = text.rfind(last[-1])
+    if pos < 0:
+        # the echo started (its first line is in the text) but the tail was
+        # lost - scoring a partial echo is a false PASS
+        return (
+            text,
+            "paste echo truncated (emulator FIFO lost bytes) - the run cannot be scored",
+        )
+    return text[pos + len(last[-1]):], None
+
+
 def _run_renode(
     task: Task,
     *,
@@ -395,6 +424,13 @@ def _run_renode(
             serial_text, error, error_kind = _drive_repl(
                 sock, task, time.monotonic() + wall_timeout
             )
+        if error is None:
+            # IH-55: legacy paste echoes the pasted source back - expect
+            # literals inside the agent's own code used to be credited from
+            # the echo alone (a firmware printing nothing passed)
+            serial_text, echo_error = _truncate_paste_echo(serial_text, task)
+            if echo_error is not None:
+                error, error_kind = echo_error, common.ERROR_INFRA
         exit_code = 0 if error is None else None
     except ValueError as e:
         error = f"failed to prepare task: {e}"
