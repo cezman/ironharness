@@ -114,6 +114,10 @@ class Task:
     # task bme-read): fed into the solve agent's prompt; the has-notes fact
     # is recorded in results.jsonl for benchmark honesty.
     notes: tuple[str, ...] = ()
+    # IH-65: modules available on the device (bare MicroPython frozen/builtin
+    # set) - surfaced into the solve prompt so agents do not assume a
+    # pip-installable library ecosystem. Empty = not declared.
+    device_modules: tuple[str, ...] = ()
 
 
 def load_task(task_dir: Path) -> Task:
@@ -444,6 +448,21 @@ def load_task(task_dir: Path) -> Task:
         isinstance(n, str) and n.strip() for n in notes
     ):
         raise ValueError(f"{task_file}: notes must be a list of non-empty strings")
+    # IH-65: the device environment - modules available on the board. Surfaced
+    # into the solve prompt: agents otherwise assume a pip-installable library
+    # ecosystem that bare MicroPython does not have (the A/B 0/4 root cause).
+    environment = raw.get("environment") or {}
+    if environment and target in ("unix", "real", "wokwi", "renode"):
+        device_modules = environment.get("device_modules") or []
+        if not isinstance(device_modules, list) or not all(
+            isinstance(m, str) and m.strip() for m in device_modules
+        ):
+            raise ValueError(
+                f"{task_file}: environment.device_modules must be a list of "
+                "non-empty strings"
+            )
+        if len(set(device_modules)) != len(device_modules):
+            raise ValueError(f"{task_file}: environment.device_modules contains duplicates")
     # IH-24: a task must declare something to score - expect patterns, an
     # events section (unix only: the other runners ignore task.events, so an
     # events-only task there would pass ANY output - the same vacuous hole
@@ -480,6 +499,7 @@ def load_task(task_dir: Path) -> Task:
         tags=tuple(tags),
         level=level,
         notes=tuple(notes),
+        device_modules=tuple(environment.get("device_modules") or []),
     )
 
 

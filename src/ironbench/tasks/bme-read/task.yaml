@@ -12,11 +12,16 @@ description: >-
   Celsius with two decimals, <pres> the pressure in hPa with one decimal and
   <hum> the relative humidity in % with one decimal - values compensated per the
   BME280 datasheet, not raw register dumps. The program never exits.
+  IMPORTANT: there are NO third-party libraries on the board and no package
+  installer - the BME280 protocol and compensation must be implemented by you
+  from the datasheet (I2C registers 0xF2/0xF4/0xF7/0x88/0xE1).
 entry: solution.py
 target: real
 timeout_sec: 20
 tags: [data]
 level: 4
+environment:
+  device_modules: [machine, time, struct, math, binascii]
 expect:
   - 'bme ready'
   - 'T=-?\d+\.\d{2} C'
@@ -38,6 +43,7 @@ stimulus:
 # Expert notes from the live bench (2026-09-12): fed to the solve agent's
 # prompt; the fact is recorded in results.jsonl (benchmark honesty, IH-21).
 notes:
+  - 'There is NO bme280 library on the device: the ImportError for `import bme280` means you must implement the register-level protocol yourself (the reference is ~60 lines).'
   - 'Breadboard legs must sit fully home: half-seated legs leave the I2C bus floating.'
   - 'Wire the sensors in parallel on the bus (SDA=GPIO21, SCL=GPIO22), not in a chain.'
   - 'The REPL eats cooked UTF-8: keep firmware output ASCII.'

@@ -198,6 +198,17 @@ def _first_prompt(task: Task) -> str:
             "Printing to serial is a regular print(). "
             "The answer must be a single ```python block with the complete code."
         )
+    if task.device_modules:
+        # IH-65: an environment fact, not a hint - present in BOTH A/B arms.
+        # Without it agents assume a pip-installable ecosystem, write
+        # `import bme280`, and fail on ImportError forever (the A/B 0/4).
+        mods = ", ".join(task.device_modules)
+        base += (
+            "\n\nDevice environment (IMPORTANT): the board runs bare "
+            "MicroPython with NO third-party libraries and no package "
+            f"installer - you must implement any device protocol yourself. "
+            f"Modules available on the device: {mods}."
+        )
     if task.notes:
         # expert notes from the live bench (IH-21): part of the measured
         # prompt; the has-notes fact is recorded in results.jsonl so an A/B

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -310,6 +311,63 @@ def test_mqtt_collect_nan_timeout_is_rejected(tmp_path):
     )
     with pytest.raises(ValueError, match="mqtt-collect"):
         load_task(d)
+
+
+def test_environment_device_modules_parsed(tmp_path):
+    """IH-65: device_modules declares the board's available modules - they
+    surface into the solve prompt (agents assumed a pip ecosystem and wrote
+    `import bme280` on a bare board)."""
+    d = write_task(
+        tmp_path,
+        "name: envt\ntimeout_sec: 5\n"
+        "environment:\n  device_modules: [machine, time, struct]\n"
+        "expect:\n  - 'x'\n",
+    )
+    task = load_task(d)
+    assert task.device_modules == ("machine", "time", "struct")
+
+
+def test_environment_device_modules_reject_duplicates_and_non_strings(tmp_path):
+    d = write_task(
+        tmp_path,
+        "name: envd\ntimeout_sec: 5\n"
+        "environment:\n  device_modules: [time, time]\n"
+        "expect:\n  - 'x'\n",
+    )
+    with pytest.raises(ValueError, match="duplicates"):
+        load_task(d)
+    d2 = write_task(
+        tmp_path,
+        'name: envn\ntimeout_sec: 5\n'
+        'environment:\n  device_modules: ["", time]\n'
+        "expect:\n  - 'x'\n",
+        dirname="envn",
+    )
+    with pytest.raises(ValueError, match="non-empty"):
+        load_task(d2)
+
+
+def test_first_prompt_surfaces_device_modules():
+    """IH-65: the environment fact must be in the BASE prompt - both A/B
+    arms get it (stripping it with the notes would make the bare arm fight
+    an undeclared environment)."""
+    from ironbench.agent import _first_prompt
+    from ironbench.tasks import Task
+
+    task = Task(
+        name="t",
+        description="d",
+        directory=Path("."),
+        scenario=None,
+        entry="main.py",
+        timeout_sec=5,
+        expect=("x",),
+        fail=(),
+        device_modules=("machine", "time", "struct"),
+    )
+    prompt = _first_prompt(task)
+    assert "NO third-party libraries" in prompt
+    assert "machine, time, struct" in prompt
 
 
 def test_plant_nan_tolerance_and_disturbance_are_rejected(tmp_path):
