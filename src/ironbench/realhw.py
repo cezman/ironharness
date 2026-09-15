@@ -25,6 +25,7 @@ import time
 from typing import Any
 
 from io_core.errors import TransportIoError
+from io_core.incremental_text import Utf8StreamDecoder
 from ironbench.runner_common import MAX_SERIAL_TEXT
 
 CTRL_C = b"\x03"
@@ -54,6 +55,7 @@ class RealRepl:
         # to its chunk stamp for the anti-cheat anchor
         self._chunks: list[tuple[float, str]] = []
         self._truncated = False  # IH-46: the retention cap was hit
+        self._dec = Utf8StreamDecoder()  # IH-61: holds a partial multibyte char across reads
         time.sleep(_BOOT_QUIET_SEC if boot_quiet_sec is None else boot_quiet_sec)
         self.interrupt()
 
@@ -83,7 +85,7 @@ class RealRepl:
                     self._chunks.append((stamp, marker))
                     self._text += marker
                 continue  # кап достигнут: дренируем, но не удерживаем
-            chunk = data.decode("utf-8", "replace")
+            chunk = self._dec.decode(data)  # IH-61: a partial char waits for the rest
             self._chunks.append((time.monotonic(), chunk))
             self._text += chunk
 

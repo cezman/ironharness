@@ -14,7 +14,6 @@ stay on wokwi; a fresh MicroPython build for litex is in the backlog (PLAN.md).
 
 from __future__ import annotations
 
-import codecs
 import io
 import os
 import shutil
@@ -24,6 +23,7 @@ import tarfile
 import time
 from pathlib import Path
 
+from io_core.incremental_text import Utf8StreamDecoder
 from ironbench import runner_common as common
 from ironbench.tasks import Task
 
@@ -147,7 +147,7 @@ class _TelnetFilter:
         self._buf = bytearray()
         self._iac = False  # waiting for the command byte after IAC
         self._sub = False  # inside IAC SB ... IAC SE
-        self._dec = codecs.getincrementaldecoder("utf-8")("replace")
+        self._dec = Utf8StreamDecoder()  # IH-61: the shared incremental decoder
 
     def feed(self, data: bytes) -> str:
         self._buf += data
