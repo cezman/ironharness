@@ -98,7 +98,7 @@ def _run_real(
             journal("task_start", {"task": task.name})
         repl = RealRepl(transport_factory())
         deadline = time.monotonic() + wall_timeout
-        repl.boot(code)
+        repl.boot(code, deadline=deadline)
         plain = tuple(p for p in task.expect if common._plain_text(p))
         # every wait-serial step as (needle, trigger stamp) - the canonical
         # verdict replays this sequence over the settled final log (IH-33,
@@ -165,6 +165,11 @@ def _run_real(
                     )
                     error_kind = common.ERROR_RUN
                     break
+    except TimeoutError as e:
+        # IH-57: the staging deadline is a wall-clock timeout - TimeoutError
+        # is an OSError subclass, catch it before the generic handler
+        error = f"wall deadline exceeded: {e}"
+        error_kind = common.ERROR_TIMEOUT
     except (OSError, ConnectionError, ValueError, AssertionError) as e:
         error = f"failed to talk to the board: {e}"
         error_kind = common.ERROR_INFRA

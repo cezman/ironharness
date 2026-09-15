@@ -333,6 +333,26 @@ def test_real_pump_caps_retained_output():
     assert "truncated" in out, "the cap was hit silently - no truncation marker (IH-46)"
 
 
+def test_real_boot_respects_the_wall_deadline(tmp_path, monkeypatch):
+    """IH-57: boot() wrote line by line with fixed per-chunk delays and no
+    deadline - an oversized agent file stalled the attempt far past the wall
+    clock. The staging must abort as a timeout at the deadline."""
+    import ironbench.realhw as realhw_mod
+    from ironbench import runner_common
+
+    monkeypatch.setattr(realhw_mod, "_WRITE_CHUNK_DELAY", 0.1)
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    entry = "".join(f"print({i})\n" for i in range(60)) + 'print("echo ready")\n'
+    task = make_real_task(tmp_path, entry=entry, expect=("echo ready",))
+
+    started = time.monotonic()
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeBoard())
+    duration = time.monotonic() - started
+    assert res.error_kind == "timeout", f"got {res.error_kind}: {res.error}"
+    assert duration < 9, f"the staging ran {duration:.1f}s past the wall deadline"
+
+
 LITERAL_ENTRY = 'print("echo ready")\nwhile True:\n    line = input()\n    print("echo: " + line)\n'
 
 

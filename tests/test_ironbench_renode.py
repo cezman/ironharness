@@ -50,8 +50,6 @@ FAKE_RENODE = textwrap.dedent(
         if not data:
             break
         buf += data
-        if mode == "hang":
-            continue
         if b"\\x05" in buf and not paste:
             paste = True
             echo_sent = False
@@ -72,6 +70,8 @@ FAKE_RENODE = textwrap.dedent(
             banner = True
             pre = "alpha bravo\\r\\n" if mode == "cheat" else ""
             conn.sendall(pre.encode() + b"fake MicroPython v0\\r\\n>>> ")
+        if mode == "hang":
+            continue  # hang AFTER the handshake: a firmware that never answers
     if mode == "ok":
         conn.sendall(b"alpha bravo\\r\\ncharlie delta\\r\\nbye now\\r\\n>>> ")
     elif mode == "missed":
@@ -502,3 +502,19 @@ def test_renode_flood_cannot_balloon_serial_text(tmp_path, monkeypatch):
     assert res.serial_log.stat().st_size <= MAX_SERIAL_TEXT + 262144, (
         f"serial log grew to {res.serial_log.stat().st_size} bytes - tail loop uncapped"
     )
+
+
+def test_renode_paste_respects_the_wall_deadline(tmp_path, monkeypatch):
+    """IH-57: _send_chunked ignored the wall deadline - a big entry pasted
+    for ~12 s of fixed pauses while the wall clock was 3 s. The paste must
+    abort as a timeout at the deadline."""
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    task = make_renode_task(tmp_path, expect=("never printed",), timeout_sec=1)
+    filler = "".join(f"x{i} = {i}\n" for i in range(400))  # ~5 KB of real code lines
+    (task.directory / "solution.py").write_text(filler + 'print("x")\n', encoding="utf-8")
+
+    started = time.monotonic()
+    res = run_fake_renode(tmp_path, task, "hang")
+    duration = time.monotonic() - started
+    assert duration < 12, f"the paste ran {duration:.1f}s past the wall deadline"
+    assert res.error_kind == "timeout", f"got {res.error_kind}: {res.error}"

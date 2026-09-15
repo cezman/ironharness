@@ -222,10 +222,20 @@ def _paste_code(code: str) -> str:
     return "\n".join(line for line in code.splitlines() if not line.lstrip().startswith("#"))
 
 
-def _send_chunked(sock: socket.socket, data: bytes, chunk: int = 32, pause: float = 0.05) -> None:
+def _send_chunked(
+    sock: socket.socket,
+    data: bytes,
+    chunk: int = 32,
+    pause: float = 0.05,
+    deadline: float | None = None,
+) -> None:
     """Pasting in chunks: legacy paste mode has no flow control, the emulator
-    FIFO overflows when poured in a single piece."""
+    FIFO overflows when poured in a single piece. IH-57: the fixed per-chunk
+    pauses used to be deadline-blind - a big entry pasted far past the wall
+    clock; the deadline aborts the paste as a timeout."""
     for i in range(0, len(data), chunk):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError(f"paste exceeded the wall deadline at byte {i}/{len(data)}")
         sock.sendall(data[i : i + chunk])
         time.sleep(pause)
 
@@ -264,7 +274,7 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
         )
 
     code = (task.directory / task.entry).read_text(encoding="utf-8")
-    _send_chunked(sock, _paste_code(code).encode("utf-8") + b"\n\x04")
+    _send_chunked(sock, _paste_code(code).encode("utf-8") + b"\n\x04", deadline=wall_deadline)
 
     # stimulus steps; set-control (Wokwi buttons) cannot be reproduced under renode
     for step in task.stimulus:
@@ -441,6 +451,11 @@ def _run_renode(
     except FileNotFoundError as e:
         error = f"not found: {e.filename or e}"
         error_kind = common.ERROR_INFRA
+    except TimeoutError as e:
+        # IH-57: the paste deadline is a wall-clock timeout - TimeoutError is
+        # an OSError subclass, so catch it before the generic OSError handler
+        error = f"wall deadline exceeded: {e}"
+        error_kind = common.ERROR_TIMEOUT
     except OSError as e:
         error = f"I/O error while starting Renode: {e}"
         error_kind = common.ERROR_INFRA

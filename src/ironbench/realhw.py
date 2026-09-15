@@ -114,7 +114,7 @@ class RealRepl:
                 break
             time.sleep(0.05)
 
-    def boot(self, code: str) -> None:
+    def boot(self, code: str, *, deadline: float | None = None) -> None:
         """Гигиена + запуск entry: снести чужой main.py, soft reset, залить код.
 
         Буфер очищается перед staging (вместе с _chunks — античит отображает
@@ -136,13 +136,17 @@ class RealRepl:
         self._text = ""
         self._chunks = []
 
-        deadline = time.monotonic() + 8
+        paste_deadline = time.monotonic() + 8
         while PASTE_BANNER not in self.output():
-            if time.monotonic() >= deadline:
+            if time.monotonic() >= paste_deadline:
                 raise ConnectionError("board did not enter paste mode (Ctrl+E)")
             self.write(CTRL_E)
             self.wait_for(PASTE_BANNER, time.monotonic() + 2.0)
         for line in code.splitlines(keepends=True):
+            if deadline is not None and time.monotonic() >= deadline:
+                # IH-57: построчная заливка с фиксированными паузами без
+                # дедлайна тянула попытку далеко за wall clock
+                raise TimeoutError("staging exceeded the wall deadline (IH-57)")
             self.write(line.encode("utf-8"))
         self.write(CTRL_D)  # выполнить; вывод читается в wait_for/дочитывании
         self._drain()
