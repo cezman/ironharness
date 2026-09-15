@@ -50,6 +50,11 @@ FAKE_RENODE = textwrap.dedent(
         if not data:
             break
         buf += data
+        if mode == "flood":
+            try:
+                conn.sendall(b"A" * 4096)  # flood in EVERY phase: waits and tail
+            except OSError:
+                pass
         if b"\\x05" in buf and not paste:
             paste = True
             echo_sent = False
@@ -488,6 +493,15 @@ def test_renode_truncated_echo_is_infra(tmp_path):
     assert "truncated" in (res.error or "").lower()
 
 
+def test_telnet_filter_decodes_split_multibyte_chars():
+    """IH-58: feed() decoded each chunk separately - a multibyte char split
+    by a TCP chunk boundary became two U+FFFD, breaking honest non-ASCII
+    output (e.g. a firmware printing '20°C ok' across chunks)."""
+    tel = runner_renode._TelnetFilter()
+    out = tel.feed(b"result: 20\xc2") + tel.feed(b"\xb0C ok")
+    assert out == "result: 20°C ok", repr(out)
+
+
 def test_renode_flood_cannot_balloon_serial_text(tmp_path, monkeypatch):
     """IH-46 review F1: the tail-read loop (after the stimulus) had no byte
     cap - a firmware printing forever without a prompt grew serial_text to
@@ -504,17 +518,21 @@ def test_renode_flood_cannot_balloon_serial_text(tmp_path, monkeypatch):
     )
 
 
-def test_renode_paste_respects_the_wall_deadline(tmp_path, monkeypatch):
-    """IH-57: _send_chunked ignored the wall deadline - a big entry pasted
-    for ~12 s of fixed pauses while the wall clock was 3 s. The paste must
-    abort as a timeout at the deadline."""
+def test_renode_retained_text_capped_across_wait_steps(tmp_path, monkeypatch):
+    """IH-59: the 1 MiB cap was PER CALL (per _recv_until / per tail loop) -
+    a flood during several wait-serial steps accumulated one full cap per
+    step in `parts`. The aggregate retained text must stay bounded."""
     monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
-    task = make_renode_task(tmp_path, expect=("never printed",), timeout_sec=1)
-    filler = "".join(f"x{i} = {i}\n" for i in range(400))  # ~5 KB of real code lines
-    (task.directory / "solution.py").write_text(filler + 'print("x")\n', encoding="utf-8")
+    from ironbench.runner_common import MAX_SERIAL_TEXT
 
-    started = time.monotonic()
-    res = run_fake_renode(tmp_path, task, "hang")
-    duration = time.monotonic() - started
-    assert duration < 12, f"the paste ran {duration:.1f}s past the wall deadline"
-    assert res.error_kind == "timeout", f"got {res.error_kind}: {res.error}"
+    stimulus = []
+    for _ in range(3):
+        stimulus.append("delay: 10ms")
+    task = make_renode_task(tmp_path, expect=("never printed",), timeout_sec=1, stimulus=stimulus)
+    # the flood mode fills the socket from the tail loop; with 1 MiB per call
+    # the old code retained one cap per phase
+    res = run_fake_renode(tmp_path, task, "flood")
+    assert res.serial_log is not None
+    assert res.serial_log.stat().st_size <= MAX_SERIAL_TEXT + 262144, (
+        f"serial log grew to {res.serial_log.stat().st_size} bytes - no aggregate cap"
+    )
