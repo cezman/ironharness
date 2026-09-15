@@ -24,6 +24,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from io_core.errors import TransportIoError
 from ironbench.runner_common import MAX_SERIAL_TEXT
 
 CTRL_C = b"\x03"
@@ -153,17 +154,32 @@ class RealRepl:
         есть именно эхо финальной строки. Принятая граница: прошивка,
         печатающая при старте строку, совпадающую с последней строкой своего
         исходника, оставит хвост эха в логе (adversarial самосаботаж, не
-        класс читеров)."""
+        класс читеров).
+
+        IH-56: «эха нет» и «эхо оборвалось по пути» — разные случаи. Если
+        баннер paste-режима и первая строка исходника пришли, а последняя —
+        нет, значит хвост эха потерян (FIFO/линия): неусечённое эхо осуждает
+        честную плату или пропускает мёртвую — отказ вместо скоринга."""
         lines = [ln.rstrip() for ln in code.splitlines()]
-        last = next((ln for ln in reversed(lines) if ln), None)
-        if not last:
+        nonempty = [ln for ln in lines if ln]
+        if not nonempty:
             return
+        last = nonempty[-1]
+        first = nonempty[0]
         pos = self._text.rfind(last)
-        if pos < 0:
-            return  # no echo seen (raw-paste board) - nothing to trim
-        end = self._text.find("\n", pos)
-        pos_end = len(self._text) if end < 0 else end + 1
-        self._truncate_text_and_chunks(pos_end)
+        if pos >= 0:
+            end = self._text.find("\n", pos)
+            pos_end = len(self._text) if end < 0 else end + 1
+            self._truncate_text_and_chunks(pos_end)
+            return
+        banner_pos = self._text.find(PASTE_BANNER)
+        if banner_pos >= 0 and first in self._text[banner_pos:]:
+            # эхо началось, но его хвост потерян: скорить такой лог нельзя
+            raise TransportIoError(
+                "staging echo truncated (FIFO/link lost the tail) - the run "
+                "cannot be scored honestly; retry with a fresh paste"
+            )
+        # эха не было вовсе (raw-paste плата) — тримить нечего
 
     def _truncate_text_and_chunks(self, pos: int) -> None:
         """Drops everything before byte offset pos from text and chunks
