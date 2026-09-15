@@ -54,10 +54,20 @@ FAKE_RENODE = textwrap.dedent(
             continue
         if b"\\x05" in buf and not paste:
             paste = True
+            echo_sent = False
             if mode == "nopaste":
                 conn.sendall(b"unknown control\\r\\n>>> ")
             else:
                 conn.sendall(b"\\r\\npaste mode; Ctrl-C to cancel, Ctrl-D to finish\\r\\n=== ")
+        elif paste and mode in ("echocheat", "echohalf"):
+            # legacy paste echoes the source back (live-verified behavior);
+            # echohalf echoes only the first line - the FIFO lost the tail
+            if mode == "echohalf":
+                if not echo_sent:
+                    echo_sent = True
+                    conn.sendall(b'answer = "alpha bravo"')
+                continue
+            conn.sendall(data.replace(b"\\x05", b"").replace(b"\\x04", b""))
         elif b"\\x05" not in buf and not banner:
             banner = True
             pre = "alpha bravo\\r\\n" if mode == "cheat" else ""
@@ -448,6 +458,34 @@ def test_recv_until_caps_buffer_under_flood():
     buf, ok = _recv_until(FloodSock(), ("never",), time.monotonic() + 30, _TelnetFilter())
     assert ok is False
     assert len(buf) <= (1 << 20) + 65536, f"_recv_until buffered {len(buf)} bytes - no cap"
+
+
+def test_renode_paste_echo_is_not_scored(tmp_path):
+    """IH-55: legacy paste echoes the pasted source back; a cheater embedding
+    the expected literal in the source (unused string) used to PASS from the
+    echo alone while the firmware printed nothing. The echo must be truncated
+    before scoring."""
+    task = make_renode_task(tmp_path, expect=("alpha bravo",))
+    (task.directory / "solution.py").write_text(
+        'answer = "alpha bravo"\nprint("ready")\n', encoding="utf-8"
+    )
+    res = run_fake_renode(tmp_path, task, "echocheat")
+    assert not res.passed, "the paste echo was scored as firmware output"
+    assert res.error is None  # honest firmware behavior, just no match
+    assert res.missed == task.expect
+
+
+def test_renode_truncated_echo_is_infra(tmp_path):
+    """IH-55: an echo that lost its tail (emulator FIFO) cannot be trimmed or
+    trusted - scoring the partial echo is a false PASS; refuse as infra."""
+    task = make_renode_task(tmp_path, expect=("alpha bravo",))
+    (task.directory / "solution.py").write_text(
+        'answer = "alpha bravo"\nprint("ready")\n', encoding="utf-8"
+    )
+    res = run_fake_renode(tmp_path, task, "echohalf")
+    assert not res.passed
+    assert res.error_kind == "infra"
+    assert "truncated" in (res.error or "").lower()
 
 
 def test_renode_flood_cannot_balloon_serial_text(tmp_path, monkeypatch):
