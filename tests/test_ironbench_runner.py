@@ -165,6 +165,22 @@ def test_stage_task_pulls_shared_firmware(tmp_path):
     assert (stage / bin_name).is_file(), "the stage must pull the bin from FIRMWARE_DIR"
 
 
+def test_stage_task_copies_subdirectories(tmp_path):
+    """IH-60: a task shipping a helper subdirectory (lib/) used to stage
+    without it - the gap surfaced only as an ImportError on the paid
+    simulation. Subdirectories must be staged with their contents."""
+    from ironbench.runner import _stage_task
+
+    task = make_task(tmp_path)
+    lib = task.directory / "lib"
+    lib.mkdir()
+    (lib / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+    stage, _scenario = _stage_task(task, tmp_path / "out")
+    assert (stage / "lib" / "helper.py").is_file(), (
+        "a staged subdirectory must arrive with its contents"
+    )
+
+
 def test_journal_records_start_and_result(tmp_path):
     task = make_task(tmp_path)
     jpath = tmp_path / "journal.jsonl"
