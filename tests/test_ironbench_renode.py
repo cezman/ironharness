@@ -50,11 +50,6 @@ FAKE_RENODE = textwrap.dedent(
         if not data:
             break
         buf += data
-        if mode == "flood":
-            try:
-                conn.sendall(b"A" * 4096)  # flood in EVERY phase: waits and tail
-            except OSError:
-                pass
         if b"\\x05" in buf and not paste:
             paste = True
             echo_sent = False
@@ -77,6 +72,20 @@ FAKE_RENODE = textwrap.dedent(
             conn.sendall(pre.encode() + b"fake MicroPython v0\\r\\n>>> ")
         if mode == "hang":
             continue  # hang AFTER the handshake: a firmware that never answers
+    if mode == "flood":
+        # IH-59: flood AFTER the handshake (post-\x04) - the waits and the
+        # tail loop read the flood phase by phase, one 1 MiB cap each
+        conn.settimeout(30)
+        import time as _t
+
+        t_end = _t.monotonic() + 25
+        try:
+            while _t.monotonic() < t_end:
+                conn.sendall(b"A" * 4096)
+        except OSError:
+            pass
+        conn.close()
+        sys.exit(0)
     if mode == "ok":
         conn.sendall(b"alpha bravo\\r\\ncharlie delta\\r\\nbye now\\r\\n>>> ")
     elif mode == "missed":
@@ -525,12 +534,10 @@ def test_renode_retained_text_capped_across_wait_steps(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
     from ironbench.runner_common import MAX_SERIAL_TEXT
 
-    stimulus = []
-    for _ in range(3):
-        stimulus.append("delay: 10ms")
+    stimulus = ["write-serial: 'x'"] + ["wait-serial: 'never'", "write-serial: 'x'"] * 5 + [
+        "wait-serial: 'never'"
+    ]
     task = make_renode_task(tmp_path, expect=("never printed",), timeout_sec=1, stimulus=stimulus)
-    # the flood mode fills the socket from the tail loop; with 1 MiB per call
-    # the old code retained one cap per phase
     res = run_fake_renode(tmp_path, task, "flood")
     assert res.serial_log is not None
     assert res.serial_log.stat().st_size <= MAX_SERIAL_TEXT + 262144, (
