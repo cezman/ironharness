@@ -130,3 +130,32 @@ def test_report_html_renders_profile_table(tmp_path):
     assert "resilience" in html and "0/1 (0%)" in html
     report = json.loads(json_path.read_text(encoding="utf-8"))
     assert report["class_profile"]["m"]["io"]["solved"] == 1
+
+
+def test_report_includes_pass_k_reliability(tmp_path):
+    """IH-67: pass^k (reliability) - the fraction of (model, task) groups
+    where ALL attempts solved. Bounded per-group, honest for flaky boards:
+    a group with one failed attempt out of three drops out of reliability
+    but stays in pass@k."""
+    import json as _json
+
+    camp = tmp_path / "camp"
+    camp.mkdir(parents=True)
+    recs = [
+        {"model": "m", "task": "t1", "solved": True, "iterations": 1, "duration_sec": 1.0,
+         "error_kind": "none", "attempt": 1},
+        {"model": "m", "task": "t1", "solved": True, "iterations": 2, "duration_sec": 2.0,
+         "error_kind": "none", "attempt": 2},
+        {"model": "m", "task": "t2", "solved": True, "iterations": 1, "duration_sec": 1.0,
+         "error_kind": "none", "attempt": 1},
+        {"model": "m", "task": "t2", "solved": False, "iterations": 3, "duration_sec": 3.0,
+         "error_kind": "run", "attempt": 2},
+    ]
+    with (camp / "results.jsonl").open("w", encoding="utf-8") as f:
+        for r in recs:
+            f.write(_json.dumps(r) + "\n")
+    report = build_report(camp)
+    assert report["pass_at_k_reliability"] == 0.5
+    groups = {g["task"]: g for g in report["groups"]}
+    assert groups["t1"]["all_solved"] is True
+    assert groups["t2"]["all_solved"] is False
