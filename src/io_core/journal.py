@@ -70,7 +70,14 @@ def _release_lock_file(fh: Any) -> None:
 
 
 class JsonlJournal:
-    def __init__(self, path: str | Path, actor: str = "io_core") -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        actor: str = "io_core",
+        *,
+        max_bytes: int = 32 * 1024 * 1024,
+        max_files: int = 5,
+    ) -> None:
         self._path = Path(path)
         self._actor = actor
         self._seq = 0
@@ -81,6 +88,11 @@ class JsonlJournal:
         self._lock_path = self._path.with_name(self._path.name + ".lock")
         with _acquire_lock_file(self._lock_path):
             pass
+        # IH-63: ротация по размеру — длинная сессия с фоновым ридером не
+        # должна расти бесконечно. Старые части уходят в .N (1 — новейшая
+        # из архивных), сверх max_files — самые старые удаляются.
+        self._max_bytes = max_bytes
+        self._max_files = max_files
         self._fh = self._path.open("a", encoding="utf-8")
 
     def __call__(self, kind: str, data: dict[str, Any]) -> None:
@@ -111,12 +123,34 @@ class JsonlJournal:
             # cannot interleave its append between ours
             lock_fh = _acquire_lock_file(self._lock_path)
             try:
+                self._rotate_if_full()
                 self._fh.seek(0, os.SEEK_END)
                 self._fh.write(line)
                 self._fh.flush()
                 self._seq += 1 if conflicts else 0
             finally:
                 _release_lock_file(lock_fh)
+
+    def _rotate_if_full(self) -> None:
+        """IH-63: если текущий журнал превысил max_bytes — сдвинуть части
+        (.1 -> .2, ...) и открыть свежий файл. Числовые части старше
+        max_files удаляются. Called under the journal lock before each write."""
+        try:
+            size = self._fh.tell()
+        except OSError:
+            size = self._path.stat().st_size if self._path.exists() else 0
+        if size < self._max_bytes:
+            return
+        self._fh.close()
+        oldest = self._path.with_name(f"{self._path.name}.{self._max_files}")
+        if oldest.exists():
+            oldest.unlink()
+        for i in range(self._max_files - 1, 0, -1):
+            src = self._path.with_name(f"{self._path.name}.{i}")
+            if src.exists():
+                src.replace(self._path.with_name(f"{self._path.name}.{i + 1}"))
+        self._path.replace(self._path.with_name(f"{self._path.name}.1"))
+        self._fh = self._path.open("a", encoding="utf-8")
 
     def close(self) -> None:
         with self._lock:  # колбэк из сетевого потока не должен писать в закрытый файл
@@ -146,4 +180,42 @@ def read_events(path: str | Path) -> list[Event]:
             if not isinstance(rec, dict):
                 raise JournalCorrupt(f"{path}:{n}: line is not a JSON object")
             events.append(rec)
+    return events
+
+
+def read_events_chain(path: str | Path) -> list[Event]:
+    """IH-63: читает живой журнал и все ротированные части (`.1`, `.2`, ...)
+    в хронологическом порядке: части — по убыванию индекса (`.2` старше
+    `.1`), живой файл — последним. Битые строки внутри части —
+    JournalCorrupt с именем части."""
+    from io_core.errors import JournalCorrupt
+
+    base = Path(path)
+    parts: list[tuple[int, Path]] = []
+    idx = 1
+    while True:
+        part = base.with_name(f"{base.name}.{idx}")
+        if not part.exists():
+            break
+        parts.append((idx, part))
+        idx += 1
+    events: list[Event] = []
+    # IH-63: chronological order - highest rotation index is the oldest, the
+    # live file is the newest
+    for _, part_path in sorted(parts, key=lambda pair: pair[0], reverse=True) + [
+        (0, base)
+    ]:
+        if not part_path.exists():
+            continue
+        with part_path.open(encoding="utf-8") as fh:
+            for n, line in enumerate(fh, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError as e:
+                    raise JournalCorrupt(f"{part_path}:{n}: line is not valid JSON: {e}") from None
+                if not isinstance(rec, dict):
+                    raise JournalCorrupt(f"{part_path}:{n}: line is not a JSON object")
+                events.append(rec)
     return events
