@@ -14,6 +14,7 @@ stay on wokwi; a fresh MicroPython build for litex is in the backlog (PLAN.md).
 
 from __future__ import annotations
 
+import codecs
 import io
 import os
 import shutil
@@ -136,12 +137,17 @@ class _TelnetFilter:
     """Strips telnet IAC sequences: the Renode socket terminal is a telnet
     server, it sends negotiation (IAC WILL/DO...) and escapes 0xFF bytes in
     data. An incomplete IAC sequence at a chunk boundary waits for the rest in
-    the next chunk (the buffer tail persists between feed calls)."""
+    the next chunk (the buffer tail persists between feed calls). IH-58: the
+    UTF-8 decode is INCREMENTAL - a per-chunk decode turned a multibyte char
+    split by a TCP chunk boundary into two U+FFFD and failed honest non-ASCII
+    output ('20°C' split mid-° reproduced); a partial multibyte char at the
+    chunk tail now waits for the rest, like the IAC tail does."""
 
     def __init__(self) -> None:
         self._buf = bytearray()
         self._iac = False  # waiting for the command byte after IAC
         self._sub = False  # inside IAC SB ... IAC SE
+        self._dec = codecs.getincrementaldecoder("utf-8")("replace")
 
     def feed(self, data: bytes) -> str:
         self._buf += data
@@ -183,7 +189,7 @@ class _TelnetFilter:
                 out.append(b)
                 i += 1
         del self._buf[:i]
-        return out.decode("utf-8", "replace")
+        return self._dec.decode(bytes(out))
 
 
 def _recv_until(
@@ -222,10 +228,20 @@ def _paste_code(code: str) -> str:
     return "\n".join(line for line in code.splitlines() if not line.lstrip().startswith("#"))
 
 
-def _send_chunked(sock: socket.socket, data: bytes, chunk: int = 32, pause: float = 0.05) -> None:
+def _send_chunked(
+    sock: socket.socket,
+    data: bytes,
+    chunk: int = 32,
+    pause: float = 0.05,
+    deadline: float | None = None,
+) -> None:
     """Pasting in chunks: legacy paste mode has no flow control, the emulator
-    FIFO overflows when poured in a single piece."""
+    FIFO overflows when poured in a single piece. IH-57: the fixed per-chunk
+    pauses used to be deadline-blind - a big entry pasted far past the wall
+    clock; the deadline aborts the paste as a timeout."""
     for i in range(0, len(data), chunk):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError(f"paste exceeded the wall deadline at byte {i}/{len(data)}")
         sock.sendall(data[i : i + chunk])
         time.sleep(pause)
 
@@ -244,10 +260,22 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
     """
     parts: list[str] = []
     tel = _TelnetFilter()
+    retained = 0
+
+    def _keep(buf: str) -> None:
+        # IH-59: the aggregate retained-text cap - the per-call 1 MiB caps
+        # bound each read, but N wait steps used to retain N caps. Past the
+        # aggregate cap the socket still drains, nothing is retained.
+        nonlocal retained
+        room = common.MAX_SERIAL_TEXT - retained
+        if room <= 0:
+            return
+        parts.append(buf[:room])
+        retained += len(buf)
     # nudge the REPL with an empty line: the prompt prints once and is easy to miss on connect
     sock.sendall(b"\n")
     buf, ok = _recv_until(sock, (common.REPL_PROMPT,), wall_deadline, tel)
-    parts.append(buf)
+    _keep(buf)
     if not ok:
         return "".join(parts), "REPL is not responding (no '>>>' prompt)", common.ERROR_INFRA
 
@@ -255,7 +283,7 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
     buf, ok = _recv_until(
         sock, ("paste mode",), min(wall_deadline, time.monotonic() + RENODE_STEP_SEC), tel
     )
-    parts.append(buf)
+    _keep(buf)
     if not ok:
         return (
             "".join(parts),
@@ -264,7 +292,7 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
         )
 
     code = (task.directory / task.entry).read_text(encoding="utf-8")
-    _send_chunked(sock, _paste_code(code).encode("utf-8") + b"\n\x04")
+    _send_chunked(sock, _paste_code(code).encode("utf-8") + b"\n\x04", deadline=wall_deadline)
 
     # stimulus steps; set-control (Wokwi buttons) cannot be reproduced under renode
     for step in task.stimulus:
@@ -293,7 +321,7 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
                     "for it (pre-printed output)"
                 ), common.ERROR_RUN
             buf, _ = _recv_until(sock, (needle,), wall_deadline, tel)
-            parts.append(buf)
+            _keep(buf)
 
     # keep reading: until the full set of literal expects is collected (early
     # exit, like wait-serial in the wokwi scenario), until the prompt returns
@@ -317,7 +345,7 @@ def _drive_repl(sock: socket.socket, task: Task, wall_deadline: float) -> tuple[
             # IH-46 review F1: same cap as _recv_until - an infinite firmware
             # loop (no prompt) must not retain output to the wall deadline
             break
-    parts.append(buf)
+    _keep(buf)
     return "".join(parts), None, common.ERROR_NONE
 
 
@@ -441,6 +469,11 @@ def _run_renode(
     except FileNotFoundError as e:
         error = f"not found: {e.filename or e}"
         error_kind = common.ERROR_INFRA
+    except TimeoutError as e:
+        # IH-57: the paste deadline is a wall-clock timeout - TimeoutError is
+        # an OSError subclass, so catch it before the generic OSError handler
+        error = f"wall deadline exceeded: {e}"
+        error_kind = common.ERROR_TIMEOUT
     except OSError as e:
         error = f"I/O error while starting Renode: {e}"
         error_kind = common.ERROR_INFRA

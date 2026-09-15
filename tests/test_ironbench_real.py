@@ -331,3 +331,78 @@ def test_real_pump_caps_retained_output():
     )
     assert "".join(c for _, c in repl.chunks()) == out
     assert "truncated" in out, "the cap was hit silently - no truncation marker (IH-46)"
+
+
+def test_real_boot_respects_the_wall_deadline(tmp_path, monkeypatch):
+    """IH-57: boot() wrote line by line with fixed per-chunk delays and no
+    deadline - an oversized agent file stalled the attempt far past the wall
+    clock. The staging must abort as a timeout at the deadline."""
+    import ironbench.realhw as realhw_mod
+    from ironbench import runner_common
+
+    monkeypatch.setattr(realhw_mod, "_WRITE_CHUNK_DELAY", 0.1)
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    entry = "".join(f"print({i})\n" for i in range(60)) + 'print("echo ready")\n'
+    task = make_real_task(tmp_path, entry=entry, expect=("echo ready",))
+
+    started = time.monotonic()
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeBoard())
+    duration = time.monotonic() - started
+    assert res.error_kind == "timeout", f"got {res.error_kind}: {res.error}"
+    assert duration < 9, f"the staging ran {duration:.1f}s past the wall deadline"
+
+
+LITERAL_ENTRY = 'print("echo ready")\nwhile True:\n    line = input()\n    print("echo: " + line)\n'
+
+
+class TruncatedEchoBoard(FakeBoard):
+    """A degraded link: only the FIRST pasted line is echoed - the echo's
+    tail (including the last source line) is lost (IH-56 F5)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._echoed_first = False
+
+    def write(self, data: bytes) -> int:
+        text = data.decode("utf-8", "replace")
+        if self._paste_mode and "\x04" not in text and "\x05" not in text:
+            if not self._echoed_first:
+                self._echoed_first = True
+                return super().write(data)
+            self._paste_buf += text  # consume silently: the echo tail is lost
+            return len(data)
+        return super().write(data)
+
+
+class DeadTruncatedEchoBoard(TruncatedEchoBoard):
+    """Truncated echo + the board never runs the staged code (dies at
+    Ctrl+D): with the trim disabled this board PASSED via its own echo."""
+
+    def write(self, data: bytes) -> int:
+        if "\x04" in data.decode("utf-8", "replace"):
+            self._paste_mode = False
+            self._paste_buf = ""
+            return len(data)  # no start, no output
+        return super().write(data)
+
+
+def test_truncated_staging_echo_refuses_instead_of_condemning(tmp_path):
+    """IH-56 F5a: with the echo's tail lost, the untrimmable echo used to
+    stay in the log - an honest board was condemned by the anti-cheat
+    (pre-trigger needle from its own echo). The boot must refuse instead:
+    infra, not a run verdict against honest firmware."""
+    task = make_real_task(tmp_path, entry=LITERAL_ENTRY, expect=("echo ready",))
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=TruncatedEchoBoard())
+    assert not res.passed
+    assert res.error_kind == "infra", f"got {res.error_kind}: {res.error}"
+    assert "truncated" in (res.error or "")
+
+
+def test_truncated_echo_dead_board_cannot_pass(tmp_path):
+    """IH-56 F5b: the retained echo contains the expect literal - a board
+    that never executed anything used to PASS from its own echo."""
+    task = make_real_task(tmp_path, entry=LITERAL_ENTRY, expect=("echo ready",))
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=DeadTruncatedEchoBoard())
+    assert not res.passed, "a board that never ran passed from its own paste echo"
+    assert res.error_kind == "infra"

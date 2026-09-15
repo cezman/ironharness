@@ -70,13 +70,18 @@ def generate_paste_scenario(task: Task) -> str:
 
 
 def _stage_task(task: Task, out_dir: Path) -> tuple[Path, str]:
-    """Copies the task directory into a clean stage; returns (path, scenario name)."""
+    """Copies the task directory into a clean stage; returns (path, scenario name).
+    IH-60: subdirectories are copied too (lib/ etc.) - a task referencing a
+    helper module used to stage without it and crash on the paid simulation
+    instead of failing at staging."""
     stage = out_dir / task.name
     shutil.rmtree(stage, ignore_errors=True)  # without this, stale files survive the run
     stage.mkdir(parents=True, exist_ok=True)
     for item in task.directory.iterdir():
         if item.is_file():
             shutil.copy2(item, stage / item.name)
+        elif item.is_dir():
+            shutil.copytree(item, stage / item.name)
     _stage_firmware(task, stage)
     if task.scenario:
         return stage, task.scenario

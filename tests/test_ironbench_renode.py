@@ -50,8 +50,6 @@ FAKE_RENODE = textwrap.dedent(
         if not data:
             break
         buf += data
-        if mode == "hang":
-            continue
         if b"\\x05" in buf and not paste:
             paste = True
             echo_sent = False
@@ -72,6 +70,22 @@ FAKE_RENODE = textwrap.dedent(
             banner = True
             pre = "alpha bravo\\r\\n" if mode == "cheat" else ""
             conn.sendall(pre.encode() + b"fake MicroPython v0\\r\\n>>> ")
+        if mode == "hang":
+            continue  # hang AFTER the handshake: a firmware that never answers
+    if mode == "flood":
+        # IH-59: flood AFTER the handshake (post-\x04) - the waits and the
+        # tail loop read the flood phase by phase, one 1 MiB cap each
+        conn.settimeout(30)
+        import time as _t
+
+        t_end = _t.monotonic() + 25
+        try:
+            while _t.monotonic() < t_end:
+                conn.sendall(b"A" * 4096)
+        except OSError:
+            pass
+        conn.close()
+        sys.exit(0)
     if mode == "ok":
         conn.sendall(b"alpha bravo\\r\\ncharlie delta\\r\\nbye now\\r\\n>>> ")
     elif mode == "missed":
@@ -488,6 +502,15 @@ def test_renode_truncated_echo_is_infra(tmp_path):
     assert "truncated" in (res.error or "").lower()
 
 
+def test_telnet_filter_decodes_split_multibyte_chars():
+    """IH-58: feed() decoded each chunk separately - a multibyte char split
+    by a TCP chunk boundary became two U+FFFD, breaking honest non-ASCII
+    output (e.g. a firmware printing '20°C ok' across chunks)."""
+    tel = runner_renode._TelnetFilter()
+    out = tel.feed(b"result: 20\xc2") + tel.feed(b"\xb0C ok")
+    assert out == "result: 20°C ok", repr(out)
+
+
 def test_renode_flood_cannot_balloon_serial_text(tmp_path, monkeypatch):
     """IH-46 review F1: the tail-read loop (after the stimulus) had no byte
     cap - a firmware printing forever without a prompt grew serial_text to
@@ -501,4 +524,22 @@ def test_renode_flood_cannot_balloon_serial_text(tmp_path, monkeypatch):
     assert res.serial_log is not None
     assert res.serial_log.stat().st_size <= MAX_SERIAL_TEXT + 262144, (
         f"serial log grew to {res.serial_log.stat().st_size} bytes - tail loop uncapped"
+    )
+
+
+def test_renode_retained_text_capped_across_wait_steps(tmp_path, monkeypatch):
+    """IH-59: the 1 MiB cap was PER CALL (per _recv_until / per tail loop) -
+    a flood during several wait-serial steps accumulated one full cap per
+    step in `parts`. The aggregate retained text must stay bounded."""
+    monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
+    from ironbench.runner_common import MAX_SERIAL_TEXT
+
+    stimulus = ["write-serial: 'x'"] + ["wait-serial: 'never'", "write-serial: 'x'"] * 5 + [
+        "wait-serial: 'never'"
+    ]
+    task = make_renode_task(tmp_path, expect=("never printed",), timeout_sec=1, stimulus=stimulus)
+    res = run_fake_renode(tmp_path, task, "flood")
+    assert res.serial_log is not None
+    assert res.serial_log.stat().st_size <= MAX_SERIAL_TEXT + 262144, (
+        f"serial log grew to {res.serial_log.stat().st_size} bytes - no aggregate cap"
     )
