@@ -333,6 +333,34 @@ def test_real_pump_caps_retained_output():
     assert "truncated" in out, "the cap was hit silently - no truncation marker (IH-46)"
 
 
+def test_real_pump_decodes_split_multibyte_chars():
+    """IH-58 (real side): _pump decoded per read() chunk - a multibyte char
+    split by a chunk boundary became two U+FFFD and broke honest non-ASCII
+    firmware output ('20°C' split mid-degree)."""
+
+    class Utf8FloodBoard:
+        def __init__(self) -> None:
+            self.left = b"result: 20\xc2\xb0 C ok"
+
+        @property
+        def in_waiting(self) -> int:
+            return min(11, len(self.left))  # the 11-byte read cuts between 0xc2 and 0xb0
+
+        def read(self, n: int) -> bytes:
+            take = min(n, len(self.left))
+            out = self.left[:take]
+            self.left = self.left[take:]
+            return out
+
+        def write(self, data: bytes) -> None:
+            pass
+
+    repl = RealRepl(Utf8FloodBoard(), boot_quiet_sec=0)
+    out = repl.output()
+    assert out == "result: 20° C ok", repr(out)
+    assert "\ufffd" not in out, f"replacement chars in output: {out!r}"
+
+
 def test_real_boot_respects_the_wall_deadline(tmp_path, monkeypatch):
     """IH-57: boot() wrote line by line with fixed per-chunk delays and no
     deadline - an oversized agent file stalled the attempt far past the wall
