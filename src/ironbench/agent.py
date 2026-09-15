@@ -222,7 +222,43 @@ def _serial_feedback(serial_log: Path | None) -> str:
     if serial_log is None or not serial_log.is_file():
         return "(serial output is empty - the firmware did not start)"
     lines = serial_log.read_text(encoding="utf-8", errors="replace").splitlines()
-    return "\n".join(lines[-SERIAL_FEEDBACK_LINES:])
+    tail = "\n".join(lines[-SERIAL_FEEDBACK_LINES:])
+    parsed = _parse_last_traceback(lines)
+    if parsed is None:
+        return tail
+    # IH-66: structured diagnosis ahead of the raw tail - the agent gets the
+    # failure class and location without re-reading the whole traceback
+    return f"DIAGNOSIS: {parsed}\n\n(last serial output):\n{tail}"
+
+
+def _parse_last_traceback(lines: list[str]) -> str | None:
+    """Extracts the last MicroPython traceback from serial lines as a compact
+    one-line diagnosis '<exception>: <message> (last file:line)' (IH-66).
+    Returns None when the log holds no traceback. MicroPython tracebacks are
+    short: a 'Traceback (most recent call last):' header, indented
+    '  File "name", line N' frames, then a final 'Type: message' line."""
+    tb_start = None
+    for i, line in enumerate(lines):
+        if line.strip() == "Traceback (most recent call last):":
+            tb_start = i  # keep the LAST traceback if several
+    if tb_start is None:
+        return None
+    frame = ""
+    exc_line = ""
+    for line in lines[tb_start + 1 :]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("File "):
+            frame = stripped[len("File "):]
+            frame = frame.removesuffix(", in <module>")
+            continue
+        exc_line = stripped
+        break
+    if not exc_line:
+        return None
+    loc = f" ({frame})" if frame else ""
+    return f"{exc_line}{loc}"
 
 
 def _work_task(task: Task, work_dir: Path) -> Task:
