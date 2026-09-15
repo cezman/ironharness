@@ -187,6 +187,14 @@ def build_report(solve_dir: Path, task_meta: dict | None = None) -> dict:
     pass_at_k = (
         round(sum(1 for s in complete if s.passed) / len(complete), 2) if complete else 0.0
     )
+    # IH-67: pass^k (reliability) - the fraction of groups where EVERY attempt
+    # solved. Complementary to pass@k: pass@k forgives flaky boards, pass^k
+    # exposes them. NaN-safe: groups with zero live attempts are excluded.
+    pass_at_k_reliability = (
+        round(sum(1 for s in complete if s.solved == s.attempts) / len(complete), 2)
+        if complete
+        else 0.0
+    )
     meta = task_meta or {}
 
     def meta_of(name: str) -> dict:
@@ -197,11 +205,13 @@ def build_report(solve_dir: Path, task_meta: dict | None = None) -> dict:
         "models": sorted({s.model for s in stats}),
         "tasks": sorted({s.task for s in stats}),
         "pass_at_k": pass_at_k,
+        "pass_at_k_reliability": pass_at_k_reliability,
         "groups": [dataclasses.asdict(s) | {
             "success_rate": s.success_rate,
             "avg_iterations": s.avg_iterations,
             "avg_duration": s.avg_duration,
             "passed": s.passed,
+            "all_solved": s.passed and s.solved == s.attempts,
             "incomplete": s.incomplete,
             "tags": meta_of(s.task)["tags"],
             "level": meta_of(s.task)["level"],
