@@ -121,12 +121,16 @@ def test_serial_list_journals_and_formats(tmp_path, monkeypatch):
         vid = 0x86  # deliberately < 0x1000: the 4-hex-digit padding is pinned below
         pid = 0x23
         description = "USB-SERIAL CH340"
+        serial_number = None
+        location = "1-3"
 
     class FakePortNoId:
         device = "COM1"
         vid = None
         pid = None
         description = None
+        serial_number = None
+        location = None
 
     monkeypatch.setattr(lp, "comports", lambda: [FakePort(), FakePortNoId()])
     s = Session(tmp_path / "journal.jsonl", tmp_path / "sandbox", actor="test")
@@ -138,9 +142,18 @@ def test_serial_list_journals_and_formats(tmp_path, monkeypatch):
         "device": "COM6",
         "vid": "0086",
         "pid": "0023",
+        "serial_number": None,
+        "location": "1-3",
         "description": "USB-SERIAL CH340",
     }
-    assert ports[1] == {"device": "COM1", "vid": None, "pid": None, "description": None}
+    assert ports[1] == {
+        "device": "COM1",
+        "vid": None,
+        "pid": None,
+        "serial_number": None,
+        "location": None,
+        "description": None,
+    }
     listed = [e for e in read_events(tmp_path / "journal.jsonl") if e["kind"] == "serial_listed"]
     assert listed and listed[0]["count"] == 2
 

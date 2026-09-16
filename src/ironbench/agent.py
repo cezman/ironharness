@@ -209,6 +209,10 @@ def _first_prompt(task: Task) -> str:
             f"installer - you must implement any device protocol yourself. "
             f"Modules available on the device: {mods}."
         )
+    if task.api_hint:
+        # IH-70: known-good import lines from the golden solution - the model
+        # sees proven API usage, not just module names
+        base += f"\n\nKnown-good imports for this board:\n{task.api_hint}"
     if task.notes:
         # expert notes from the live bench (IH-21): part of the measured
         # prompt; the has-notes fact is recorded in results.jsonl so an A/B

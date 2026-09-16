@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -152,11 +153,12 @@ class Session:
 
     def serial_list(self) -> list[dict[str, Any]]:
         """Enumerates host serial ports with USB identity (device, vid, pid,
-        description) - the MCP-first replacement for out-of-band pyserial
-        diagnostics (IH-36): board COM numbers float across re-plugs, so
-        agents must re-enumerate before serial_open. No port is opened and
-        nothing is consumed (read-only over the host device table); the
-        enumeration is journaled like every operation."""
+        serial_number, location, description) - the MCP-first replacement
+        for out-of-band pyserial diagnostics (IH-36): board COM numbers
+        float across re-plugs, so agents must re-enumerate before
+        serial_open. No port is opened and nothing is consumed (read-only
+        over the host device table); the enumeration is journaled like
+        every operation."""
         self._check_open()
         self._check_kind("serial")
         ports = [
@@ -164,6 +166,8 @@ class Session:
                 "device": p.device,
                 "vid": f"{p.vid:04x}" if p.vid is not None else None,
                 "pid": f"{p.pid:04x}" if p.pid is not None else None,
+                "serial_number": p.serial_number or None,
+                "location": p.location or None,
                 "description": p.description,
             }
             for p in serial.tools.list_ports.comports()
@@ -171,9 +175,73 @@ class Session:
         self.journal("serial_listed", {"count": len(ports), "ports": ports})
         return ports
 
+    def status(self) -> dict[str, Any]:
+        """Session introspection (IH-70): what the agent can see about its
+        own state - open transports, background readers, in-flight
+        transfers, sandbox root. Lets the agent self-recover after context
+        loss instead of guessing connection names."""
+        with self._lock:
+            transports = {}
+            for name, kind in self._kinds.items():
+                info: dict[str, Any] = {"kind": kind}
+                if kind == "serial":
+                    base = self._serial_base.get(name)
+                    if base is not None:
+                        info["port"] = base._port
+                transports[name] = info
+            readers = {
+                name: {"buffered": r.stats()["buffered"], "alive": r.running}
+                for name, r in self._readers.items()
+            }
+        return {
+            "transports": transports,
+            "readers": readers,
+            "transfers": sorted(self._transfers),
+            "sandbox": str(self.sandbox.root),
+        }
+
+    def _resolve_by_serial(self, wanted: str) -> str:
+        """Находит текущий COM-порт по USB serial_number (IH-70). Если
+        ничего не найдено — ValueError с подсказкой вызвать serial_list."""
+        for p in serial.tools.list_ports.comports():
+            if p.serial_number and wanted in p.serial_number:
+                return p.device
+        raise ValueError(
+            f"no serial port with serial_number matching {wanted!r} — "
+            "call serial_list to enumerate"
+        )
+
+    def serial_wait(
+        self, vid: str, pid: str, *, timeout: float = 30.0
+    ) -> dict[str, Any]:
+        """IH-70: blocks until a serial port matching the given VID:PID
+        appears, then returns its device name. The board's COM number floats
+        across re-plugs - this tool waits for it to come back instead of
+        guessing. Returns {"device": ..., "serial_number": ...}."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            for p in serial.tools.list_ports.comports():
+                vid_s = f"{p.vid:04x}" if p.vid is not None else ""
+                pid_s = f"{p.pid:04x}" if p.pid is not None else ""
+                if vid_s == vid and pid_s == pid:
+                    self.journal(
+                        "serial_wait_matched",
+                        {"vid": vid, "pid": pid, "device": p.device},
+                    )
+                    return {"device": p.device, "serial_number": p.serial_number or ""}
+            time.sleep(0.5)
+        raise TimeoutError(
+            f"no serial port with VID={vid} PID={pid} appeared within {timeout}s"
+        )
+
     def serial_open(
         self, name: str, port: str, *, baudrate: int = 115200, timeout: float = 1.0
     ) -> None:
+        # IH-70: by-serial — агент привязывается к физической плате по
+        # USB serial_number, а не к плавающему номеру COM-порта
+        if port.startswith("by-serial:"):
+            wanted = port[len("by-serial:"):].strip()
+            port = self._resolve_by_serial(wanted)
         self._check_open()
         # check + open + insert under one lock: two parallel opens of one name
         # used to both pass the free-check, open two real ports and lose one of

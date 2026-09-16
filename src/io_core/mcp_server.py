@@ -111,10 +111,26 @@ def echo(text: str) -> str:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True))
 def serial_list() -> list[dict]:
-    """Lists host serial ports with USB identity: device, vid, pid, description.
+    """Lists host serial ports with USB identity: device, vid, pid, serial_number, location, description.
     Board COM numbers float across re-plugs - enumerate before serial_open.
     Nothing is opened or consumed."""
     return get_session().serial_list()
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True))
+def session_status() -> dict:
+    """Session introspection: open transports (name, kind, port), background
+    readers (buffered bytes, alive), in-flight transfers, sandbox root.
+    Call after context loss to self-recover instead of guessing."""
+    return get_session().status()
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True))
+def serial_wait(vid: str, pid: str, timeout: float = 30.0) -> dict:
+    """Blocks until a serial port matching the given VID:PID appears, then
+    returns {"device": ..., "serial_number": ...}. Use when the board's COM
+    number floats across re-plugs. Raises TimeoutError if nothing matches."""
+    return get_session().serial_wait(vid, pid, timeout=timeout)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
