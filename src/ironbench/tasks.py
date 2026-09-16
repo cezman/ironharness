@@ -118,6 +118,7 @@ class Task:
     # set) - surfaced into the solve prompt so agents do not assume a
     # pip-installable library ecosystem. Empty = not declared.
     device_modules: tuple[str, ...] = ()
+    api_hint: str = ""
 
 
 def load_task(task_dir: Path) -> Task:
@@ -452,6 +453,7 @@ def load_task(task_dir: Path) -> Task:
     # into the solve prompt: agents otherwise assume a pip-installable library
     # ecosystem that bare MicroPython does not have (the A/B 0/4 root cause).
     environment = raw.get("environment") or {}
+    api_hint = ""
     if environment and target in ("unix", "real", "wokwi", "renode"):
         device_modules = environment.get("device_modules") or []
         if not isinstance(device_modules, list) or not all(
@@ -463,6 +465,7 @@ def load_task(task_dir: Path) -> Task:
             )
         if len(set(device_modules)) != len(device_modules):
             raise ValueError(f"{task_file}: environment.device_modules contains duplicates")
+        api_hint = str(environment.get("api_hint") or "")
     # IH-24: a task must declare something to score - expect patterns, an
     # events section (unix only: the other runners ignore task.events, so an
     # events-only task there would pass ANY output - the same vacuous hole
@@ -500,6 +503,7 @@ def load_task(task_dir: Path) -> Task:
         level=level,
         notes=tuple(notes),
         device_modules=tuple(environment.get("device_modules") or []),
+        api_hint=api_hint,
     )
 
 
