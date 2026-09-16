@@ -471,7 +471,11 @@ def _run_renode(
         error_kind = common.ERROR_INFRA
     except TimeoutError as e:
         # IH-57: the paste deadline is a wall-clock timeout - TimeoutError is
-        # an OSError subclass, so catch it before the generic OSError handler
+        # an OSError subclass, so catch it before the generic OSError handler.
+        # Narrowed (IH-50 review): socket.timeout from a wedged link is also a
+        # TimeoutError, but renode's connects convert those to ConnectionError
+        # before this point (runner_renode.py:444-450), so only our own
+        # _send_chunked raise reaches here
         error = f"wall deadline exceeded: {e}"
         error_kind = common.ERROR_TIMEOUT
     except OSError as e:

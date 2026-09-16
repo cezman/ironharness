@@ -19,6 +19,7 @@ import dataclasses
 import io
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -364,7 +365,12 @@ def _push_to_wsl(blob: bytes, remote_dir: str, marker: str, *, clean: bool = Fal
     clean=True wipes the remote dir first - for per-run dirs whose stale
     files (e.g. a leftover machine.py from a removed `shim:`) must not leak
     into the next run. Never use it on shared directories."""
-    rm_part = f"rm -rf {remote_dir} && " if clean else ""
+    # IH-50 review nit: remote_dir and marker are shell-quoted - a path with
+    # spaces or shell metacharacters must not word-split into partial
+    # rm -rf targets
+    qd = shlex.quote(remote_dir)
+    qm = shlex.quote(marker)
+    rm_part = f"rm -rf {qd} && " if clean else ""
     try:
         proc = subprocess.run(
             [
@@ -374,7 +380,7 @@ def _push_to_wsl(blob: bytes, remote_dir: str, marker: str, *, clean: bool = Fal
                 "--",
                 "bash",
                 "-c",
-                f"{rm_part}mkdir -p {remote_dir} && tar -xzf - -C {remote_dir} && echo {marker}",
+                f"{rm_part}mkdir -p {qd} && tar -xzf - -C {qd} && echo {qm}",
             ],
             input=blob,
             capture_output=True,
