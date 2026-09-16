@@ -432,7 +432,7 @@ def test_push_to_wsl_clean_wipes_the_real_remote_dir(monkeypatch):
     monkeypatch.setattr(runner_common.subprocess, "run", fake_run)
     runner_common._push_to_wsl(b"blob", "$HOME/ironharness-runs/t-unix", "STAGE-PUSHED", clean=True)
     bash = seen["cmd"][-1]
-    assert "rm -rf $HOME/ironharness-runs/t-unix && " in bash, bash
+    assert "rm -rf '$HOME/ironharness-runs/t-unix' && " in bash, bash
     assert "{remote_dir}" not in bash, "uninterpolated placeholder reached the shell"
     # clean=False (default) must not remove anything
     runner_common._push_to_wsl(b"blob", "$HOME/ironharness-runs/t-unix", "STAGE-PUSHED")
