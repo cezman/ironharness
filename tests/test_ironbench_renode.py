@@ -543,3 +543,21 @@ def test_renode_retained_text_capped_across_wait_steps(tmp_path, monkeypatch):
     assert res.serial_log.stat().st_size <= MAX_SERIAL_TEXT + 262144, (
         f"serial log grew to {res.serial_log.stat().st_size} bytes - no aggregate cap"
     )
+
+
+def test_paste_echo_not_scored_as_firmware_output(tmp_path):
+    """IH-55 (P1): the renode runner pastes the entry source into the REPL,
+    and legacy paste echoes it back. A cheater embedding the expected
+    literal in an assignment (non-comment code that survives _paste_code)
+    used to PASS because the echo was scored as firmware output."""
+    task = make_renode_task(tmp_path, expect=("alpha bravo", "charlie delta", "bye now"))
+    (task.directory / "solution.py").write_text(
+        'cheat1 = "alpha bravo"\n'
+        'cheat2 = "charlie delta"\n'
+        'cheat3 = "bye now"\n'
+        'print("nothing useful")\n',
+        encoding="utf-8",
+    )
+    res = run_fake_renode(tmp_path, task, "echocheat")
+    assert not res.passed, "paste echo was scored as firmware output - false PASS"
+    assert res.missed == task.expect, f"got {res.missed}"
