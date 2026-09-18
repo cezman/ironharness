@@ -15,7 +15,7 @@ import pytest
 
 from io_core.errors import JournalCorrupt, QuotaExceeded, SandboxViolation
 from io_core.file_sandbox import FileSandbox
-from io_core.journal import JsonlJournal, read_events
+from io_core.journal import JsonlJournal, read_events, read_events_chain
 from io_core.replay import ReplayMismatch, ReplayTransport
 
 # --- journal: payload cannot shadow the service keys ---
@@ -89,6 +89,60 @@ def test_two_processes_do_not_lose_lines(tmp_path):
     for tag in ("a", "b"):
         got = [e for e in events if e["actor"] == tag]
         assert [e["n"] for e in got] == list(range(n))  # per-writer order kept
+
+
+WRITER_SCRIPT_ROTATION = """
+import sys
+import time
+from io_core.journal import JsonlJournal
+path, tag, n, max_bytes = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+# max_files high enough to retain every part: the test asserts no line is
+# lost, so rotation must never drop a part that still holds events
+with JsonlJournal(path, actor=tag, max_bytes=max_bytes, max_files=40) as j:
+    # overlap the writers: subprocess start jitter (~1 s of imports) usually
+    # exceeds the whole write window, and non-overlapping writers never hit
+    # the rotation-vs-open-handle collision this test exists for
+    time.sleep(0.5)
+    for i in range(n):
+        j("event", {"tag": tag, "n": i})
+"""
+
+
+def test_two_processes_survive_rotation(tmp_path):
+    # IH-72: rotation must be compatible with a second writer holding the
+    # journal open. With a persistent per-instance handle the replace() during
+    # rotation failed on Windows (PermissionError, WinError 32) while the
+    # other process had the file open; on POSIX the other writer's handle
+    # silently followed the rename and its events landed in the archived part.
+    import os
+
+    jpath = tmp_path / "shared.jsonl"
+    n, max_bytes = 80, 700
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
+    procs = [
+        subprocess.Popen(
+            [sys.executable, "-c", WRITER_SCRIPT_ROTATION, str(jpath), tag, str(n), str(max_bytes)],
+            cwd=str(Path(__file__).parents[1]),
+            env=env,
+        )
+        for tag in ("a", "b")
+    ]
+    for p in procs:
+        assert p.wait(timeout=120) == 0, f"writer {p.args[4]} crashed"
+    events = read_events_chain(jpath)
+    assert len(events) == 2 * n, f"lost lines: {2 * n - len(events)}"
+    for tag in ("a", "b"):
+        got = [e for e in events if e.get("actor") == tag]
+        assert [e["n"] for e in got] == list(range(n))  # per-writer order kept
+
+
+def test_closed_journal_rejects_writes(tmp_path):
+    # IH-72 kept the close contract: a closed journal must not accept writes
+    j = JsonlJournal(tmp_path / "j.jsonl", actor="t")
+    j("event", {"n": 1})
+    j.close()
+    with pytest.raises(ValueError):
+        j("event", {"n": 2})
 
 
 # --- journal: read_events rejects corrupt lines honestly ---

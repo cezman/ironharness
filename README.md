@@ -44,10 +44,10 @@ uv run ironharness-mcp               # MCP server (stdio; or: python -m io_core.
 
 Every operation is journaled to JSONL (`$IRONHARNESS_HOME/journal.jsonl`,
 default `~/.ironharness/`); file operations are confined by the sandbox
-(`$IRONHARNESS_SANDBOX`, default `~/.ironharness/sandbox`). One journal
-writer per file: concurrent threads of a session are safe, but two processes
-sharing one `IRONHARNESS_HOME` can silently drop lines (keep one agent per
-home directory).
+(`$IRONHARNESS_SANDBOX`, default `~/.ironharness/sandbox`). Concurrent
+writers are safe: threads of a session and separate processes sharing one
+`IRONHARNESS_HOME` are serialized by a sidecar lock, and size-based
+rotation (32 MB, keep 5 parts) is compatible with multiple writers.
 
 ## Connecting an external agent
 
