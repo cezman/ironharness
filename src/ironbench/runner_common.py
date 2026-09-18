@@ -46,7 +46,8 @@ FIRMWARE_DIR = Path(__file__).resolve().parent / "tasks" / "_firmware"
 # next to the entry when a task declares `shim: <name>` (see tasks.SHIM_NAMES)
 SHIMS_DIR = Path(__file__).resolve().parent / "shims"
 
-# Where the task stage lands in WSL2 (drvfs automount is disabled in the distro)
+# WSL $HOME probe results, cached per distro (drvfs automount is disabled in
+# the distro, so stages must live under the resolved absolute home)
 _WSL_HOME_CACHE: dict[str, str] = {}
 
 
@@ -55,7 +56,8 @@ def _wsl_home(distro: str | None = None) -> str:
     run must agree on ONE absolute path: _push_to_wsl shell-quotes its target
     and bash cannot expand $HOME inside single quotes - a literal "$HOME/..."
     root staged a directory named `$HOME` in the WSL cwd while the run side
-    expanded the same string (IH-71). Resolve first, quote after."""
+    expanded the same string (IH-71). Resolve first, quote after. Probe
+    failure raises ConnectionError: the runners classify it as infra."""
     distro = distro or _wsl_distro()
     if distro not in _WSL_HOME_CACHE:
         proc = subprocess.run(
@@ -67,7 +69,7 @@ def _wsl_home(distro: str | None = None) -> str:
         )
         home = proc.stdout.strip()
         if proc.returncode != 0 or not home:
-            raise RuntimeError(
+            raise ConnectionError(
                 f"cannot resolve $HOME in WSL distro {distro!r}: {proc.stderr.strip()}"
             )
         _WSL_HOME_CACHE[distro] = home

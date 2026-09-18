@@ -44,11 +44,12 @@ def generate_renode_resc(task: Task, port: int) -> str:
     """Renode script: platform from the Renode shipset, UART on a TCP terminal,
     firmware from __FIRMWARE__.
 
-    __FIRMWARE__ is substituted by sed inside WSL with the absolute stage path
-    (Python does not know the distro's $HOME); the @ path marker stays in the
-    template - sed used to swallow it together with the @FIRMWARE@ placeholder,
-    so the monitor got a path without @. The UART peripheral name comes from
-    the renode section.
+    __FIRMWARE__ is substituted by sed inside WSL at script runtime: $HOME
+    expands there, so the firmware path stays consistent with the push target
+    resolved by _wsl_home (the same default user must run both). The @ path
+    marker stays in the template - sed used to swallow it together with the
+    @FIRMWARE@ placeholder, so the monitor got a path without @. The UART
+    peripheral name comes from the renode section.
     """
     uart = task.renode.get("uart", "uart")
     return f""":name: ironbench {task.name}

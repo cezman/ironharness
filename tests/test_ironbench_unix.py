@@ -426,6 +426,22 @@ def test_wsl_staging_resolves_home_before_quoting(tmp_path, monkeypatch):
     assert "/home/tester/ironharness-runs" in popens[0][-1], popens[0][-1]
 
 
+def test_wsl_home_probe_failure_is_infra_not_crash(tmp_path, monkeypatch):
+    # IH-71 review: the $HOME probe failure raises ConnectionError, which the
+    # runners classify as infra (TaskResult) - the CLI must not crash with an
+    # uncaught exception when the distro is missing or broken.
+    task = make_unix_task(tmp_path)
+
+    def fake_run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=b"no such distro")
+
+    monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert not res.passed
+    assert res.error_kind == "infra"
+    assert res.error  # human-readable reason preserved
+
+
 def test_unix_cli_target_override(tmp_path):
     # --target unix overrides the target of a wokwi task: the dispatcher goes to unix
     from ironbench.tasks import load_tasks

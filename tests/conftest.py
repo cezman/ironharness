@@ -31,3 +31,15 @@ def _unix_wsl_ready() -> bool:
 @pytest.fixture(scope="session")
 def wsl_unix_ready() -> bool:
     return _unix_wsl_ready()
+
+
+@pytest.fixture(autouse=True)
+def _reset_wsl_home_cache():
+    """IH-71 review: the per-distro $HOME cache must not leak between tests -
+    a fake subprocess.run from an offline test would poison it with garbage
+    for later golden tests (stale-artifact class)."""
+    from ironbench import runner_common
+
+    runner_common._WSL_HOME_CACHE.clear()
+    yield
+    runner_common._WSL_HOME_CACHE.clear()

@@ -180,7 +180,7 @@ def _start_wsl_mqtt_broker(task: Task, port: int) -> tuple[subprocess.Popen, int
             "bash",
             "-c",
             (
-                f"python3 {remote_dir}/mqtt_sim.py --host 0.0.0.0 --port {port} & "
+                f"python3 {shlex.quote(remote_dir)}/mqtt_sim.py --host 0.0.0.0 --port {port} & "
                 'echo "BROKER_PID=$!"; wait $!'
             ),
         ],
