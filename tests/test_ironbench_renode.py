@@ -375,12 +375,17 @@ def test_renode_without_cmd_builds_wsl_pipeline(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
     monkeypatch.setattr(runner_module.subprocess, "Popen", fake_popen)
+    from ironbench import runner_common
+
+    monkeypatch.setattr(runner_common, "_wsl_home", lambda distro=None: "/home/tester")
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
     assert "not found" in (res.error or "")
     assert res.error_kind == "infra"  # IH-22 pin: FileNotFoundError branch
     assert len(runs) == 2  # firmware + stage
-    assert "ironharness-firmware" in runs[0][-1]
+    assert "/home/tester/ironharness-firmware" in runs[0][-1]
+    assert "/home/tester/ironharness-runs" in runs[1][-1]
+    assert "/home/tester/ironharness-runs" in popens[0][-1]
     assert "wsl-run.sh" in popens[0][-1]
     assert popens[0][:3] == ["wsl", "-d", "OpenClawGateway"]
 
@@ -401,9 +406,16 @@ def test_wsl_run_script_binds_firmware_from_home_store(tmp_path):
 
 
 def test_wsl_cmd_is_simple_pipeline():
-    cmd = runner_module._wsl_renode_cmd("$HOME/ironharness-runs/fake-rn")
+    cmd = runner_module._wsl_renode_cmd("/home/tester/ironharness-runs/fake-rn")
     assert cmd[:3] == ["wsl", "-d", "OpenClawGateway"]
-    assert cmd[-1] == "bash $HOME/ironharness-runs/fake-rn/wsl-run.sh"
+    assert cmd[-1] == "bash /home/tester/ironharness-runs/fake-rn/wsl-run.sh"
+
+
+def test_wsl_renode_cmd_quotes_metachars():
+    # IH-71 review: the run side must quote the stage dir too - a space or a
+    # shell metacharacter in the path must not word-split the command
+    cmd = runner_module._wsl_renode_cmd("/home/a b/dir")
+    assert cmd[-1] == "bash '/home/a b/dir'/wsl-run.sh"
 
 
 def test_push_firmware_sends_tar_with_marker(tmp_path, monkeypatch):
@@ -418,8 +430,11 @@ def test_push_firmware_sends_tar_with_marker(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, stdout=b"FW-PUSHED\n", stderr=b"")
 
     monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    from ironbench import runner_common
+
+    monkeypatch.setattr(runner_common, "_wsl_home", lambda distro=None: "/home/tester")
     runner_module._push_firmware(task)
-    assert "ironharness-firmware" in seen["cmd"][-1]
+    assert "/home/tester/ironharness-firmware" in seen["cmd"][-1]
     assert seen["input"][:2] == b"\x1f\x8b"  # the gzip magic of tar.gz
     with tarfile.open(fileobj=io.BytesIO(seen["input"])) as tar:
         assert tar.getnames() == ["fake.elf"]

@@ -46,8 +46,44 @@ FIRMWARE_DIR = Path(__file__).resolve().parent / "tasks" / "_firmware"
 # next to the entry when a task declares `shim: <name>` (see tasks.SHIM_NAMES)
 SHIMS_DIR = Path(__file__).resolve().parent / "shims"
 
-# Where the task stage lands in WSL2 (drvfs automount is disabled in the distro)
-RENODE_REMOTE_ROOT = "$HOME/ironharness-runs"
+# WSL $HOME probe results, cached per distro (drvfs automount is disabled in
+# the distro, so stages must live under the resolved absolute home)
+_WSL_HOME_CACHE: dict[str, str] = {}
+
+
+def _wsl_home(distro: str | None = None) -> str:
+    """Resolves $HOME inside the WSL distro (cached per distro). Staging and
+    run must agree on ONE absolute path: _push_to_wsl shell-quotes its target
+    and bash cannot expand $HOME inside single quotes - a literal "$HOME/..."
+    root staged a directory named `$HOME` in the WSL cwd while the run side
+    expanded the same string (IH-71). Resolve first, quote after. Probe
+    failure raises ConnectionError: the runners classify it as infra."""
+    distro = distro or _wsl_distro()
+    if distro not in _WSL_HOME_CACHE:
+        proc = subprocess.run(
+            ["wsl", "-d", distro, "--", "bash", "-c", 'printf %s "$HOME"'],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        home = proc.stdout.strip()
+        if proc.returncode != 0 or not home:
+            raise ConnectionError(
+                f"cannot resolve $HOME in WSL distro {distro!r}: {proc.stderr.strip()}"
+            )
+        _WSL_HOME_CACHE[distro] = home
+    return _WSL_HOME_CACHE[distro]
+
+
+def _remote_root() -> str:
+    """Absolute WSL root for staged run directories (was "$HOME/ironharness-runs")."""
+    return f"{_wsl_home()}/ironharness-runs"
+
+
+def _firmware_root() -> str:
+    """Absolute WSL root for the persistent firmware dir (was "$HOME/ironharness-firmware")."""
+    return f"{_wsl_home()}/ironharness-firmware"
 
 # error_kind values for TaskResult (structured classification, IH-15)
 ERROR_NONE = "none"

@@ -13,6 +13,7 @@ import itertools
 import os
 import random
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -138,7 +139,7 @@ def _unix_cmd(remote_entry: str, env_prefix: str = "") -> list[str]:
         "--",
         "bash",
         "-c",
-        f"{env_prefix}exec {upy_bin} {remote_entry}",
+        f"{env_prefix}exec {upy_bin} {shlex.quote(remote_entry)}",
     ]
 
 
@@ -168,7 +169,7 @@ def _start_wsl_mqtt_broker(task: Task, port: int) -> tuple[subprocess.Popen, int
     holding the port, see the zombie listener note in wsl-run.sh), so the
     broker prints its PID and cleanup finishes it with a kill by PID inside
     the distro."""
-    remote_dir = f"{common.RENODE_REMOTE_ROOT}/{task.name}-mqtt"
+    remote_dir = f"{common._remote_root()}/{task.name}-mqtt"
     common._push_to_wsl(common._tar_of(MQTT_SIM_PATH, "mqtt_sim.py"), remote_dir, "BROKER-PUSHED")
     proc = subprocess.Popen(
         [
@@ -179,7 +180,7 @@ def _start_wsl_mqtt_broker(task: Task, port: int) -> tuple[subprocess.Popen, int
             "bash",
             "-c",
             (
-                f"python3 {remote_dir}/mqtt_sim.py --host 0.0.0.0 --port {port} & "
+                f"python3 {shlex.quote(remote_dir)}/mqtt_sim.py --host 0.0.0.0 --port {port} & "
                 'echo "BROKER_PID=$!"; wait $!'
             ),
         ],
@@ -340,7 +341,7 @@ def _run_unix(
                         mqtt_client.subscribe(topic)
                         mqtt_subscribed.add(topic)
         if unix_cmd is None:
-            remote_dir = f"{common.RENODE_REMOTE_ROOT}/{task.name}-unix"
+            remote_dir = f"{common._remote_root()}/{task.name}-unix"
             if task.shim:
                 # entry + shim travel together: sys.path[0] is the script dir,
                 # so machine.py next to the entry resolves `import machine`;
