@@ -16,6 +16,7 @@ from io_core import (
     SandboxViolation,
     SerialTransport,
     Session,
+    TransportClosedError,
     read_events,
 )
 from io_core.limits import parse_transport_deadline, parse_transport_rate
@@ -449,8 +450,6 @@ def test_serial_wait_refuses_closed_session(tmp_path):
     # IH-73: serial_wait polled the host ports even on a closed session and
     # ended in TimeoutError - the gate must refuse immediately, like the
     # other serial tools
-    from io_core.errors import TransportClosedError
-
     s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
     s.close()
     start = time.monotonic()
@@ -486,6 +485,17 @@ def test_serial_wait_timeout_is_journaled(tmp_path):
         assert "serial_wait_timeout" in kinds
     finally:
         s.close()
+
+
+def test_serial_open_by_serial_resolves_after_gates(tmp_path):
+    # IH-73 class fix (review): the by-serial: resolution enumerates the host
+    # port table and must not run past the lifecycle gate - on a closed
+    # session it used to raise ValueError from the resolver instead of the
+    # typed closed-session error
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    s.close()
+    with pytest.raises(TransportClosedError):
+        s.serial_open("s", "by-serial:no-such-serial")
 
 
 def test_transport_tools_without_conn_declare_lifecycle_gate():
