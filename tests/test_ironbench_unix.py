@@ -442,6 +442,35 @@ def test_wsl_home_probe_failure_is_infra_not_crash(tmp_path, monkeypatch):
     assert res.error  # human-readable reason preserved
 
 
+def test_mqtt_broker_cmd_quotes_remote_dir(tmp_path, monkeypatch):
+    # IH-71 review: the broker command must quote the remote dir - a space or
+    # a shell metacharacter in the task name must not word-split the command
+    import dataclasses
+
+    from ironbench import runner_common
+
+    task = dataclasses.replace(make_unix_task(tmp_path), name="fake unix")
+    bash_cmds, popen_cmds = [], []
+
+    def fake_run(cmd, **kw):
+        bash_cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"BROKER-PUSHED\n", stderr=b"")
+
+    def fake_popen(cmd, **kw):
+        popen_cmds.append(cmd)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(runner_common, "_wsl_home", lambda distro=None: "/home/tester")
+    monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner_module.subprocess, "Popen", fake_popen)
+    with pytest.raises(RuntimeError):
+        runner_module._start_wsl_mqtt_broker(task, 1883)
+    assert (
+        "python3 '/home/tester/ironharness-runs/fake unix-mqtt'/mqtt_sim.py"
+        in popen_cmds[0][-1]
+    ), popen_cmds[0][-1]
+
+
 def test_unix_cli_target_override(tmp_path):
     # --target unix overrides the target of a wokwi task: the dispatcher goes to unix
     from ironbench.tasks import load_tasks
