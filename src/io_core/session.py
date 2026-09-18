@@ -217,7 +217,11 @@ class Session:
         """IH-70: blocks until a serial port matching the given VID:PID
         appears, then returns its device name. The board's COM number floats
         across re-plugs - this tool waits for it to come back instead of
-        guessing. Returns {"device": ..., "serial_number": ...}."""
+        guessing. Returns {"device": ..., "serial_number": ...}.
+        IH-73: gated by the session lifecycle and the serial kind policy,
+        like every other serial tool; the timeout is journaled."""
+        self._check_open()
+        self._check_kind("serial")
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             for p in serial.tools.list_ports.comports():
@@ -230,6 +234,9 @@ class Session:
                     )
                     return {"device": p.device, "serial_number": p.serial_number or ""}
             time.sleep(0.5)
+        self.journal(
+            "serial_wait_timeout", {"vid": vid, "pid": pid, "timeout": timeout}
+        )
         raise TimeoutError(
             f"no serial port with VID={vid} PID={pid} appeared within {timeout}s"
         )
