@@ -93,11 +93,16 @@ def test_two_processes_do_not_lose_lines(tmp_path):
 
 WRITER_SCRIPT_ROTATION = """
 import sys
+import time
 from io_core.journal import JsonlJournal
 path, tag, n, max_bytes = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
 # max_files high enough to retain every part: the test asserts no line is
 # lost, so rotation must never drop a part that still holds events
 with JsonlJournal(path, actor=tag, max_bytes=max_bytes, max_files=40) as j:
+    # overlap the writers: subprocess start jitter (~1 s of imports) usually
+    # exceeds the whole write window, and non-overlapping writers never hit
+    # the rotation-vs-open-handle collision this test exists for
+    time.sleep(0.5)
     for i in range(n):
         j("event", {"tag": tag, "n": i})
 """
@@ -123,7 +128,7 @@ def test_two_processes_survive_rotation(tmp_path):
         for tag in ("a", "b")
     ]
     for p in procs:
-        assert p.wait(timeout=120) == 0, f"writer {p.args[2]} crashed"
+        assert p.wait(timeout=120) == 0, f"writer {p.args[4]} crashed"
     events = read_events_chain(jpath)
     assert len(events) == 2 * n, f"lost lines: {2 * n - len(events)}"
     for tag in ("a", "b"):

@@ -94,12 +94,18 @@ class JsonlJournal:
         self._max_files = max_files
         self._closed = False
         # Early probe: fail here on a read-only volume etc., not on the first
-        # event. No handle is kept between writes (IH-72): a persistent handle
-        # made rotation incompatible with a second writer (Windows: replace()
-        # hit the other writer's open handle -> WinError 32; POSIX: the other
-        # writer's handle silently followed the rename into the archived part).
-        with self._path.open("a", encoding="utf-8"):
-            pass
+        # event. Under the sidecar lock: a concurrent rotation must not hit
+        # this transient handle (same WinError-32 class as IH-72). No handle
+        # is kept between writes: a persistent handle made rotation
+        # incompatible with a second writer (Windows: replace() hit the other
+        # writer's open handle -> WinError 32; POSIX: the other writer's
+        # handle silently followed the rename into the archived part).
+        lock_fh = _acquire_lock_file(self._lock_path)
+        try:
+            with self._path.open("a", encoding="utf-8"):
+                pass
+        finally:
+            _release_lock_file(lock_fh)
 
     def __call__(self, kind: str, data: dict[str, Any]) -> None:
         with self._lock:
@@ -145,7 +151,8 @@ class JsonlJournal:
 
     def _rotate_if_full(self) -> None:
         """IH-63: если текущий журнал превысил max_bytes — сдвинуть части
-        (.1 -> .2, ...) и открыть свежий файл. Числовые части старше
+        (.1 -> .2, ...): живой файл уходит в .1, а свежий живой файл создаёт
+        следующая запись (per-write open, IH-72). Числовые части старше
         max_files удаляются. Called under the journal lock before each write."""
         try:
             size = self._path.stat().st_size
