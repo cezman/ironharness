@@ -16,6 +16,7 @@ from io_core import (
     SandboxViolation,
     SerialTransport,
     Session,
+    TransportClosedError,
     read_events,
 )
 from io_core.limits import parse_transport_deadline, parse_transport_rate
@@ -440,3 +441,78 @@ def test_parse_transport_deadline_and_rate():
         parse_transport_rate("0/60")
     with pytest.raises(ValueError):
         parse_transport_rate("1/inf")
+
+
+# --- IH-73: serial_wait obeys the session lifecycle and the kind policy ---
+
+
+def test_serial_wait_refuses_closed_session(tmp_path):
+    # IH-73: serial_wait polled the host ports even on a closed session and
+    # ended in TimeoutError - the gate must refuse immediately, like the
+    # other serial tools
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    s.close()
+    start = time.monotonic()
+    with pytest.raises(TransportClosedError):
+        # an address that never matches a real host port, so the test does
+        # not depend on what is plugged into the machine
+        s.serial_wait("ffff", "ffff", timeout=30)
+    assert time.monotonic() - start < 5  # refused, not polled to the timeout
+
+
+def test_serial_wait_respects_enabled_kinds(tmp_path, monkeypatch):
+    # IH-73: with the serial kind disabled by policy, serial_wait must not
+    # enumerate ports - the policy violation is journaled like everywhere
+    monkeypatch.setenv("IRONHARNESS_ENABLED_KINDS", "modbus")
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    try:
+        with pytest.raises(PolicyViolation):
+            s.serial_wait("1a86", "7523", timeout=1)
+        kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+        assert "policy_violation" in kinds
+    finally:
+        s.close()
+
+
+def test_serial_wait_timeout_is_journaled(tmp_path):
+    # IH-51 convention: an outcome that surfaces to the agent as an error
+    # is journaled - the timeout of an unsuccessful wait was silent
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    try:
+        with pytest.raises(TimeoutError):
+            s.serial_wait("ffff", "ffff", timeout=0.6)
+        kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+        assert "serial_wait_timeout" in kinds
+    finally:
+        s.close()
+
+
+def test_serial_open_by_serial_resolves_after_gates(tmp_path):
+    # IH-73 class fix (review): the by-serial: resolution enumerates the host
+    # port table and must not run past the lifecycle gate - on a closed
+    # session it used to raise ValueError from the resolver instead of the
+    # typed closed-session error
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    s.close()
+    with pytest.raises(TransportClosedError):
+        s.serial_open("s", "by-serial:no-such-serial")
+
+
+def test_transport_tools_without_conn_declare_lifecycle_gate():
+    # IH-73 class sweep: the tools that operate without a transport name
+    # (pure host enumeration) must still check the session lifecycle at
+    # entry; status/close are deliberate exemptions (recovery/teardown).
+    # Tools taking a conn name go through _get() - their closed-session
+    # behavior is the registry KeyError, a separate (pre-existing) class.
+    import inspect
+
+    gated = ["serial_list", "serial_wait"]
+    missing = [
+        name
+        for name in gated
+        if "_check_open()" not in inspect.getsource(getattr(Session, name))
+    ]
+    assert not missing, f"transport tools without _check_open(): {missing}"
+    # both enumeration paths declare the serial kind policy
+    assert '_check_kind("serial")' in inspect.getsource(Session.serial_list)
+    assert '_check_kind("serial")' in inspect.getsource(Session.serial_wait)

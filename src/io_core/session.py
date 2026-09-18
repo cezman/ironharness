@@ -217,7 +217,11 @@ class Session:
         """IH-70: blocks until a serial port matching the given VID:PID
         appears, then returns its device name. The board's COM number floats
         across re-plugs - this tool waits for it to come back instead of
-        guessing. Returns {"device": ..., "serial_number": ...}."""
+        guessing. Returns {"device": ..., "serial_number": ...}.
+        IH-73: gated by the session lifecycle and the serial kind policy,
+        like every other serial tool; the timeout is journaled."""
+        self._check_open()
+        self._check_kind("serial")
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             for p in serial.tools.list_ports.comports():
@@ -230,6 +234,9 @@ class Session:
                     )
                     return {"device": p.device, "serial_number": p.serial_number or ""}
             time.sleep(0.5)
+        self.journal(
+            "serial_wait_timeout", {"vid": vid, "pid": pid, "timeout": timeout}
+        )
         raise TimeoutError(
             f"no serial port with VID={vid} PID={pid} appeared within {timeout}s"
         )
@@ -237,17 +244,19 @@ class Session:
     def serial_open(
         self, name: str, port: str, *, baudrate: int = 115200, timeout: float = 1.0
     ) -> None:
+        # IH-73: the gates precede the by-serial: resolution - it enumerates
+        # the host port table and must not run past the lifecycle/kind policy
+        self._check_open()
+        self._check_kind("serial")
         # IH-70: by-serial — агент привязывается к физической плате по
         # USB serial_number, а не к плавающему номеру COM-порта
         if port.startswith("by-serial:"):
             wanted = port[len("by-serial:"):].strip()
             port = self._resolve_by_serial(wanted)
-        self._check_open()
         # check + open + insert under one lock: two parallel opens of one name
         # used to both pass the free-check, open two real ports and lose one of
         # them (it stayed open past session.close() - a leaked COM port)
         with self._lock:
-            self._check_kind("serial")
             self._check_free(name)
             self._check_connection_limit()
             raw = SerialTransport(port, baudrate=baudrate, timeout=timeout,
