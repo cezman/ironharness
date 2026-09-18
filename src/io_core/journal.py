@@ -21,7 +21,6 @@ journal_key_conflict, а не молча ломают реплеер/вьюер 
 from __future__ import annotations
 
 import json
-import os
 import sys
 import threading
 import time
@@ -93,10 +92,21 @@ class JsonlJournal:
         # из архивных), сверх max_files — самые старые удаляются.
         self._max_bytes = max_bytes
         self._max_files = max_files
-        self._fh = self._path.open("a", encoding="utf-8")
+        self._closed = False
+        # Early probe: fail here on a read-only volume etc., not on the first
+        # event. No handle is kept between writes (IH-72): a persistent handle
+        # made rotation incompatible with a second writer (Windows: replace()
+        # hit the other writer's open handle -> WinError 32; POSIX: the other
+        # writer's handle silently followed the rename into the archived part).
+        with self._path.open("a", encoding="utf-8"):
+            pass
 
     def __call__(self, kind: str, data: dict[str, Any]) -> None:
         with self._lock:
+            if self._closed:
+                # session-close contract (IH-13): a closed session must not
+                # journal - writes after close() fail loudly, not silently
+                raise ValueError(f"journal {self._path} is closed")
             self._seq += 1
             rec: Event = {
                 "ts": round(time.time(), 3),
@@ -120,13 +130,15 @@ class JsonlJournal:
                     ensure_ascii=False,
                 ) + "\n"
             # both lines go out under ONE sidecar lock: a second process
-            # cannot interleave its append between ours
+            # cannot interleave its append between ours. The file is opened
+            # per write under that lock and never held between writes (IH-72):
+            # a persistent handle broke rotation against a second writer.
             lock_fh = _acquire_lock_file(self._lock_path)
             try:
                 self._rotate_if_full()
-                self._fh.seek(0, os.SEEK_END)
-                self._fh.write(line)
-                self._fh.flush()
+                with self._path.open("a", encoding="utf-8") as fh:
+                    fh.write(line)
+                    fh.flush()
                 self._seq += 1 if conflicts else 0
             finally:
                 _release_lock_file(lock_fh)
@@ -136,12 +148,11 @@ class JsonlJournal:
         (.1 -> .2, ...) и открыть свежий файл. Числовые части старше
         max_files удаляются. Called under the journal lock before each write."""
         try:
-            size = self._fh.tell()
+            size = self._path.stat().st_size
         except OSError:
-            size = self._path.stat().st_size if self._path.exists() else 0
+            return
         if size < self._max_bytes:
             return
-        self._fh.close()
         oldest = self._path.with_name(f"{self._path.name}.{self._max_files}")
         if oldest.exists():
             oldest.unlink()
@@ -150,11 +161,12 @@ class JsonlJournal:
             if src.exists():
                 src.replace(self._path.with_name(f"{self._path.name}.{i + 1}"))
         self._path.replace(self._path.with_name(f"{self._path.name}.1"))
-        self._fh = self._path.open("a", encoding="utf-8")
 
     def close(self) -> None:
-        with self._lock:  # колбэк из сетевого потока не должен писать в закрытый файл
-            self._fh.close()
+        """Rejects further writes (the session-close contract). No handle is
+        held between writes since IH-72 - close() only flips the flag."""
+        with self._lock:
+            self._closed = True
 
     def __enter__(self) -> Self:
         return self
