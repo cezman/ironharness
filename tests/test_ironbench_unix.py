@@ -387,13 +387,43 @@ def test_unix_without_cmd_pushes_entry_and_runs_wsl(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
     monkeypatch.setattr(runner_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(runner_common, "_wsl_home", lambda distro=None: "/home/tester")
     res = run_task(task, out_dir=tmp_path / "out")
     assert not res.passed
     assert "not found" in (res.error or "")
-    assert len(runs) == 1 and "ironharness-runs" in runs[0][-1]
+    assert len(runs) == 1 and "/home/tester/ironharness-runs" in runs[0][-1]
     assert popens[0][:3] == ["wsl", "-d", "OpenClawGateway"]
     assert "~/bin/micropython" in popens[0][-1]
     assert popens[0][-1].startswith("exec ")  # micropython replaces bash
+
+
+def test_wsl_staging_resolves_home_before_quoting(tmp_path, monkeypatch):
+    # IH-71: shlex.quote froze the literal $HOME on the staging side while the
+    # run side (unquoted) expanded it - staging and run disagreed on the
+    # directory. The root must be resolved to an absolute path BEFORE quoting.
+    task = make_unix_task(tmp_path)
+    bash_cmds, popens = [], []
+
+    def fake_run(cmd, **kw):
+        bash_cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"STAGE-PUSHED\n", stderr=b"")
+
+    def fake_popen(cmd, **kw):
+        popens.append(cmd)
+        raise FileNotFoundError("micropython")
+
+    monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        runner_common, "_wsl_home", lambda distro=None: "/home/tester", raising=False
+    )
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert not res.passed
+    # bash cannot expand $HOME inside single quotes: a literal $HOME in the
+    # staging command builds a directory named `$HOME` in the WSL cwd
+    assert "$HOME" not in bash_cmds[0][-1], bash_cmds[0][-1]
+    assert "/home/tester/ironharness-runs" in bash_cmds[0][-1], bash_cmds[0][-1]
+    assert "/home/tester/ironharness-runs" in popens[0][-1], popens[0][-1]
 
 
 def test_unix_cli_target_override(tmp_path):

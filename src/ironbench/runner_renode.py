@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io
 import os
+import shlex
 import shutil
 import socket
 import subprocess
@@ -108,8 +109,8 @@ sleep infinity | {renode_bin} --disable-xwt --console renode.resc > run.log 2>&1
 
 
 def _push_firmware(task: Task) -> None:
-    """Pushes the firmware into the persistent WSL directory
-    ~/ironharness-firmware, where wsl-run.sh reads it (sed substitutes the path
+    """Pushes the firmware into the persistent WSL firmware root (resolved
+    absolute $HOME), where wsl-run.sh reads it (sed substitutes the path
     into the .resc)."""
     firmware = task.renode["firmware"]
     src = task.directory / firmware
@@ -117,7 +118,7 @@ def _push_firmware(task: Task) -> None:
         src = common.FIRMWARE_DIR / firmware
     if not src.is_file():
         raise ValueError(f"firmware {firmware!r} not found in the task directory or in tasks/_firmware/")
-    common._push_to_wsl(common._tar_of(src, src.name), "$HOME/ironharness-firmware", "FW-PUSHED")
+    common._push_to_wsl(common._tar_of(src, src.name), common._firmware_root(), "FW-PUSHED")
 
 
 def _wsl_renode_cmd(remote_dir: str) -> list[str]:
@@ -129,7 +130,7 @@ def _wsl_renode_cmd(remote_dir: str) -> list[str]:
         "--",
         "bash",
         "-c",
-        f"bash {remote_dir}/wsl-run.sh",
+        f"bash {shlex.quote(remote_dir)}/wsl-run.sh",
     ]
 
 
@@ -420,9 +421,9 @@ def _run_renode(
         if renode_cmd is None:
             _push_firmware(task)
             common._push_to_wsl(
-                _tar_of_files(stage), f"{common.RENODE_REMOTE_ROOT}/{task.name}", "STAGE-PUSHED"
+                _tar_of_files(stage), f"{common._remote_root()}/{task.name}", "STAGE-PUSHED"
             )
-            cmd = _wsl_renode_cmd(f"{common.RENODE_REMOTE_ROOT}/{task.name}")
+            cmd = _wsl_renode_cmd(f"{common._remote_root()}/{task.name}")
         else:
             cmd = [renode_cmd] if isinstance(renode_cmd, str) else list(renode_cmd)
         if journal:

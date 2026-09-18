@@ -401,9 +401,9 @@ def test_wsl_run_script_binds_firmware_from_home_store(tmp_path):
 
 
 def test_wsl_cmd_is_simple_pipeline():
-    cmd = runner_module._wsl_renode_cmd("$HOME/ironharness-runs/fake-rn")
+    cmd = runner_module._wsl_renode_cmd("/home/tester/ironharness-runs/fake-rn")
     assert cmd[:3] == ["wsl", "-d", "OpenClawGateway"]
-    assert cmd[-1] == "bash $HOME/ironharness-runs/fake-rn/wsl-run.sh"
+    assert cmd[-1] == "bash /home/tester/ironharness-runs/fake-rn/wsl-run.sh"
 
 
 def test_push_firmware_sends_tar_with_marker(tmp_path, monkeypatch):
@@ -418,8 +418,11 @@ def test_push_firmware_sends_tar_with_marker(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, stdout=b"FW-PUSHED\n", stderr=b"")
 
     monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    from ironbench import runner_common
+
+    monkeypatch.setattr(runner_common, "_wsl_home", lambda distro=None: "/home/tester")
     runner_module._push_firmware(task)
-    assert "ironharness-firmware" in seen["cmd"][-1]
+    assert "/home/tester/ironharness-firmware" in seen["cmd"][-1]
     assert seen["input"][:2] == b"\x1f\x8b"  # the gzip magic of tar.gz
     with tarfile.open(fileobj=io.BytesIO(seen["input"])) as tar:
         assert tar.getnames() == ["fake.elf"]
