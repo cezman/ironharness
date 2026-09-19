@@ -1,7 +1,8 @@
 """Тесты MCP-сервера: инструменты регистрируются и работают через Session.
 
-Инструменты вызываем напрямую (декоратор tool() возвращает исходную функцию)
-— транспорт stdio проверяется вручную после перезапуска сессии агента.
+Инструменты вызываем напрямую; декоратор tool() возвращает обёртку,
+переводящую доменные ошибки в ToolError (IH-76) — поэтому ожидаем ToolError
+с доменной причиной. Транспорт stdio проверяется в test_mcp_stdio.py (IH-30).
 """
 
 import asyncio
@@ -67,17 +68,72 @@ def test_file_tools_roundtrip(mcp_env):
 
 
 def test_file_escape_blocked(mcp_env):
-    with pytest.raises(SandboxViolation):
+    # IH-76: tool functions surface domain errors as ToolError with the
+    # domain error as __cause__ (the text is what the agent reads)
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    with pytest.raises(ToolError) as exc_info:
         file_write("../evil.txt", "no")
+    assert isinstance(exc_info.value.__cause__, SandboxViolation)
 
 
 def test_serial_tools_roundtrip(mcp_env):
+    from mcp.server.mcpserver.exceptions import ToolError
+
     serial_open("s", "loop://", timeout=0.5)
     serial_write("s", "deadbeef")
     assert serial_read("s", 4) == "deadbeef"
     assert serial_close("s") == "ok: serial 's' closed"
-    with pytest.raises(KeyError):
+    with pytest.raises(ToolError) as exc_info:
         serial_write("s", "00")
+    assert isinstance(exc_info.value.__cause__, KeyError)
+
+
+def test_serial_write_io_error_maps_to_tool_error(mcp_env, monkeypatch):
+    # IH-76 review: TransportIoError (port gone mid-write) is an operational
+    # event with a hint text - mapped, not a crash
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from io_core.errors import TransportIoError
+
+    serial_open("s", "loop://", timeout=0.5)
+
+    def boom(*args, **kwargs):
+        raise TransportIoError("port went away mid-write")
+
+    monkeypatch.setattr("io_core.session.Session.serial_write", boom)
+    with pytest.raises(ToolError) as exc_info:
+        serial_write("s", "deadbeef")
+    assert isinstance(exc_info.value.__cause__, TransportIoError)
+    assert "port went away" in str(exc_info.value)
+
+
+def test_domain_errors_wrapper_passes_unmapped_through():
+    # IH-76 review: the dichotomy is pinned - an unmapped exception is a bug
+    # and keeps the SDK crash path (no ToolError conversion)
+    from io_core.mcp_server import _domain_errors
+
+    @_domain_errors
+    def boom():
+        raise RuntimeError("a bug, not a hint")
+
+    with pytest.raises(RuntimeError):
+        boom()
+
+
+def test_domain_errors_wrapper_supports_async():
+    # IH-76 review: the async branch is a guard for future async tools
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from io_core.mcp_server import _domain_errors
+
+    @_domain_errors
+    async def aboom():
+        raise ValueError("validation hint")
+
+    with pytest.raises(ToolError) as exc_info:
+        asyncio.run(aboom())
+    assert "ValueError" in str(exc_info.value)
 
 
 def test_modbus_tools_roundtrip(mcp_env):
