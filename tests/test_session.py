@@ -565,6 +565,67 @@ def test_serial_wait_vidpid_case_insensitive(tmp_path, monkeypatch):
         s.close()
 
 
+def test_open_timeout_bounds_gated_and_journaled(tmp_path):
+    # IH-78 review: the open-timeout class parks workers on a silent host -
+    # each refusal is journaled (no log = didn't happen)
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        with pytest.raises(ValueError):
+            s.serial_open("s", "loop://", timeout=0)
+        with pytest.raises(ValueError):
+            s.modbus_open("m", "127.0.0.1", timeout=0)
+        with pytest.raises(ValueError):
+            s.mqtt_open("q", "127.0.0.1", timeout=0)
+        kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+        for kind in ("serial_open_refused", "modbus_open_refused", "mqtt_open_refused"):
+            assert kind in kinds
+    finally:
+        s.close()
+
+
+def test_serial_reader_start_max_bytes_gated(tmp_path):
+    # IH-78 review: the reader buffer growth cap is gated at the session
+    # level; the lower bound matches the reader's own chunk minimum (512)
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        for bad in (0, 17_000_000):
+            with pytest.raises(ValueError):
+                s.serial_reader_start("s", max_bytes=bad)
+        kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+        assert kinds.count("reader_start_refused") == 2
+    finally:
+        s.close()
+
+
+def test_arg_bound_refusals_are_journaled(tmp_path):
+    # IH-78 review: every bound refusal leaves a JSONL trace with a reason
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        bad_calls = [
+            (s.serial_read, {"size": 10**9}),
+            (s.serial_read_line, {"max_len": 0}),
+            (s.serial_tail, {"size": 0}),
+            (s.serial_read_until, {"pattern": "x", "timeout": 0}),
+            (s.mqtt_read, {"timeout": 0}),
+            (s.serial_wait, {"pid": "ffff", "timeout": 0}),
+        ]
+        for fn, kwargs in bad_calls:
+            with pytest.raises(ValueError):
+                fn("x", **kwargs)
+        kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+        for kind in (
+            "read_refused",
+            "read_line_refused",
+            "tail_refused",
+            "read_until_refused",
+            "mqtt_read_refused",
+            "wait_refused",
+        ):
+            assert kind in kinds, kind
+    finally:
+        s.close()
+
+
 # --- IH-77: esp_image_info is gated by the sandbox / the real-flash opt-in ---
 
 

@@ -263,7 +263,7 @@ class Session:
         if not 0 < timeout <= 600:
             self.journal(
                 "serial_open_refused",
-                {"name": name, "port": port, "reason": f"timeout {timeout} out of (0, 600]"},
+                {"conn": name, "port": port, "reason": f"timeout {timeout} out of (0, 600]"},
             )
             raise ValueError(
                 f"serial_open timeout must be in (0, 600] seconds, got {timeout}"
@@ -529,13 +529,13 @@ class Session:
         operations is not lost. The reader owns the read side: serial_read/
         serial_read_line refuse while it runs (serial_write is serialized
         against it - CH340 single-threaded link)."""
-        if not 1 <= max_bytes <= 16_777_216:
+        if not 512 <= max_bytes <= 16_777_216:
             self.journal(
                 "reader_start_refused",
-                {"conn": name, "reason": f"max_bytes {max_bytes} out of [1, 16777216]"},
+                {"conn": name, "reason": f"max_bytes {max_bytes} out of [512, 16777216]"},
             )
             raise ValueError(
-                f"serial_reader_start max_bytes must be in [1, 16777216] bytes, got {max_bytes}"
+                f"serial_reader_start max_bytes must be in [512, 16777216] bytes, got {max_bytes}"
             )
         with self._lock:
             base = self._serial_base.get(name)
@@ -652,7 +652,7 @@ class Session:
         if not 0 < timeout <= 600:
             self.journal(
                 "modbus_open_refused",
-                {"name": name, "host": host, "reason": f"timeout {timeout} out of (0, 600]"},
+                {"conn": name, "host": host, "reason": f"timeout {timeout} out of (0, 600]"},
             )
             raise ValueError(
                 f"modbus_open timeout must be in (0, 600] seconds, got {timeout}"
@@ -701,7 +701,7 @@ class Session:
         if not 0 < timeout <= 600:
             self.journal(
                 "mqtt_open_refused",
-                {"name": name, "host": host, "reason": f"timeout {timeout} out of (0, 600]"},
+                {"conn": name, "host": host, "reason": f"timeout {timeout} out of (0, 600]"},
             )
             raise ValueError(
                 f"mqtt_open timeout must be in (0, 600] seconds, got {timeout}"
