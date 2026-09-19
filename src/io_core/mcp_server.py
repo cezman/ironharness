@@ -53,8 +53,10 @@ from io_core.errors import (
     OperationTimeout,
     PolicyViolation,
     QuotaExceeded,
+    RateLimitExceeded,
     SandboxViolation,
     TransportClosedError,
+    TransportIoError,
 )
 from io_core.session import Session
 
@@ -66,19 +68,25 @@ mcp = MCPServer("ironharness")
 # function; anything else becomes a generic "Error executing tool <name>".
 # Registration therefore wraps every tool: known domain/validation errors
 # re-raise as ToolError with their text; anything else keeps the SDK crash
-# path with traceback logging - those are bugs, not hints.
+# path with traceback logging - those are bugs, not hints. OSError is mapped
+# deliberately (IH-76 review): its family (FileNotFoundError, ConnectionError,
+# TimeoutError, TransportIoError, pyserial SerialException) are operational
+# hardware events with hint texts, not bugs.
 _DOMAIN_ERRORS = (
-    ConnectionError,
-    FileNotFoundError,
     KeyError,
     JournalCorrupt,
     OperationTimeout,
     PolicyViolation,
     QuotaExceeded,
+    RateLimitExceeded,
     SandboxViolation,
-    TimeoutError,
     TransportClosedError,
+    TransportIoError,
     ValueError,
+    # OSError last-of-family: FileNotFoundError, ConnectionError, TimeoutError,
+    # TransportIoError and pyserial SerialException are operational hardware
+    # events with hint texts, not bugs - the agent must see them
+    OSError,
 )
 
 

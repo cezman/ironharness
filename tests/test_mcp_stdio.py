@@ -396,3 +396,39 @@ def test_wire_domain_errors_carry_the_hint(server):
     assert res["result"]["isError"] is True
     text = res["result"]["content"][0]["text"]
     assert "ValueError" in text, text  # the whitelist refusal travels with the error
+
+
+def test_wire_rate_limit_error_carries_hint(tmp_path, monkeypatch):
+    # IH-76 review: RateLimitExceeded is an anticipated domain error - the
+    # agent must see the limit text, not an anonymous crash
+    monkeypatch.setenv("IRONHARNESS_TRANSPORT_RATE", "2/60")
+    proc = spawn_server(tmp_path)
+    try:
+        client = WireClient(proc)
+        initialize(client)
+        client.notify({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+        def call(id_, name, args):
+            return client.request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": id_,
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": args},
+                }
+            )
+
+        call(30, "serial_open", {"name": "s", "port": "loop://", "timeout": 0.5})
+        assert call(31, "serial_write", {"name": "s", "data_hex": "01"})["result"]["content"][0][
+            "text"
+        ]
+        assert call(32, "serial_write", {"name": "s", "data_hex": "02"})["result"]["content"][0][
+            "text"
+        ]
+        res = call(33, "serial_write", {"name": "s", "data_hex": "03"})
+        assert res["result"]["isError"] is True
+        text = res["result"]["content"][0]["text"]
+        assert "RateLimitExceeded" in text, text
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
