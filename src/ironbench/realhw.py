@@ -165,36 +165,44 @@ class RealRepl:
     def _backup_main(self, backup_dir) -> str:
         """IH-79: main.py принадлежит пользователю — перед сносом содержимое
         уходит в run-артефакты (main.py.backup). Читаем через cooked REPL в
-        hex (binascii) — cooked-режим ест UTF-8, hex безопасен. Статус:
-        saved / absent / unknown."""
+        hex (binascii) — cooked-режим ест UTF-8, hex безопасен.
+
+        Литералы маркеров разрезаны в исходнике пробы ('IH-BACK' + 'UP'):
+        cooked-REPL эхолит каждый принятый байт, и неразрезанный литерал
+        светился бы в собственном эхе раньше реального ответа (на эхоящей
+        плате проба всегда давала бы «absent», а main.py стирался бы).
+        Парсится только вывод ПОСЛЕ старта пробы — буфер может хранить
+        вывод прошлой прошивки. Статус: saved / absent / unknown."""
+        mark = len(self._text)
         self.write(
             b"try:\r\n"
             b"    import binascii\r\n"
             b"    _d = open('main.py', 'rb').read()\r\n"
-            b"    print('IH-BACKUP', binascii.hexlify(_d).decode())\r\n"
+            b"    print('IH-BACK' + 'UP', binascii.hexlify(_d).decode())\r\n"
             b"except OSError:\r\n"
-            b"    print('IH-BACKUP-ABSENT')\r\n"
+            b"    print('IH-BACK' + 'UP-ABSENT')\r\n"
+            b"\r\n"
         )
-        time.sleep(0.6)
-        self._drain()
-        text = self.output()
-        if "IH-BACKUP-ABSENT" in text:
-            return "absent"
-        marker = "IH-BACKUP "
-        idx = text.rfind(marker)
-        if idx < 0:
-            return "unknown"
-        hex_part = text[idx + len(marker):].split()
-        if not hex_part:
-            return "unknown"
-        try:
-            data = bytes.fromhex(hex_part[0].strip())
-        except ValueError:
-            return "unknown"
-        backup_dir = Path(backup_dir)
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        (backup_dir / "main.py.backup").write_bytes(data)
-        return "saved"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            time.sleep(0.2)
+            self._drain()
+            text = self._text[mark:]
+            if "IH-BACKUP-ABSENT" in text:
+                return "absent"
+            idx = text.find("IH-BACKUP ")
+            if idx >= 0:
+                hex_part = text[idx + len("IH-BACKUP "):].split()
+                if hex_part:
+                    try:
+                        data = bytes.fromhex(hex_part[0])
+                    except ValueError:
+                        continue  # строка ещё доливается — ждать хвост
+                    backup_dir = Path(backup_dir)
+                    backup_dir.mkdir(parents=True, exist_ok=True)
+                    (backup_dir / "main.py.backup").write_bytes(data)
+                    return "saved"
+        return "unknown"
 
     def _truncate_after_staging_echo(self, code: str) -> None:
         """Срезает баннер paste-режима и эхо исходника: граница — конец эха

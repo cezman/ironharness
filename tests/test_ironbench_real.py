@@ -6,6 +6,7 @@ Ctrl+D) запускает «прошивку» uart-echo; каждая стро
 SerialTransport по таймауту. Железо в тестах не участвует (sim-before-real).
 """
 
+import json
 import threading
 import time
 
@@ -39,6 +40,7 @@ class FakeBoard:
         self._started = False
         self.closed = False
         self.main_py = b"print('old firmware')\n"
+        self._acc = ""
 
     def _emit(self, text: str) -> None:
         with self._lock:
@@ -47,19 +49,9 @@ class FakeBoard:
     def write(self, data: bytes) -> int:
         text = data.decode("utf-8", "replace")
         if "\x03" in text:
-            return len(data)  # прерывание — ничего не печатаем
-        if "IH-BACKUP" in text:
-            # IH-79: the backup probe - answer with the saved main.py
-            if self.main_py is None:
-                self._emit("IH-BACKUP-ABSENT\r\n")
-            else:
-                import binascii
-
-                self._emit("IH-BACKUP " + binascii.hexlify(self.main_py).decode() + "\r\n")
-            return len(data)
-        if "main.py" in text and "os.remove" in text:
-            self._started = False  # гигиена: прошивка прошлой задачи снесена
-            self.main_py = None
+            self._acc = ""
+            self._paste_mode = False
+            self._paste_buf = ""
             return len(data)
         if "\x05" in text:
             self._paste_mode = True
@@ -73,18 +65,42 @@ class FakeBoard:
                 self._emit("echo ready\r\n")
                 self._paste_buf = ""
             return len(data)
+        # a REPL executes on complete lines - accumulate until "\n", so a
+        # 24-byte write chunk cannot split a probe statement in half; a bare
+        # "\r" (Enter) completes a line too
+        self._acc += text
+        while "\n" in self._acc:
+            line, _, self._acc = self._acc.partition("\n")
+            self._handle_line(line.rstrip("\r"))
+        if self._acc.endswith("\r"):
+            line = self._acc
+            self._acc = ""
+            self._handle_line(line.rstrip("\r"))
+        return len(data)
+
+    def _handle_line(self, line: str) -> None:
+        if "os.remove" in line and "main.py" in line:
+            self._started = False  # гигиена: прошивка прошлой задачи снесена
+            self.main_py = None
+            return
+        if "binascii.hexlify" in line:
+            # IH-79 backup probe: the try/except answers per main.py presence
+            if self.main_py is None:
+                self._emit("IH-BACKUP-ABSENT\r\n")
+            else:
+                import binascii
+
+                self._emit("IH-BACKUP " + binascii.hexlify(self.main_py).decode() + "\r\n")
+            return
         if self._paste_mode:
             if not self._paste_buf:  # the paste prompt precedes the first echoed line
                 self._emit("=== ")
-            self._paste_buf += text  # raw-paste keeps the source...
+            self._paste_buf += line  # raw-paste keeps the source...
             # ...but legacy paste (live ESP32, IH-33 verification) ECHOES it back
-            self._emit(text)
-            return len(data)
-        if self._started:
-            for line in text.splitlines():
-                if line:
-                    self._emit(f"echo: {line}\r\n")
-        return len(data)
+            self._emit(line + "\r\n")
+            return
+        if self._started and line:
+            self._emit(f"echo: {line}\r\n")
 
     def read(self, size: int = 1) -> bytes:
         with self._lock:
@@ -450,6 +466,27 @@ def test_truncated_echo_dead_board_cannot_pass(tmp_path):
 # --- IH-79: main.py belongs to the user - it is backed up before the wipe ---
 
 
+class EchoingBoard(FakeBoard):
+    """IH-79 adversarial: a board that echoes every cooked-REPL byte back
+    (live-verified behavior, IH-33) - the backup probe's own literals light
+    up in the serial text before any real answer."""
+
+    def write(self, data: bytes) -> int:
+        self._emit(data.decode("utf-8", "replace"))
+        return super().write(data)
+
+
+def test_real_run_backs_up_main_py_with_echoing_board(tmp_path):
+    # the decisive test: the probe literals are split in the source, so the
+    # board's own echo cannot be mistaken for the backup answer
+    task = make_real_task(tmp_path)
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=EchoingBoard())
+    assert res.passed
+    backups = list((tmp_path / "out").rglob("main.py.backup"))
+    assert len(backups) == 1, "the previous main.py must be saved into run artifacts"
+    assert backups[0].read_bytes() == b"print('old firmware')\n"
+
+
 def test_real_run_backs_up_main_py(tmp_path):
     task = make_real_task(tmp_path)
     res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeBoard())
@@ -459,16 +496,25 @@ def test_real_run_backs_up_main_py(tmp_path):
     assert backups[0].read_bytes() == b"print('old firmware')\n"
 
 
-def test_real_run_without_main_py_skips_backup(tmp_path):
-    task = make_real_task(tmp_path)
+def test_real_run_without_main_py_reports_absent(tmp_path):
+    # non-vacuous: the journal must record status=absent (the gate decision)
+    from io_core.journal import JsonlJournal
 
-    class EmptyBoard(FakeBoard):
+    class NoMainBoard(FakeBoard):
         def __init__(self):
             super().__init__()
             self.main_py = None
 
-    res = run_task(task, out_dir=tmp_path / "out", real_transport=EmptyBoard())
+    task = make_real_task(tmp_path)
+    journal = JsonlJournal(tmp_path / "journal.jsonl", actor="test")
+    try:
+        res = run_task(task, out_dir=tmp_path / "out", real_transport=NoMainBoard(), journal=journal)
+    finally:
+        journal.close()
     assert res.passed
+    events = [json.loads(line) for line in (tmp_path / "journal.jsonl").read_text("utf-8").splitlines()]
+    backup = [e for e in events if e.get("kind") == "main_backup"]
+    assert backup and backup[-1]["status"] == "absent"
     assert not list((tmp_path / "out").rglob("main.py.backup"))
 
 

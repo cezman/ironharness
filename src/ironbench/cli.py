@@ -251,7 +251,7 @@ def main(argv=None) -> int:
     # IH-79: --all is bulk; staging wipes main.py on live boards, so a wrong
     # IRONHARNESS_REAL_PORT would destroy someone else's firmware - make the
     # bulk wipe an explicit opt-in
-    if args.all and not args.allow_real:
+    if args.all and not args.task and not args.allow_real:
         real_names = [t.name for t in selected if t.target == "real"]
         if real_names:
             print(
