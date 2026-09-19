@@ -22,6 +22,7 @@ CH340/USB-UART constraints learned on live hardware (IH-2):
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any
 
 from io_core.errors import TransportIoError
@@ -116,7 +117,7 @@ class RealRepl:
                 break
             time.sleep(0.05)
 
-    def boot(self, code: str, *, deadline: float | None = None) -> None:
+    def boot(self, code: str, *, deadline: float | None = None, backup_dir=None) -> str:
         """Гигиена + запуск entry: снести чужой main.py, soft reset, залить код.
 
         Буфер очищается перед staging (вместе с _chunks — античит отображает
@@ -125,8 +126,14 @@ class RealRepl:
         кода: эхо и баннер paste-режима в оценку и античит не попадают, а
         рантайм-вывод не теряется (исполнение начинается только после
         Ctrl+D, так что рантайм-вывод не может оказаться до конца эха).
+        IH-79: перед сносом main.py сохраняется в backup_dir (файл
+        main.py.backup) — main.py принадлежит пользователю, а не харнессу.
+        Возвращает статус бэкапа: saved / absent / unknown / not requested.
         """
         self.interrupt()
+        backup_status = "not requested"
+        if backup_dir is not None:
+            backup_status = self._backup_main(backup_dir)
         self.write(REMOVE_MAIN)
         time.sleep(0.6)
         self._drain()
@@ -153,6 +160,41 @@ class RealRepl:
         self.write(CTRL_D)  # выполнить; вывод читается в wait_for/дочитывании
         self._drain()
         self._truncate_after_staging_echo(code)
+        return backup_status
+
+    def _backup_main(self, backup_dir) -> str:
+        """IH-79: main.py принадлежит пользователю — перед сносом содержимое
+        уходит в run-артефакты (main.py.backup). Читаем через cooked REPL в
+        hex (binascii) — cooked-режим ест UTF-8, hex безопасен. Статус:
+        saved / absent / unknown."""
+        self.write(
+            b"try:\r\n"
+            b"    import binascii\r\n"
+            b"    _d = open('main.py', 'rb').read()\r\n"
+            b"    print('IH-BACKUP', binascii.hexlify(_d).decode())\r\n"
+            b"except OSError:\r\n"
+            b"    print('IH-BACKUP-ABSENT')\r\n"
+        )
+        time.sleep(0.6)
+        self._drain()
+        text = self.output()
+        if "IH-BACKUP-ABSENT" in text:
+            return "absent"
+        marker = "IH-BACKUP "
+        idx = text.rfind(marker)
+        if idx < 0:
+            return "unknown"
+        hex_part = text[idx + len(marker):].split()
+        if not hex_part:
+            return "unknown"
+        try:
+            data = bytes.fromhex(hex_part[0].strip())
+        except ValueError:
+            return "unknown"
+        backup_dir = Path(backup_dir)
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        (backup_dir / "main.py.backup").write_bytes(data)
+        return "saved"
 
     def _truncate_after_staging_echo(self, code: str) -> None:
         """Срезает баннер paste-режима и эхо исходника: граница — конец эха

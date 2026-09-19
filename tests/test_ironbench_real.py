@@ -38,6 +38,7 @@ class FakeBoard:
         self._paste_buf = ""
         self._started = False
         self.closed = False
+        self.main_py = b"print('old firmware')\n"
 
     def _emit(self, text: str) -> None:
         with self._lock:
@@ -47,8 +48,18 @@ class FakeBoard:
         text = data.decode("utf-8", "replace")
         if "\x03" in text:
             return len(data)  # прерывание — ничего не печатаем
+        if "IH-BACKUP" in text:
+            # IH-79: the backup probe - answer with the saved main.py
+            if self.main_py is None:
+                self._emit("IH-BACKUP-ABSENT\r\n")
+            else:
+                import binascii
+
+                self._emit("IH-BACKUP " + binascii.hexlify(self.main_py).decode() + "\r\n")
+            return len(data)
         if "main.py" in text and "os.remove" in text:
             self._started = False  # гигиена: прошивка прошлой задачи снесена
+            self.main_py = None
             return len(data)
         if "\x05" in text:
             self._paste_mode = True
@@ -434,3 +445,50 @@ def test_truncated_echo_dead_board_cannot_pass(tmp_path):
     res = run_task(task, out_dir=tmp_path / "out", real_transport=DeadTruncatedEchoBoard())
     assert not res.passed, "a board that never ran passed from its own paste echo"
     assert res.error_kind == "infra"
+
+
+# --- IH-79: main.py belongs to the user - it is backed up before the wipe ---
+
+
+def test_real_run_backs_up_main_py(tmp_path):
+    task = make_real_task(tmp_path)
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeBoard())
+    assert res.passed
+    backups = list((tmp_path / "out").rglob("main.py.backup"))
+    assert len(backups) == 1, "the previous main.py must be saved into run artifacts"
+    assert backups[0].read_bytes() == b"print('old firmware')\n"
+
+
+def test_real_run_without_main_py_skips_backup(tmp_path):
+    task = make_real_task(tmp_path)
+
+    class EmptyBoard(FakeBoard):
+        def __init__(self):
+            super().__init__()
+            self.main_py = None
+
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=EmptyBoard())
+    assert res.passed
+    assert not list((tmp_path / "out").rglob("main.py.backup"))
+
+
+def test_run_all_refuses_real_tasks_without_allow_real(tmp_path, capsys):
+    # IH-79: --all is bulk; a wrong IRONHARNESS_REAL_PORT would wipe someone
+    # else's main.py - the bulk wipe is an explicit opt-in
+    from ironbench.cli import main as cli_main
+
+    (tmp_path / "tasks").mkdir()
+    make_real_task(tmp_path / "tasks")
+    rc = cli_main(
+        [
+            "run",
+            "--all",
+            "--tasks-dir",
+            str(tmp_path / "tasks"),
+            "--out",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "--allow-real" in out and "wipes main.py" in out

@@ -98,7 +98,11 @@ def _run_real(
             journal("task_start", {"task": task.name})
         repl = RealRepl(transport_factory())
         deadline = time.monotonic() + wall_timeout
-        repl.boot(code, deadline=deadline)
+        # IH-79: main.py belongs to the user - it is saved into the run
+        # artifacts before the stage wipes it
+        backup_status = repl.boot(code, deadline=deadline, backup_dir=run_dir)
+        if journal:
+            journal("main_backup", {"task": task.name, "status": backup_status})
         plain = tuple(p for p in task.expect if common._plain_text(p))
         # every wait-serial step as (needle, trigger stamp) - the canonical
         # verdict replays this sequence over the settled final log (IH-33,
