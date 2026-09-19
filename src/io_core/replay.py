@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Self
 
 from io_core.errors import JournalCorrupt
-from io_core.journal import Event, read_events_chain
+from io_core.journal import Event, chain_files, read_events_chain
 
 LEGACY_CONN = ""  # conn для событий без имени (журналы до IH-11 и «голые» транспорты)
 
@@ -67,6 +67,11 @@ class ReplayTransport:
     def from_file(
         cls, path: str | Path, *, conn: str = LEGACY_CONN, **kwargs: object
     ) -> ReplayTransport:
+        # IH-75: the rotation chain replaces the single-file read; a missing
+        # journal must still fail loudly - a typo would otherwise produce a
+        # vacuously green empty replay
+        if not chain_files(path):
+            raise FileNotFoundError(f"journal not found: {path}")
         return cls(read_events_chain(path), conn=conn, **kwargs)  # type: ignore[arg-type]
 
     def open(self) -> None:
@@ -147,6 +152,8 @@ class ReplaySession:
 
     @classmethod
     def from_file(cls, path: str | Path, **kwargs: object) -> ReplaySession:
+        if not chain_files(path):
+            raise FileNotFoundError(f"journal not found: {path}")
         return cls(read_events_chain(path), **kwargs)  # type: ignore[arg-type]
 
     def __getitem__(self, name: str) -> ReplayTransport:

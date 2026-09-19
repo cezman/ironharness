@@ -241,3 +241,11 @@ def test_load_events_lenient_reads_rotated_parts(tmp_path):
     events, skipped = load_events_lenient(tmp_path / "j.jsonl")
     assert skipped == 0
     assert [e["kind"] for e in events] == ["write", "read"]
+
+
+def test_load_events_lenient_missing_journal_fails_loudly(tmp_path):
+    # IH-75 review: a missing journal is a loud error, not an empty view
+    from ironbench.journal_view import load_events_lenient
+
+    with pytest.raises(FileNotFoundError):
+        load_events_lenient(tmp_path / "nope.jsonl")

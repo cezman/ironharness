@@ -178,6 +178,17 @@ def test_replay_reads_rotated_parts(tmp_path):
     session_dev.close()
 
 
+def test_replay_missing_journal_fails_loudly(tmp_path):
+    # IH-75 review: the chain read must not turn a missing journal into a
+    # vacuously green empty replay - a typo stays a loud error
+    from io_core.replay import ReplaySession, ReplayTransport
+
+    with pytest.raises(FileNotFoundError):
+        ReplayTransport.from_file(tmp_path / "nope.jsonl")
+    with pytest.raises(FileNotFoundError):
+        ReplaySession.from_file(tmp_path / "nope.jsonl")
+
+
 # --- journal: read_events rejects corrupt lines honestly ---
 
 
