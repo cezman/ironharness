@@ -517,6 +517,54 @@ def test_transport_tools_without_conn_declare_lifecycle_gate():
     assert '_check_kind("serial")' in inspect.getsource(Session.serial_wait)
 
 
+# --- IH-78: MCP tool arguments are bounded, VID/PID match is case-insensitive ---
+
+
+def test_serial_read_rejects_insane_size(tmp_path):
+    # IH-78 (review): size=10**9 made pyserial pre-allocate a gigabyte buffer
+    # - arguments get upper bounds like every other layer
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        s.serial_open("s", "loop://", timeout=0.5)
+        with pytest.raises(ValueError):
+            s.serial_read("s", size=10**9)
+    finally:
+        s.close()
+
+
+def test_serial_wait_rejects_zero_timeout(tmp_path):
+    # IH-78 (review): timeout is bounded to (0, 3600] seconds
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        with pytest.raises(ValueError):
+            s.serial_wait("ffff", "ffff", timeout=0)
+    finally:
+        s.close()
+
+
+class _FakePort:
+    def __init__(self, vid, pid, device, serial_number=""):
+        self.vid, self.pid, self.device, self.serial_number = vid, pid, device, serial_number
+
+
+def test_serial_wait_vidpid_case_insensitive(tmp_path, monkeypatch):
+    # IH-78 (review): vid_s is lowercase hex; a natural "1A86" from the agent
+    # used to never match and the call waited out the whole timeout
+    import serial.tools.list_ports
+
+    monkeypatch.setattr(
+        serial.tools.list_ports,
+        "comports",
+        lambda: [_FakePort(0x1A86, 0x7523, "COMX", serial_number="TEST")],
+    )
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        res = s.serial_wait("1A86", "7523", timeout=1)
+        assert res["device"] == "COMX"
+    finally:
+        s.close()
+
+
 # --- IH-77: esp_image_info is gated by the sandbox / the real-flash opt-in ---
 
 
