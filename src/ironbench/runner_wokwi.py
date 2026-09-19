@@ -108,6 +108,37 @@ def _stage_firmware(task: Task, stage: Path) -> None:
                 )
 
 
+def _truncate_paste_echo(text: str, task: Task) -> tuple[str, str | None]:
+    """IH-74 (review): the Ctrl+E paste scenario echoes the pasted source
+    back into the serial log - the same class as IH-55 on renode. Expect
+    literals inside the pasted code used to be credited from the echo alone
+    (a firmware printing nothing passed). Cut everything through the last
+    line of the pasted source; the runtime output starts after it. A lost
+    echo tail (serial log cut mid-echo) cannot be scored - refuse as infra
+    instead of crediting a partial echo. Trade-off (shared with the renode
+    trim, fail-closed): a legitimate firmware whose source contains an
+    expect literal verbatim may false-FAIL if the simulation ends before
+    any runtime output - before the fix the same shape could false-PASS."""
+    try:
+        pasted = (task.directory / task.entry).read_text(encoding="utf-8")
+    except OSError:
+        return text, None
+    last = [ln for ln in pasted.splitlines() if ln.strip()]
+    if not last or "paste mode" not in text:
+        # no paste happened (static scenario) or no echo at all - nothing to
+        # trim and nothing suspect
+        return text, None
+    if last[0] not in text:
+        return text, None
+    pos = text.rfind(last[-1])
+    if pos < 0:
+        return (
+            text,
+            "paste echo truncated (serial log lost bytes) - the run cannot be scored",
+        )
+    return text[pos + len(last[-1]):], None
+
+
 def _run_wokwi(
     task: Task,
     *,
@@ -181,6 +212,9 @@ def _run_wokwi(
     serial_text = (
         serial_log.read_text(encoding="utf-8", errors="replace") if serial_log.is_file() else ""
     )
+    serial_text, echo_error = _truncate_paste_echo(serial_text, task)
+    if echo_error is not None:
+        error, error_kind = echo_error, common.ERROR_INFRA
     missed, hit_fail = common._check_patterns(serial_text, task.expect, task.fail)
     passed = exit_code in OK_EXIT_CODES and not missed and not hit_fail and error is None
     result = common.TaskResult(

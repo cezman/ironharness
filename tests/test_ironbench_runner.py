@@ -151,6 +151,56 @@ def test_check_patterns_regex():
     assert hit == ()
 
 
+def test_wokwi_paste_echo_is_not_scored(tmp_path):
+    # IH-74 (review): the Ctrl+E paste scenario echoes the whole pasted
+    # source into the serial log; an expect literal hidden in a comment of
+    # the pasted code must not be credited from the echo alone (a firmware
+    # printing nothing used to pass)
+    task = make_task(tmp_path, expect=("blink 99: on",))
+    (task.directory / "main.py").write_text(
+        "# blink 99: on\nprint('hi')\n", encoding="utf-8"
+    )
+    echoed = (
+        "paste mode; Ctrl-C to cancel, Ctrl-D to paste\r\n"
+        "# blink 99: on\r\nprint('hi')\r\n\x04\r\n>>> \r\n"
+    )
+    res = run_fake(tmp_path, task, {"FAKE_SERIAL": echoed})
+    assert not res.passed
+    assert res.missed == ("blink 99: on",)
+
+
+def test_wokwi_runtime_output_after_echo_is_scored(tmp_path):
+    # the echo is cut through the last pasted line; real runtime output
+    # after it still scores
+    task = make_task(tmp_path, expect=("blink 0: on",))
+    (task.directory / "main.py").write_text(
+        "# blink 0: on placeholder\nprint('blink 0: on')\n", encoding="utf-8"
+    )
+    echoed = (
+        "paste mode; Ctrl-C to cancel, Ctrl-D to paste\r\n"
+        "# blink 0: on placeholder\r\nprint('blink 0: on')\r\n\x04\r\n"
+        ">>> blink 0: on\r\n"
+    )
+    res = run_fake(tmp_path, task, {"FAKE_SERIAL": echoed})
+    assert res.passed
+
+
+def test_wokwi_lost_echo_tail_is_infra(tmp_path):
+    # the echo started (first line present) but its tail was lost - scoring
+    # a partial echo is a false PASS, so the run is refused as infra
+    task = make_task(tmp_path, expect=("blink 0: on",))
+    (task.directory / "main.py").write_text(
+        "# head comment\nprint('blink 0: on')\n", encoding="utf-8"
+    )
+    echoed = (
+        "paste mode; Ctrl-C to cancel, Ctrl-D to paste\r\n"
+        "# head comment\r\n"
+    )
+    res = run_fake(tmp_path, task, {"FAKE_SERIAL": echoed})
+    assert not res.passed
+    assert res.error_kind == "infra"
+
+
 def test_stage_task_pulls_shared_firmware(tmp_path):
     from ironbench.runner import FIRMWARE_DIR, _stage_task
 
