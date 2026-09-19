@@ -38,16 +38,85 @@ noisy handler must land on stderr.
 
 from __future__ import annotations
 
+import functools
+import inspect
 import os
 import threading
 from pathlib import Path
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
+from io_core.errors import (
+    JournalCorrupt,
+    OperationTimeout,
+    PolicyViolation,
+    QuotaExceeded,
+    SandboxViolation,
+    TransportClosedError,
+)
 from io_core.session import Session
 
 mcp = MCPServer("ironharness")
+
+# IH-76: domain exceptions must reach the agent with their text - the hints
+# (whitelist reason, sandbox path, reopen advice) are the self-correction
+# channel. The SDK only delivers ToolError text raised from inside the tool
+# function; anything else becomes a generic "Error executing tool <name>".
+# Registration therefore wraps every tool: known domain/validation errors
+# re-raise as ToolError with their text; anything else keeps the SDK crash
+# path with traceback logging - those are bugs, not hints.
+_DOMAIN_ERRORS = (
+    ConnectionError,
+    FileNotFoundError,
+    KeyError,
+    JournalCorrupt,
+    OperationTimeout,
+    PolicyViolation,
+    QuotaExceeded,
+    SandboxViolation,
+    TimeoutError,
+    TransportClosedError,
+    ValueError,
+)
+
+
+def _domain_errors(fn):
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def awrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except _DOMAIN_ERRORS as e:
+                raise ToolError(f"{type(e).__name__}: {e}") from e
+
+        return awrapper
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except _DOMAIN_ERRORS as e:
+            raise ToolError(f"{type(e).__name__}: {e}") from e
+
+    return wrapper
+
+
+_original_tool = mcp.tool
+
+
+def _tool_with_domain_errors(*args, **kwargs):
+    registrant = _original_tool(*args, **kwargs)
+
+    def register(fn):
+        return registrant(_domain_errors(fn))
+
+    return register
+
+
+mcp.tool = _tool_with_domain_errors
 
 _session: Session | None = None
 _session_lock = threading.Lock()

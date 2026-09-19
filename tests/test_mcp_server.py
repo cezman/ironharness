@@ -67,17 +67,25 @@ def test_file_tools_roundtrip(mcp_env):
 
 
 def test_file_escape_blocked(mcp_env):
-    with pytest.raises(SandboxViolation):
+    # IH-76: tool functions surface domain errors as ToolError with the
+    # domain error as __cause__ (the text is what the agent reads)
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    with pytest.raises(ToolError) as exc_info:
         file_write("../evil.txt", "no")
+    assert isinstance(exc_info.value.__cause__, SandboxViolation)
 
 
 def test_serial_tools_roundtrip(mcp_env):
+    from mcp.server.mcpserver.exceptions import ToolError
+
     serial_open("s", "loop://", timeout=0.5)
     serial_write("s", "deadbeef")
     assert serial_read("s", 4) == "deadbeef"
     assert serial_close("s") == "ok: serial 's' closed"
-    with pytest.raises(KeyError):
+    with pytest.raises(ToolError) as exc_info:
         serial_write("s", "00")
+    assert isinstance(exc_info.value.__cause__, KeyError)
 
 
 def test_modbus_tools_roundtrip(mcp_env):

@@ -359,3 +359,40 @@ def test_noisy_handler_never_pollutes_wire(tmp_path):
         proc.wait(timeout=10)
     assert "I-AM-STDOUT-NOISE" in stderr
     assert "I-AM-LOG-NOISE" in stderr
+
+
+def test_wire_domain_errors_carry_the_hint(server):
+    # IH-76 (review): domain exceptions reached the agent as a generic
+    # "Error executing tool <name>" - the crafted hints (sandbox reason,
+    # serial whitelist, reopen) never arrived. The boundary maps them to
+    # ToolError, whose text is delivered verbatim on the wire.
+    client = WireClient(server)
+    initialize(client)
+    client.notify({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    res = client.request(
+        {
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": {"name": "file_read", "arguments": {"path": "C:/Windows/win.ini"}},
+        }
+    )
+    assert res["result"]["isError"] is True
+    text = res["result"]["content"][0]["text"]
+    assert "SandboxViolation" in text, text
+
+    res = client.request(
+        {
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": {
+                "name": "serial_open",
+                "arguments": {"name": "s", "port": "socket://example.com:1"},
+            },
+        }
+    )
+    assert res["result"]["isError"] is True
+    text = res["result"]["content"][0]["text"]
+    assert "ValueError" in text, text  # the whitelist refusal travels with the error
