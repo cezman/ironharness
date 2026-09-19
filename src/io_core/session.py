@@ -662,9 +662,36 @@ class Session:
     def esp_image_info(self, firmware_path: str, chip: str = "esp32") -> dict[str, Any]:
         self._check_open()
         self._check_kind("esp")
+        # IH-77 (review): without this check the tool parsed ANY host path -
+        # existence/size/segments of files the sandbox must not expose. The
+        # image lives inside the sandbox unless the operator lifts it with
+        # the real-flash opt-in (the esp_denied journal entry precedes the
+        # raise, like every gate).
+        root = Path(self.sandbox.root).resolve()
+        path = Path(firmware_path)
+        path = path.resolve() if path.is_absolute() else (root / path).resolve()
+        norm = os.path.normcase(str(path))
+        norm_root = os.path.normcase(str(root))
+        if not (norm == norm_root or norm.startswith(norm_root + os.sep)) and os.environ.get(
+            "IRONHARNESS_ALLOW_REAL_FLASH"
+        ) != "1":
+            self.journal(
+                "esp_denied",
+                {
+                    "op": "image_info",
+                    "path": str(path),
+                    "error": "path is outside the sandbox "
+                    "(set IRONHARNESS_ALLOW_REAL_FLASH=1 to lift)",
+                },
+            )
+            raise PolicyViolation(
+                "esp_image_info reads only files inside the sandbox: "
+                f"{str(path)!r} is outside "
+                "(set IRONHARNESS_ALLOW_REAL_FLASH=1 to lift)"
+            )
         from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
 
-        return EspFlasher(chip=chip, on_event=self.journal).image_info(firmware_path)
+        return EspFlasher(chip=chip, on_event=self.journal).image_info(str(path))
 
     def esp_flash(
         self, port: str, firmware_path: str, *, addr: int = DEFAULT_BOOTLOADER_OFFSET, baud: int = 921600

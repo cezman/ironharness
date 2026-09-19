@@ -11,18 +11,20 @@ Note: with no board attached connect_esp makes 7 sync attempts — flash/erase
 blocks for up to ~30 seconds, then raises ConnectionError.
 
 Classic ESP32: a single image (MicroPython) is flashed at offset 0x1000.
-.bin paths are NOT restricted to the file sandbox (images live outside its
-root), but every operation — including failures — is journaled with the full
-path.
+.bin paths are NOT restricted to the file sandbox AT THIS LAYER (images live
+outside its root), but every operation — including failures — is journaled
+with the full path. The Session/MCP surface adds its own gate (IH-77):
+esp_image_info resolves inside the sandbox unless real-flash is opted in.
 
 Safety: flash()/erase() modify real hardware and are gated behind the
 IRONHARNESS_ALLOW_REAL_FLASH=1 environment variable (opt-in). The gate is
 checked before anything else touches the dependency chain, and its denial is
 an event in the journal (esp_denied) before the PermissionError - an
 unauthorized flashing attempt must leave a trace ("no log = didn't happen"
-applies to refusals too). image_info() is offline and needs no guard. esptool
-itself is an optional dependency: install the `flash` extra
-(pip install 'ironharness[flash]').
+applies to refusals too). image_info() is offline at this layer; on the
+Session/MCP surface it shares the real-flash opt-in when the path leaves
+the sandbox (IH-77). esptool itself is an optional dependency: install the
+`flash` extra (pip install 'ironharness[flash]').
 """
 
 from __future__ import annotations
