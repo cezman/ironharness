@@ -202,13 +202,9 @@ def read_events(path: str | Path) -> list[Event]:
     return events
 
 
-def read_events_chain(path: str | Path) -> list[Event]:
-    """IH-63: читает живой журнал и все ротированные части (`.1`, `.2`, ...)
-    в хронологическом порядке: части — по убыванию индекса (`.2` старше
-    `.1`), живой файл — последним. Битые строки внутри части —
-    JournalCorrupt с именем части."""
-    from io_core.errors import JournalCorrupt
-
+def chain_files(path: str | Path) -> list[Path]:
+    """IH-75: все файлы цепочки ротации — архивные части по убыванию индекса
+    (старейшая первой) и живой файл последним. Только существующие."""
     base = Path(path)
     parts: list[tuple[int, Path]] = []
     idx = 1
@@ -218,14 +214,21 @@ def read_events_chain(path: str | Path) -> list[Event]:
             break
         parts.append((idx, part))
         idx += 1
+    ordered = [p for _, p in sorted(parts, key=lambda pair: pair[0], reverse=True)]
+    if base.exists():
+        ordered.append(base)
+    return ordered
+
+
+def read_events_chain(path: str | Path) -> list[Event]:
+    """IH-63: читает живой журнал и все ротированные части (`.1`, `.2`, ...)
+    в хронологическом порядке: части — по убыванию индекса (`.2` старше
+    `.1`), живой файл — последним. Битые строки внутри части —
+    JournalCorrupt с именем части."""
+    from io_core.errors import JournalCorrupt
+
     events: list[Event] = []
-    # IH-63: chronological order - highest rotation index is the oldest, the
-    # live file is the newest
-    for _, part_path in sorted(parts, key=lambda pair: pair[0], reverse=True) + [
-        (0, base)
-    ]:
-        if not part_path.exists():
-            continue
+    for part_path in chain_files(path):
         with part_path.open(encoding="utf-8") as fh:
             for n, line in enumerate(fh, start=1):
                 if not line.strip():

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Self
 
 from io_core.errors import JournalCorrupt
-from io_core.journal import Event, read_events
+from io_core.journal import Event, read_events_chain
 
 LEGACY_CONN = ""  # conn для событий без имени (журналы до IH-11 и «голые» транспорты)
 
@@ -67,7 +67,7 @@ class ReplayTransport:
     def from_file(
         cls, path: str | Path, *, conn: str = LEGACY_CONN, **kwargs: object
     ) -> ReplayTransport:
-        return cls(read_events(path), conn=conn, **kwargs)  # type: ignore[arg-type]
+        return cls(read_events_chain(path), conn=conn, **kwargs)  # type: ignore[arg-type]
 
     def open(self) -> None:
         pass
@@ -147,7 +147,7 @@ class ReplaySession:
 
     @classmethod
     def from_file(cls, path: str | Path, **kwargs: object) -> ReplaySession:
-        return cls(read_events(path), **kwargs)  # type: ignore[arg-type]
+        return cls(read_events_chain(path), **kwargs)  # type: ignore[arg-type]
 
     def __getitem__(self, name: str) -> ReplayTransport:
         return self.conns[name]
