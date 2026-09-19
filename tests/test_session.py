@@ -520,11 +520,12 @@ def test_transport_tools_without_conn_declare_lifecycle_gate():
 # --- IH-77: esp_image_info is gated by the sandbox / the real-flash opt-in ---
 
 
-def test_esp_image_info_rejects_paths_outside_sandbox(tmp_path):
+def test_esp_image_info_rejects_paths_outside_sandbox(tmp_path, monkeypatch):
     # IH-77 (review): esp_image_info parsed any host path without the sandbox
     # or the real-flash gate - existence/size/segments of any file, journal
     # included. Outside paths are refused (journaled) unless the operator
     # opts in with IRONHARNESS_ALLOW_REAL_FLASH=1
+    monkeypatch.delenv("IRONHARNESS_ALLOW_REAL_FLASH", raising=False)
     s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
     try:
         with pytest.raises(PolicyViolation):

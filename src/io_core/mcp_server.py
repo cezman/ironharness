@@ -7,6 +7,7 @@ Configuration via environment:
     IRONHARNESS_HOME     — base for the journal and sandbox (default ~/.ironharness)
     IRONHARNESS_SANDBOX  — file sandbox root (default IRONHARNESS_HOME/sandbox)
     IRONHARNESS_ALLOW_REAL_FLASH — set to 1 to allow live esp_flash/esp_erase
+                         and esp_image_info on paths outside the sandbox
     IRONHARNESS_ALLOWED_HOSTS — comma-separated host / host:port allowlist for
                          modbus/mqtt (unset = allow all; denials -> PolicyViolation)
     IRONHARNESS_ENABLED_KINDS — comma list of serial,modbus,mqtt,esp,file to enable
@@ -381,7 +382,8 @@ def mqtt_close(name: str) -> str:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False))
 def esp_image_info(firmware_path: str, chip: str = "esp32") -> dict:
-    """Parses a .bin firmware image without hardware: entrypoint, segments, flash params."""
+    """Parses a .bin firmware image without hardware: entrypoint, segments, flash params.
+    The path must live inside the sandbox unless IRONHARNESS_ALLOW_REAL_FLASH=1."""
     return get_session().esp_image_info(firmware_path, chip=chip)
 
 
