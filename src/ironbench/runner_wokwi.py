@@ -115,7 +115,10 @@ def _truncate_paste_echo(text: str, task: Task) -> tuple[str, str | None]:
     (a firmware printing nothing passed). Cut everything through the last
     line of the pasted source; the runtime output starts after it. A lost
     echo tail (serial log cut mid-echo) cannot be scored - refuse as infra
-    instead of crediting a partial echo."""
+    instead of crediting a partial echo. Trade-off (shared with the renode
+    trim, fail-closed): a legitimate firmware whose source contains an
+    expect literal verbatim may false-FAIL if the simulation ends before
+    any runtime output - before the fix the same shape could false-PASS."""
     try:
         pasted = (task.directory / task.entry).read_text(encoding="utf-8")
     except OSError:
