@@ -517,6 +517,115 @@ def test_transport_tools_without_conn_declare_lifecycle_gate():
     assert '_check_kind("serial")' in inspect.getsource(Session.serial_wait)
 
 
+# --- IH-78: MCP tool arguments are bounded, VID/PID match is case-insensitive ---
+
+
+def test_serial_read_rejects_insane_size(tmp_path):
+    # IH-78 (review): size=10**9 made pyserial pre-allocate a gigabyte buffer
+    # - arguments get upper bounds like every other layer
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        s.serial_open("s", "loop://", timeout=0.5)
+        with pytest.raises(ValueError):
+            s.serial_read("s", size=10**9)
+    finally:
+        s.close()
+
+
+def test_serial_wait_rejects_zero_timeout(tmp_path):
+    # IH-78 (review): timeout is bounded to (0, 3600] seconds
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        with pytest.raises(ValueError):
+            s.serial_wait("ffff", "ffff", timeout=0)
+    finally:
+        s.close()
+
+
+class _FakePort:
+    def __init__(self, vid, pid, device, serial_number=""):
+        self.vid, self.pid, self.device, self.serial_number = vid, pid, device, serial_number
+
+
+def test_serial_wait_vidpid_case_insensitive(tmp_path, monkeypatch):
+    # IH-78 (review): vid_s is lowercase hex; a natural "1A86" from the agent
+    # used to never match and the call waited out the whole timeout
+    import serial.tools.list_ports
+
+    monkeypatch.setattr(
+        serial.tools.list_ports,
+        "comports",
+        lambda: [_FakePort(0x1A86, 0x7523, "COMX", serial_number="TEST")],
+    )
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        res = s.serial_wait("1A86", "7523", timeout=1)
+        assert res["device"] == "COMX"
+    finally:
+        s.close()
+
+
+def test_open_timeout_bounds_gated_and_journaled(tmp_path):
+    # IH-78 review: the open-timeout class parks workers on a silent host -
+    # each refusal is journaled (no log = didn't happen)
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        with pytest.raises(ValueError):
+            s.serial_open("s", "loop://", timeout=0)
+        with pytest.raises(ValueError):
+            s.modbus_open("m", "127.0.0.1", timeout=0)
+        with pytest.raises(ValueError):
+            s.mqtt_open("q", "127.0.0.1", timeout=0)
+        kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+        for kind in ("serial_open_refused", "modbus_open_refused", "mqtt_open_refused"):
+            assert kind in kinds
+    finally:
+        s.close()
+
+
+def test_serial_reader_start_max_bytes_gated(tmp_path):
+    # IH-78 review: the reader buffer growth cap is gated at the session
+    # level; the lower bound matches the reader's own chunk minimum (512)
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        for bad in (0, 17_000_000):
+            with pytest.raises(ValueError):
+                s.serial_reader_start("s", max_bytes=bad)
+        kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+        assert kinds.count("reader_start_refused") == 2
+    finally:
+        s.close()
+
+
+def test_arg_bound_refusals_are_journaled(tmp_path):
+    # IH-78 review: every bound refusal leaves a JSONL trace with a reason
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        bad_calls = [
+            (s.serial_read, {"size": 10**9}),
+            (s.serial_read_line, {"max_len": 0}),
+            (s.serial_tail, {"size": 0}),
+            (s.serial_read_until, {"pattern": "x", "timeout": 0}),
+            (s.mqtt_read, {"timeout": 0}),
+            (s.serial_wait, {"pid": "ffff", "timeout": 0}),
+        ]
+        for fn, kwargs in bad_calls:
+            with pytest.raises(ValueError):
+                fn("x", **kwargs)
+        kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+        for kind in (
+            "read_refused",
+            "read_line_refused",
+            "tail_refused",
+            "read_until_refused",
+            "mqtt_read_refused",
+            "wait_refused",
+        ):
+            assert kind in kinds, kind
+    finally:
+        s.close()
+
+
 # --- IH-77: esp_image_info is gated by the sandbox / the real-flash opt-in ---
 
 

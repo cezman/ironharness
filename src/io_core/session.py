@@ -204,7 +204,7 @@ class Session:
         """Находит текущий COM-порт по USB serial_number (IH-70). Если
         ничего не найдено — ValueError с подсказкой вызвать serial_list."""
         for p in serial.tools.list_ports.comports():
-            if p.serial_number and wanted in p.serial_number:
+            if p.serial_number and wanted.lower() in p.serial_number.lower():
                 return p.device
         raise ValueError(
             f"no serial port with serial_number matching {wanted!r} — "
@@ -219,15 +219,25 @@ class Session:
         across re-plugs - this tool waits for it to come back instead of
         guessing. Returns {"device": ..., "serial_number": ...}.
         IH-73: gated by the session lifecycle and the serial kind policy,
-        like every other serial tool; the timeout is journaled."""
+        like every other serial tool; the timeout is journaled.
+        IH-78: the timeout is bounded to (0, 3600] seconds and the VID:PID
+        match is case-insensitive (agents send natural "1A86")."""
         self._check_open()
         self._check_kind("serial")
+        if not 0 < timeout <= 3600:
+            self.journal(
+                "wait_refused",
+                {"vid": vid, "pid": pid, "reason": f"timeout {timeout} out of (0, 3600]"},
+            )
+            raise ValueError(
+                f"serial_wait timeout must be in (0, 3600] seconds, got {timeout}"
+            )
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             for p in serial.tools.list_ports.comports():
                 vid_s = f"{p.vid:04x}" if p.vid is not None else ""
                 pid_s = f"{p.pid:04x}" if p.pid is not None else ""
-                if vid_s == vid and pid_s == pid:
+                if vid_s == vid.lower() and pid_s == pid.lower():
                     self.journal(
                         "serial_wait_matched",
                         {"vid": vid, "pid": pid, "device": p.device},
@@ -248,6 +258,16 @@ class Session:
         # the host port table and must not run past the lifecycle/kind policy
         self._check_open()
         self._check_kind("serial")
+        # IH-78: the pyserial read timeout parks a direct serial_read on a
+        # silent port - bounded like every wait
+        if not 0 < timeout <= 600:
+            self.journal(
+                "serial_open_refused",
+                {"conn": name, "port": port, "reason": f"timeout {timeout} out of (0, 600]"},
+            )
+            raise ValueError(
+                f"serial_open timeout must be in (0, 600] seconds, got {timeout}"
+            )
         # IH-70: by-serial — агент привязывается к физической плате по
         # USB serial_number, а не к плавающему номеру COM-порта
         if port.startswith("by-serial:"):
@@ -304,6 +324,14 @@ class Session:
             raise
 
     def serial_read(self, name: str, size: int = 64) -> str:
+        # IH-78: tool arguments are bounded (sizes ≤1 MiB, waits ≤1 h,
+        # open timeouts ≤600 s) and refusals are journaled like every gate
+        if not 1 <= size <= 1_048_576:
+            self.journal(
+                "read_refused",
+                {"conn": name, "reason": f"size {size} out of [1, 1048576]"},
+            )
+            raise ValueError(f"serial_read size must be in [1, 1048576] bytes, got {size}")
         with self._lock:
             if name in self._readers:
                 # IH-51: refusals are events too - "no log = didn't happen"
@@ -324,6 +352,14 @@ class Session:
         return t.read(size).hex()
 
     def serial_read_line(self, name: str, max_len: int = 256) -> str:
+        if not 1 <= max_len <= 1_048_576:
+            self.journal(
+                "read_line_refused",
+                {"conn": name, "reason": f"max_len {max_len} out of [1, 1048576]"},
+            )
+            raise ValueError(
+                f"serial_read_line max_len must be in [1, 1048576] bytes, got {max_len}"
+            )
         with self._lock:
             if name in self._readers:
                 self.journal(
@@ -493,6 +529,14 @@ class Session:
         operations is not lost. The reader owns the read side: serial_read/
         serial_read_line refuse while it runs (serial_write is serialized
         against it - CH340 single-threaded link)."""
+        if not 512 <= max_bytes <= 16_777_216:
+            self.journal(
+                "reader_start_refused",
+                {"conn": name, "reason": f"max_bytes {max_bytes} out of [512, 16777216]"},
+            )
+            raise ValueError(
+                f"serial_reader_start max_bytes must be in [512, 16777216] bytes, got {max_bytes}"
+            )
         with self._lock:
             base = self._serial_base.get(name)
             if base is None:
@@ -549,11 +593,25 @@ class Session:
 
     def serial_tail(self, name: str, size: int = 4096) -> dict[str, object]:
         """Newest `size` bytes from the reader buffer (non-destructive)."""
+        if not 1 <= size <= 1_048_576:
+            self.journal(
+                "tail_refused",
+                {"conn": name, "reason": f"size {size} out of [1, 1048576]"},
+            )
+            raise ValueError(f"serial_tail size must be in [1, 1048576] bytes, got {size}")
         return self._reader(name).tail(size)
 
     def serial_read_until(self, name: str, pattern: str, timeout: float = 10.0) -> dict[str, object]:
         """Waits for the utf-8 pattern in fresh reader data; consumes the
         buffer up to the end of the match (expect-style)."""
+        if not 0 < timeout <= 3600:
+            self.journal(
+                "read_until_refused",
+                {"conn": name, "reason": f"timeout {timeout} out of (0, 3600]"},
+            )
+            raise ValueError(
+                f"serial_read_until timeout must be in (0, 3600] seconds, got {timeout}"
+            )
         return self._reader(name).read_until(pattern, timeout)
 
     def _reader(self, name: str) -> SerialReader:
@@ -590,6 +648,15 @@ class Session:
         timeout: float = 3.0,
     ) -> None:
         self._check_open()
+        # IH-78: the socket timeout parks modbus reads on a silent host
+        if not 0 < timeout <= 600:
+            self.journal(
+                "modbus_open_refused",
+                {"conn": name, "host": host, "reason": f"timeout {timeout} out of (0, 600]"},
+            )
+            raise ValueError(
+                f"modbus_open timeout must be in (0, 600] seconds, got {timeout}"
+            )
         with self._lock:
             self._check_kind("modbus")
             self._check_free(name)
@@ -630,6 +697,15 @@ class Session:
         timeout: float = 3.0,
     ) -> None:
         self._check_open()
+        # IH-78: the connect timeout parks the worker thread inside open()
+        if not 0 < timeout <= 600:
+            self.journal(
+                "mqtt_open_refused",
+                {"conn": name, "host": host, "reason": f"timeout {timeout} out of (0, 600]"},
+            )
+            raise ValueError(
+                f"mqtt_open timeout must be in (0, 600] seconds, got {timeout}"
+            )
         with self._lock:
             self._check_kind("mqtt")
             self._check_free(name)
@@ -655,6 +731,12 @@ class Session:
         self._get(name).subscribe(topic, qos=qos)
 
     def mqtt_read(self, name: str, timeout: float = 1.0) -> dict[str, str] | None:
+        if not 0 < timeout <= 3600:
+            self.journal(
+                "mqtt_read_refused",
+                {"conn": name, "reason": f"timeout {timeout} out of (0, 3600]"},
+            )
+            raise ValueError(f"mqtt_read timeout must be in (0, 3600] seconds, got {timeout}")
         return self._get(name).read_message(timeout)
 
     # --- esp (flashing via esptool; needs the [flash] extra) ---
