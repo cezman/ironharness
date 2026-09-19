@@ -445,7 +445,6 @@ def test_parse_transport_deadline_and_rate():
 
 # --- IH-73: serial_wait obeys the session lifecycle and the kind policy ---
 
-
 def test_serial_wait_refuses_closed_session(tmp_path):
     # IH-73: serial_wait polled the host ports even on a closed session and
     # ended in TimeoutError - the gate must refuse immediately, like the
@@ -516,3 +515,44 @@ def test_transport_tools_without_conn_declare_lifecycle_gate():
     # both enumeration paths declare the serial kind policy
     assert '_check_kind("serial")' in inspect.getsource(Session.serial_list)
     assert '_check_kind("serial")' in inspect.getsource(Session.serial_wait)
+
+
+# --- IH-77: esp_image_info is gated by the sandbox / the real-flash opt-in ---
+
+
+def test_esp_image_info_rejects_paths_outside_sandbox(tmp_path):
+    # IH-77 (review): esp_image_info parsed any host path without the sandbox
+    # or the real-flash gate - existence/size/segments of any file, journal
+    # included. Outside paths are refused (journaled) unless the operator
+    # opts in with IRONHARNESS_ALLOW_REAL_FLASH=1
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        with pytest.raises(PolicyViolation):
+            s.esp_image_info(str(tmp_path / "outside.bin"))
+        kinds = [e["kind"] for e in read_events(tmp_path / "j.jsonl")]
+        assert "esp_denied" in kinds
+    finally:
+        s.close()
+
+
+def test_esp_image_info_gate_lifted_by_real_flash_env(tmp_path, monkeypatch):
+    # with the opt-in the gate passes the (absolute) path through; the
+    # parser itself is stubbed - this test pins the gate, not esptool
+    from io_core import esp_flash
+
+    monkeypatch.setenv("IRONHARNESS_ALLOW_REAL_FLASH", "1")
+    seen = {}
+
+    def fake_image_info(self, firmware_path):
+        seen["path"] = firmware_path
+        return {"ok": True}
+
+    monkeypatch.setattr(esp_flash.EspFlasher, "image_info", fake_image_info)
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        outside = tmp_path / "outside.bin"
+        outside.write_bytes(b"\x00")
+        assert s.esp_image_info(str(outside)) == {"ok": True}
+        assert seen["path"] == str(outside)
+    finally:
+        s.close()

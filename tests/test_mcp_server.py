@@ -181,11 +181,14 @@ def test_journal_lands_in_home(mcp_env):
     assert journal["kind"] == "file_write"
 
 
-def test_esp_image_info_offline(mcp_env):
+def test_esp_image_info_offline(mcp_env, monkeypatch):
     """Разбор реального образа через MCP без железа."""
     # esptool is the optional [flash] extra: the CI min-deps job (IH-41)
     # installs the runtime floors only, so this must skip, not fail
     pytest.importorskip("esptool", reason="esp tests need the [flash] extra (esptool)")
+    # the shared bin lives outside the sandbox (tasks/_firmware) - parsing it
+    # is the documented operator opt-in (IH-77: the sandbox gate is default)
+    monkeypatch.setenv("IRONHARNESS_ALLOW_REAL_FLASH", "1")
     info = esp_image_info(str(FIRMWARE))
     assert info["chip"] == "esp32"
     assert len(info["segments"]) >= 3
