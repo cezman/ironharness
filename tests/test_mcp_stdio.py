@@ -375,7 +375,9 @@ def test_wire_domain_errors_carry_the_hint(server):
             "jsonrpc": "2.0",
             "id": 20,
             "method": "tools/call",
-            "params": {"name": "file_read", "arguments": {"path": "C:/Windows/win.ini"}},
+            # a parent escape: caught as SandboxViolation on every platform
+            # (a drive-letter path is only absolute on Windows)
+            "params": {"name": "file_read", "arguments": {"path": "../evil.txt"}},
         }
     )
     assert res["result"]["isError"] is True
