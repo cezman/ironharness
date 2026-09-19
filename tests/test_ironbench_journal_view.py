@@ -223,3 +223,29 @@ def test_cli_explicit_out_file(tmp_path):
 def test_cli_missing_journal_is_an_error(tmp_path):
     # negative path: a missing journal is a clean CLI error, not a traceback
     assert cli_main(["journal", str(tmp_path / "nope.jsonl")]) == 2
+
+
+def test_load_events_lenient_reads_rotated_parts(tmp_path):
+    # IH-75 (review): the viewer read only the live journal file - a session
+    # whose journal had rotated was viewed without its early history
+    from ironbench.journal_view import load_events_lenient
+
+    (tmp_path / "j.jsonl.1").write_text(
+        json.dumps({"ts": 1, "seq": 1, "actor": "t", "kind": "write"}) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "j.jsonl").write_text(
+        json.dumps({"ts": 2, "seq": 2, "actor": "t", "kind": "read"}) + "\n",
+        encoding="utf-8",
+    )
+    events, skipped = load_events_lenient(tmp_path / "j.jsonl")
+    assert skipped == 0
+    assert [e["kind"] for e in events] == ["write", "read"]
+
+
+def test_load_events_lenient_missing_journal_fails_loudly(tmp_path):
+    # IH-75 review: a missing journal is a loud error, not an empty view
+    from ironbench.journal_view import load_events_lenient
+
+    with pytest.raises(FileNotFoundError):
+        load_events_lenient(tmp_path / "nope.jsonl")

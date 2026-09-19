@@ -145,6 +145,50 @@ def test_closed_journal_rejects_writes(tmp_path):
         j("event", {"n": 2})
 
 
+def test_replay_reads_rotated_parts(tmp_path):
+    # IH-75 (review): replay read only the live journal file - a session
+    # whose journal had rotated lost its early history (strict replay then
+    # failed on writes it could not see). The rotation chain must be read.
+    import json
+
+    from io_core.replay import ReplaySession, ReplayTransport
+
+    def ev(seq, kind, hex_):
+        return json.dumps(
+            {
+                "ts": seq,
+                "seq": seq,
+                "actor": "t",
+                "conn": "dev",
+                "kind": kind,
+                "data_hex": hex_,
+            }
+        ) + "\n"
+
+    (tmp_path / "j.jsonl.1").write_text(ev(1, "write", "cafe"), encoding="utf-8")
+    (tmp_path / "j.jsonl").write_text(ev(2, "read", "beef"), encoding="utf-8")
+
+    transport = ReplayTransport.from_file(tmp_path / "j.jsonl", conn="dev")
+    transport.write(b"\xca\xfe")  # recorded in the rotated part
+    transport.close()  # strict: every recorded write must be replayed
+
+    session = ReplaySession.from_file(tmp_path / "j.jsonl")
+    session_dev = session["dev"]
+    session_dev.write(b"\xca\xfe")
+    session_dev.close()
+
+
+def test_replay_missing_journal_fails_loudly(tmp_path):
+    # IH-75 review: the chain read must not turn a missing journal into a
+    # vacuously green empty replay - a typo stays a loud error
+    from io_core.replay import ReplaySession, ReplayTransport
+
+    with pytest.raises(FileNotFoundError):
+        ReplayTransport.from_file(tmp_path / "nope.jsonl")
+    with pytest.raises(FileNotFoundError):
+        ReplaySession.from_file(tmp_path / "nope.jsonl")
+
+
 # --- journal: read_events rejects corrupt lines honestly ---
 
 

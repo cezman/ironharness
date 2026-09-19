@@ -172,23 +172,32 @@ SERVICE_KEYS = frozenset({"ts", "seq", "actor", "kind"})
 
 
 def load_events_lenient(path: Path) -> tuple[list[dict], int]:
-    """All event dicts of the JSONL journal; unparseable lines are counted,
-    not dropped silently. Returns (events, skipped)."""
+    """All event dicts of the JSONL journal across the whole rotation chain
+    (IH-75: the live file alone silently lost every rotated part).
+    Unparseable lines are counted, not dropped silently. A missing journal
+    raises FileNotFoundError (a typo must not look like an empty journal).
+    Returns (events, skipped)."""
+    from io_core.journal import chain_files
+
+    files = chain_files(path)
+    if not files:
+        raise FileNotFoundError(f"journal not found: {path}")
     events: list[dict] = []
     skipped = 0
-    text = path.read_text(encoding="utf-8", errors="replace")
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            skipped += 1
-            continue
-        if not isinstance(rec, dict):
-            skipped += 1
-            continue
-        events.append(rec)
+    for part_path in files:
+        text = part_path.read_text(encoding="utf-8", errors="replace")
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                skipped += 1
+                continue
+            if not isinstance(rec, dict):
+                skipped += 1
+                continue
+            events.append(rec)
     return events, skipped
 
 
