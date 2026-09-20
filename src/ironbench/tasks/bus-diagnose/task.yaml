@@ -1,17 +1,18 @@
 # Task description for ironbench: see AGENTS.md / ironbench-task skill.
-# Third live-board golden authored by the board chat (IH-91): fault
-# diagnosis. The bench ships two expected I2C devices but the SSD1306 OLED
-# (0x3C) is physically off the bus RIGHT NOW - the exact degradation the
-# station's own main.py dies on (unhandled ENODEV at boot). The firmware
-# must discover the actual bus state by scanning and report it in a fixed
-# contract; the description names only the EXPECTED set, never the actual
-# answer, so hardcoding the answer from the prompt fails (pinned by
+# Live-board golden (IH-91, re-authored for the healthy bench in IH-93):
+# fault diagnosis. The bench ships two expected I2C devices and both answer
+# now - BME280 at 0x76 and the SSD1306 OLED at 0x3C were both back on the
+# bus on 2026-09-20 after the owner re-seated the display (scan shows both
+# addresses, METEO BOOT clean, cross-check DS vs BME within 0.2 C). The
+# firmware must discover the actual bus state by scanning and report it in
+# a fixed contract; the description names only the EXPECTED set, never the
+# actual answer, so hardcoding the answer from the prompt fails (pinned by
 # test_bus_diagnose_answer_is_not_leaked_by_the_prompt: the observed bus
-# list and the absent address live only in expect/, never in the prompt).
-# Bench-state coupling: the expectations pin the observed degraded state.
-# When the owner re-solders the OLED, the live bench answers
-# MISSING=none/STATUS=ok and the golden expects must be re-authored for the
-# healthy state (same coupling as bme-read needing the BME280 on the bus).
+# list and the report lines live only in expect/, never in the prompt).
+# Bench-state coupling: the expectations pin the observed healthy state;
+# the degraded variant (display off the bus) lives in the IH-91 history
+# and must be re-authored back if a device drops off again - the same
+# coupling as bme-read needing the BME280 on the bus.
 # Anti-cheat honesty: the stamp anchor condemns boot-dump cheaters and the
 # leak pin keeps the answer out of the prompt, but a reactive firmware that
 # fabricates the report without touching the bus is the documented
@@ -55,9 +56,9 @@ environment:
     print(i2c.scan())  # DECIMAL addresses that answered, e.g. [118] == 0x76
 expect:
   - 'bus ready'
-  - 'SCAN=\[118\]'
-  - 'MISSING=0x3C'
-  - 'STATUS=degraded'
+  - 'SCAN=\[60, 118\]'
+  - 'MISSING=none'
+  - 'STATUS=ok'
 fail:
   - 'Traceback'
   - 'ENODEV'
@@ -73,6 +74,6 @@ stimulus:
 notes:
   - 'i2c.scan() returns DECIMAL addresses: the OLED at 0x3C shows up as 60; the MISSING report is hex.'
   - 'A missing device does NOT make scan() fail or raise: absence shows only as its address missing from the list.'
-  - 'Do not probe a missing device with a write to "check" it: an I2C write to an absent address raises OSError [Errno 19] ENODEV, and an unhandled one kills the program (this is exactly how the station firmware dies today).'
+  - 'Do not probe a missing device with a write to "check" it: an I2C write to an absent address raises OSError [Errno 19] ENODEV, and an unhandled one kills the program (this is exactly how the station firmware dies when the display is off the bus).'
   - 'The REPL eats cooked UTF-8: keep firmware output ASCII.'
   - 'The COM port number changes across USB re-plugs: re-enumerate ports before opening.'

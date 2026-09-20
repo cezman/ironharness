@@ -178,6 +178,8 @@ def test_golden_tasks_all_load_and_include_expectations():
         "pid-antiwindup",
         "system-id",
         "bme-read",
+        "cross-sensor",
+        "bus-diagnose",
     } <= names
 
 
@@ -219,8 +221,13 @@ def test_bus_diagnose_is_real_target_with_notes():
     assert waits == ["MISSING="]
     assert any("write-serial" in s for s in task.stimulus)
     # the scan report is pinned with an escaped bracket class, not a bare
-    # literal (a bare 'SCAN=[118]' regex is a char class matching 'SCAN=1')
-    assert r"SCAN=\[118\]" in task.expect
+    # literal (a bare 'SCAN=[60, 118]' regex is a char class matching 'SCAN=6')
+    assert r"SCAN=\[60, 118\]" in task.expect
+    # the healthy report lines are pinned in full: a partial revert of the
+    # bench-state coupling (one line left from the degraded variant) must
+    # fail here, not only on the live bench
+    assert "MISSING=none" in task.expect
+    assert "STATUS=ok" in task.expect
     assert "ENODEV" in task.fail
     assert "Traceback" in task.fail
 
@@ -228,19 +235,19 @@ def test_bus_diagnose_is_real_target_with_notes():
 def test_bus_diagnose_answer_is_not_leaked_by_the_prompt():
     # the task is a diagnosis only if the answer is not in the prompt: the
     # description names the EXPECTED device set (0x76, 0x3C) and the output
-    # contract, while the observed bus state (which device is gone, the
+    # contract, while the observed bus state (which devices answer, the
     # exact report lines) lives only in expect/ - a firmware that hardcodes
     # the contract answer from the prompt must fail the degraded-vs-healthy
-    # distinction (pinned end-to-end by test_bus_diagnose_healthy_guess_fails)
+    # distinction (pinned end-to-end by test_bus_diagnose_degraded_guess_fails)
     from pathlib import Path
 
     raw = (
         Path(__file__).parents[1] / "src" / "ironbench" / "tasks" / "bus-diagnose" / "task.yaml"
     ).read_text(encoding="utf-8")
     prompt_sections = raw.split("expect:", 1)[0]
-    assert "SCAN=[118]" not in prompt_sections
-    assert "MISSING=0x3C" not in prompt_sections
-    assert "STATUS=degraded" not in prompt_sections
+    assert "SCAN=[60, 118]" not in prompt_sections
+    assert "MISSING=none" not in prompt_sections
+    assert "STATUS=ok" not in prompt_sections
 
 
 def test_wokwi_stimulus_controls_exist_in_diagram():
