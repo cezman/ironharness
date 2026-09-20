@@ -112,6 +112,15 @@ FAKE_RENODE = textwrap.dedent(
 )
 
 
+
+@pytest.fixture(autouse=True)
+def _wsl_distro_env(monkeypatch):
+    """audit C: the distro default is gone (private infra name leaked). These
+    tests exercise other concerns - give them a distro explicitly."""
+    monkeypatch.setenv("IRONBENCH_RENODE_DISTRO", "test-distro")
+
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -389,7 +398,7 @@ def test_renode_without_cmd_builds_wsl_pipeline(tmp_path, monkeypatch):
     assert "/home/tester/ironharness-runs" in runs[1][-1]
     assert "/home/tester/ironharness-runs" in popens[0][-1]
     assert "wsl-run.sh" in popens[0][-1]
-    assert popens[0][:3] == ["wsl", "-d", "OpenClawGateway"]
+    assert popens[0][:3] == ["wsl", "-d", "test-distro"]
 
 
 def test_wsl_run_script_binds_firmware_from_home_store(tmp_path):
@@ -409,7 +418,7 @@ def test_wsl_run_script_binds_firmware_from_home_store(tmp_path):
 
 def test_wsl_cmd_is_simple_pipeline():
     cmd = runner_module._wsl_renode_cmd("/home/tester/ironharness-runs/fake-rn")
-    assert cmd[:3] == ["wsl", "-d", "OpenClawGateway"]
+    assert cmd[:3] == ["wsl", "-d", "test-distro"]
     assert cmd[-1] == "bash /home/tester/ironharness-runs/fake-rn/wsl-run.sh"
 
 

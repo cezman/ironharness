@@ -13,14 +13,20 @@ def _unix_wsl_ready() -> bool:
     """The golden unix-target runs need more than the wsl.exe binary: a
     configured distro with the micropython binary in place. GitHub windows
     runners ship wsl.exe without any distro - probing `wsl -d <distro> test -x`
-    fails there fast, so the golden tests skip instead of erroring."""
+    fails there fast, so the golden tests skip instead of erroring. Audit C:
+    the distro comes only from the env now - unset means "not ready" (skip),
+    not an authoring error."""
     if shutil.which("wsl") is None:
         return False
     from ironbench.runner import _wsl_distro
 
+    try:
+        distro = _wsl_distro()
+    except ValueError:
+        return False
     binary = os.environ.get("IRONBENCH_UNIX_BIN", "~/bin/micropython")
     probe = subprocess.run(
-        ["wsl", "-d", _wsl_distro(), "--", "bash", "-c", f"test -x {binary}"],
+        ["wsl", "-d", distro, "--", "bash", "-c", f"test -x {binary}"],
         capture_output=True,
         timeout=60,
         check=False,

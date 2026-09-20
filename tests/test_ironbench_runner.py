@@ -39,6 +39,15 @@ FAKE_CLI = textwrap.dedent(
 )
 
 
+
+@pytest.fixture(autouse=True)
+def _wsl_distro_env(monkeypatch):
+    """audit C: the distro default is gone (private infra name leaked). These
+    tests exercise other concerns - give them a distro explicitly."""
+    monkeypatch.setenv("IRONBENCH_RENODE_DISTRO", "test-distro")
+
+
+
 def make_task(tmp_path, expect=("blink 0: on",), fail=(), write_entry=True, stimulus=(), boot_expect=()):
     d = tmp_path / "t"
     d.mkdir()
