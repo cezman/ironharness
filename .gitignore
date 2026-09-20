@@ -27,3 +27,8 @@ tmp/
 # Tool state (Mimosa hook, ZCode session data) — never publish
 .mimosa/
 .zcode/
+
+# Диагностические артефакты сессий и локальные отчёты кампаний — never publish
+.ironharness/
+reports/
+promo-drafts/
