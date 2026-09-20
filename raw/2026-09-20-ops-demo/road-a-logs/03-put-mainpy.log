@@ -1,0 +1,4 @@
+putting D:\project\ironharness-board\tmp\ops-demo\meteo_main.py (3787 bytes) to COM6:main.py, raw pyserial only
+board answered: 3787 b'696d706f7274206672616d656275662c' b'2074696d652e736c656570283130290a'
+VERIFY size+edges: PASS (3787 vs 3787)
+[step took 24.6s]

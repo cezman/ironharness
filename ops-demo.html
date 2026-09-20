@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Live demo: wipe and reflash a meteo station - MCP tools vs bare hands</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", sans-serif; margin: 2rem; color: #222; max-width: 60rem; }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin-top: 1.6rem; }
+  table { border-collapse: collapse; margin-top: 1rem; }
+  th, td { border: 1px solid #ccc; padding: 6px 14px; text-align: left; }
+  th { background: #f4f4f4; }
+  .pass { color: #0a7d24; font-weight: 600; }
+  .fail { color: #b3261e; font-weight: 600; }
+  code, pre { background: #f6f8fa; border-radius: 4px; }
+  pre { padding: 10px; overflow-x: auto; font-size: 0.85rem; }
+  footer { margin-top: 1.5rem; color: #777; font-size: 0.85rem; }
+  a { color: #0969da; }
+  ul { margin-top: 0.4rem; }
+</style>
+</head>
+<body>
+<h1>Live demo: wipe an ESP32 and write a meteo station back &mdash; MCP tools vs bare hands</h1>
+<p>One board, one job &mdash; <em>erase the flash, install the firmware, deploy the meteo
+station's <code>main.py</code>, verify</em> &mdash; done two ways. First with bare
+pyserial/esptool and no harness. Then through the ironharness MCP server: the same
+operations, plus the two things a bare script cannot give you &mdash; <strong>a gate that
+refused to destroy the board until explicitly told to</strong>, and <strong>a journal that
+replays every step</strong>.</p>
+
+<h2>The gate refusing its own destruction (raw journal, first event)</h2>
+<pre>{"ts": 1789910900.024, "seq": 1, "actor": "mcp", "kind": "esp_denied",
+ "op": "erase", "port": "COM6",
+ "error": "IRONHARNESS_ALLOW_REAL_FLASH=1 is required for live flash/erase
+           &mdash; these operations modify real hardware"}</pre>
+<p>The <code>esp_erase</code> call was made <em>without</em> the opt-in flag first. The
+tool refused in 0.0&nbsp;s and journaled its own refusal. The bare-hands road has no such
+concept: the first run of the script simply erased the flash.</p>
+
+<h2>Road A &mdash; bare hands (esptool CLI + a ~60-line raw-REPL client on pyserial)</h2>
+<table>
+<tr><th>Step</th><th>Command</th><th>Time</th></tr>
+<tr><td>wipe</td><td><code>esptool --chip esp32 --port COM6 erase-flash</code></td><td>5.3 s</td></tr>
+<tr><td>flash</td><td><code>esptool write-flash 0x1000 firmware.bin</code> (hash verified)</td><td>21.3 s</td></tr>
+<tr><td>station</td><td>main.py over the raw REPL: 15 hex chunks, byte-check</td><td>24.6 s</td></tr>
+<tr><td>verify</td><td>RTS reset + 15 s of boot read</td><td><span class="pass">PASS</span></td></tr>
+</table>
+<p><strong>First run of this road FAILED at verify</strong> &mdash; and the lesson is the
+point: pyserial asserts DTR/RTS on open, and on this board's reset circuit a held DTR
+blocks the RTS&rarr;EN pair, so the board goes silent (0 bytes in two 8-second windows).
+The harness kills DTR/RTS right after open; the bare script has to <em>know</em> that.
+It also has to know the Ctrl-B/Ctrl-C&times;2/Ctrl-A dance, the hex-chunk raw-REPL protocol
+and the cooked-mode limits. Evidence trail of road A: whatever the script happened to
+write into its own log files.</p>
+
+<h2>Road B &mdash; MCP tools (gated, journaled)</h2>
+<table>
+<tr><th>Step</th><th>Tool</th><th>Time</th></tr>
+<tr><td>open / reset / read boot signature</td><td><code>serial_open</code>, <code>serial_reset</code>, <code>serial_read_until</code></td><td>0.1&ndash;2.1 s</td></tr>
+<tr><td>release the port for esptool</td><td><code>serial_close</code></td><td>0.0 s</td></tr>
+<tr><td>wipe</td><td><code>esp_erase</code></td><td>4.8 s</td></tr>
+<tr><td>flash</td><td><code>esp_flash</code> @0x1000 (hash verified inside)</td><td>19.7 s</td></tr>
+<tr><td>main.py into the sandbox</td><td><code>file_write</code></td><td>0.0 s</td></tr>
+<tr><td>main.py onto the board</td><td><code>serial_put</code> 3787 B (raw REPL)</td><td>47.3 s</td></tr>
+<tr><td>reset + boot signature</td><td><code>serial_reset</code> + <code>serial_read_until</code></td><td>2.1 s</td></tr>
+<tr><td>independent round-trip</td><td><code>serial_get</code> 3787 B &rarr; byte-for-byte compare &mdash; <span class="pass">PASS</span></td><td>41.5 s</td></tr>
+</table>
+<p><strong>143 journal events</strong> (who / when / what / answer): every step &mdash;
+including the refusal and every hex chunk in both directions &mdash; replays from
+<code>journal.jsonl</code>. The meteo station was verified by an independent full
+round-trip, not by trusting the put's return value.</p>
+
+<h2>What the comparison actually says</h2>
+<ul>
+<li><strong>The work is identical, the timings are comparable</strong> (road A ~56 s of
+active steps vs road B ~115 s; the difference is the hex protocol of put/get and two
+server spawns). MCP is not sold as faster here &mdash; and this page is not going to
+pretend otherwise.</li>
+<li><strong>Safety:</strong> road B refused to wipe until explicitly unlocked, and recorded
+the refusal; road A erased the flash on its first launch &mdash; no gate exists in that world.</li>
+<li><strong>Demonstrability:</strong> road B leaves 143 replayable events; road A leaves
+self-written logs that are easy to not write.</li>
+<li><strong>Knowledge:</strong> road A requires the board folklore (the DTR/RTS quirk that
+failed the first run, serial-line polarities, the raw-REPL hex protocol); road B requires
+tool names and arguments. That folklore-absorption is exactly what io-core is for.</li>
+</ul>
+
+<h2>Honesty notes</h2>
+<ul>
+<li>One demo run per road (after road A's failed first attempt, which is kept and
+described above &mdash; it is the argument, not noise). Not a benchmark; the benchmark
+lives <a href="generations/">next door</a>.</li>
+<li>The board ended the demo in a healthy state: meteo station byte-for-byte identical
+to the canonical source, firmware v1.27.0 (the same build), and it was never left
+without a <code>main.py</code> after the roads started.</li>
+<li>The station prints a boot-time <code>OSError ENODEV</code> at its OLED init &mdash;
+the display is physically off the I2C bus; that is the documented expected signature
+of this bench, not a failure.</li>
+</ul>
+
+<h2>Raw data (verify, don't trust)</h2>
+<ul>
+<li>MCP road: <a href="raw/2026-09-20-ops-demo/transcript.log">transcript.log</a> (both passes,
+JSON-RPC) and <a href="raw/2026-09-20-ops-demo/journal.jsonl">journal.jsonl</a> (143 events).</li>
+<li>Bare road: <a href="raw/2026-09-20-ops-demo/road_a.py">road_a.py</a> and its logs
+(<a href="raw/2026-09-20-ops-demo/01-erase.log">erase</a>,
+<a href="raw/2026-09-20-ops-demo/02-flash.log">flash</a>,
+<a href="raw/2026-09-20-ops-demo/03-put-mainpy.log">put</a>,
+<a href="raw/2026-09-20-ops-demo/04-boot-check.log">boot check</a>).</li>
+<li>The station source and the scenario:
+<a href="raw/2026-09-20-ops-demo/meteo_main.py">meteo_main.py</a>,
+<a href="raw/2026-09-20-ops-demo/scenario.md">scenario.md</a> (RU).</li>
+<li>Other published artifacts: <a href="generations/">generations/</a>,
+<a href="case-study-notes-ab.html">expert-notes case study</a>.</li>
+</ul>
+
+<footer>Generated by ironharness &middot; 2026-09-20 &middot; bench: ESP32 + BME280, MicroPython v1.27.0, CH340 USB-UART</footer>
+</body>
+</html>

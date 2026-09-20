@@ -1,0 +1,3 @@
+source: D:\project\ironharness-board\tmp\ops-demo\meteo_main.py (3787 bytes)
+firmware: D:\project\ironharness\.ironbench\blink\ESP32_GENERIC-20251209-v1.27.0.bin
+port: COM6 (identified by ESP32/MicroPython boot banner before the demo)

@@ -1,0 +1,25 @@
+$ esptool --chip esp32 --port COM6 --baud 921600 erase-flash
+
+esptool v5.4.0
+Serial port COM6:
+Connecting.....
+Connected to ESP32 on COM6:
+Chip type:          ESP32-D0WD-V3 (revision v3.1)
+Features:           Wi-Fi, BT, Dual Core + LP Core, 240MHz, Vref calibration in eFuse, Coding Scheme None
+Crystal frequency:  40MHz
+MAC:                04:b2:47:84:4a:0c
+
+Uploading stub flasher...
+Running stub flasher...
+Stub flasher running.
+Changing baud rate to 921600...
+Changed.
+
+Erasing flash memory (this may take a while)...
+Flash memory erased successfully in 2.3 seconds.
+
+Hard resetting via RTS pin...
+
+
+
+[exit 0, 5.3s]
