@@ -53,12 +53,33 @@ jobs:
           python-version: "3.12"
       - name: Build wheel and sdist
         run: uv build
+      - name: Wheel is core-only (ironbench ships from source)
+        run: |
+          python - <<'PY'
+          import glob
+          import zipfile
+
+          wheel = zipfile.ZipFile(glob.glob("dist/ironharness-*.whl")[0])
+          names = wheel.namelist()
+          assert not any(n.startswith("ironbench/") for n in names), \
+              "ironbench must not ship in the wheel (core-only package)"
+          assert any(n.startswith("io_core/") for n in names), "io_core missing from the wheel"
+          entry = next(n for n in names if n.endswith("entry_points.txt"))
+          text = wheel.read(entry).decode()
+          assert "ironharness-mcp" in text, "MCP entry point missing"
+          assert "ironbench" not in text, "ironbench console script must not ship in the wheel"
+          sdist = zipfile.ZipFile(glob.glob("dist/ironharness-*.tar.gz")[0])
+          assert any("src/ironbench" in n for n in sdist.namelist()), \
+              "sdist must keep the benchmark sources (bench ships from source)"
+          print("wheel core-only, sdist complete: ok")
+          PY
       - name: Wheel installs without extras (base deps only)
         run: |
           uv venv .venv-smoke
           uv pip install --python .venv-smoke dist/ironharness-*.whl
-          .venv-smoke/bin/ironbench --version
           .venv-smoke/bin/python -c "import io_core; print('io_core', io_core.__version__, 'imports ok')"
+          # negative path: no bench in the wheel - the ironbench command must not exist
+          ! test -x .venv-smoke/bin/ironbench
       - name: MCP stdio smoke (initialize ping over the installed wheel)
         # IH-30: the entry point must boot and speak the protocol, not just import
         run: |

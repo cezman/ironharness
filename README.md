@@ -34,6 +34,9 @@ structured `error_kind`, so environment failures are excluded from the rates
 instead of silently inflating them; raw per-attempt data is published with every
 leaderboard generation so the numbers can be re-checked.
 
+The PyPI package ships the **io-core** layer only (the MCP server). The benchmark
+runs from a source clone: `git clone` → `uv sync` → `uv run python -m ironbench.cli ...`.
+
 ## Quick start
 
 ```bash
@@ -94,12 +97,12 @@ offline runs.
 ## ironbench — a benchmark for firmware agents
 
 ```bash
-uv run ironbench list                              # catalog of golden tasks
-uv run ironbench run --task uart-echo              # one reference run (wokwi tasks need WOKWI_CLI_TOKEN)
-uv run ironbench run --all --allow-real            # all tasks in one pass; without --allow-real
-                                                   #   this refuses - staging wipes main.py on live boards
-uv run ironbench solve --task blink --attempts 3   # an LLM agent solves a task
-uv run ironbench report                            # pass@k: report.json + report.html
+uv run python -m ironbench.cli list                              # catalog of golden tasks
+uv run python -m ironbench.cli run --task uart-echo              # one reference run (wokwi tasks need WOKWI_CLI_TOKEN)
+uv run python -m ironbench.cli run --all --allow-real            # all tasks in one pass; without --allow-real
+                                                                 #   this refuses - staging wipes main.py on live boards
+uv run python -m ironbench.cli solve --task blink --attempts 3   # an LLM agent solves a task
+uv run python -m ironbench.cli report                            # pass@k: report.json + report.html
 ```
 
 Tasks run on ESP32/MicroPython in Wokwi (headless `wokwi-cli`), Renode, the
