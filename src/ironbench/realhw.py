@@ -40,6 +40,23 @@ _WRITE_CHUNK = 24
 _WRITE_CHUNK_DELAY = 0.04
 REMOVE_MAIN = b"import os; os.remove('main.py') if 'main.py' in os.listdir() else None\r\n"
 
+# IH-79 backup probe, cooked-REPL safe. PAID LESSON (2026-09-20, live board):
+# the MicroPython cooked REPL auto-indents after a colon line - a multi-line
+# try/except block pasted here doubled/quadrupled the indentation until
+# `except` sat inside the suite, the block never executed and the board sat
+# in the line editor where Ctrl+D/Ctrl+E are dead: every staging died with
+# "did not enter paste mode". The probe is therefore single-line conditional
+# expressions with no colon at all (block opener), so each line executes
+# immediately at the prompt. Markers stay split ('IH-BACK' + 'UP') - the
+# cooked echo must never contain the marker contiguously.
+_BACKUP_PROBE_LINES = (
+    b"import binascii, os\r\n",
+    (
+        b"print('IH-BACK' + 'UP', binascii.hexlify(open('main.py', 'rb').read()).decode()) "
+        b"if 'main.py' in os.listdir() else print('IH-BACK' + 'UP-ABSENT')\r\n"
+    ),
+)
+
 
 class RealRepl:
     """Drives a MicroPython REPL over an open serial transport.
@@ -167,6 +184,9 @@ class RealRepl:
         уходит в run-артефакты (main.py.backup). Читаем через cooked REPL в
         hex (binascii) — cooked-режим ест UTF-8, hex безопасен.
 
+        Проба — однострочные выражения (_BACKUP_PROBE_LINES): cooked REPL
+        автоиндентит после двоеточия, мультистрочный блок в нём не исполняется
+        никогда (урок 2026-09-20 — живая плата, «did not enter paste mode»).
         Литералы маркеров разрезаны в исходнике пробы ('IH-BACK' + 'UP'):
         cooked-REPL эхолит каждый принятый байт, и неразрезанный литерал
         светился бы в собственном эхе раньше реального ответа (на эхоящей
@@ -174,15 +194,9 @@ class RealRepl:
         Парсится только вывод ПОСЛЕ старта пробы — буфер может хранить
         вывод прошлой прошивки. Статус: saved / absent / unknown."""
         mark = len(self._text)
-        self.write(
-            b"try:\r\n"
-            b"    import binascii\r\n"
-            b"    _d = open('main.py', 'rb').read()\r\n"
-            b"    print('IH-BACK' + 'UP', binascii.hexlify(_d).decode())\r\n"
-            b"except OSError:\r\n"
-            b"    print('IH-BACK' + 'UP-ABSENT')\r\n"
-            b"\r\n"
-        )
+        for line in _BACKUP_PROBE_LINES:
+            self.write(line)
+            time.sleep(0.1)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             time.sleep(0.2)

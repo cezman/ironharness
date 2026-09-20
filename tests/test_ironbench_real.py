@@ -95,7 +95,8 @@ class FakeBoard:
             self._emit(line + "\r\n")
             return
         if "binascii.hexlify" in line:
-            # IH-79 backup probe: the try/except answers per main.py presence
+            # IH-79 backup probe: the colon-free probe lines answer per
+            # main.py presence
             if self.main_py is None:
                 self._emit("IH-BACKUP-ABSENT\r\n")
             else:
@@ -608,3 +609,87 @@ def test_run_named_task_with_all_flag_does_not_need_allow_real(tmp_path, capsys)
     )
     assert rc != 2
     assert "--allow-real" not in capsys.readouterr().out
+
+
+# --- paid lesson 2026-09-20: the cooked REPL auto-indents after a colon ---
+
+
+def test_cooked_mode_writes_never_open_a_block():
+    """The live board (2026-09-20): the MicroPython cooked REPL auto-indents
+    after a colon line; a hand-indented multi-line block never executes and
+    the board sits in the line editor where Ctrl+D/Ctrl+E are dead - staging
+    died with "did not enter paste mode". Every cooked-mode write in realhw
+    (REMOVE_MAIN, the backup probe) must stay colon-free, so each line
+    executes immediately at the prompt. Staging code is exempt: it is pasted
+    inside paste mode, where no auto-indent exists."""
+    assert b":" not in realhw.REMOVE_MAIN
+    for line in realhw._BACKUP_PROBE_LINES:
+        assert b":" not in line, (
+            "a colon in a cooked-mode write opens a REPL block the board "
+            "never leaves (live failure 2026-09-20)"
+        )
+
+
+def test_backup_main_survives_block_sinking_repl(tmp_path):
+    """Behavioral pin: a REPL that sinks into block mode on the first colon
+    byte (the live quirk) must still answer the probe, because the shipped
+    probe opens no block. The fake swallows every cooked chunk after a colon
+    until Ctrl+C - exactly what the live board did to the old try/except."""
+
+    class BlockSinkBoard(FakeBoard):
+        def __init__(self):
+            super().__init__()
+            self._sunk = False
+
+        def write(self, data: bytes) -> int:
+            text = data.decode("utf-8", "replace")
+            if "\x03" in text:
+                self._sunk = False
+            elif not self._paste_mode and ":" in text:
+                self._sunk = True  # block mode: nothing executes anymore
+            if self._sunk:
+                return len(data)  # swallowed - no echo, no execution
+            return super().write(data)
+
+    repl = RealRepl(BlockSinkBoard())
+    out = tmp_path / "art"
+    status = repl._backup_main(out)
+    assert status == "saved"
+    assert (out / "main.py.backup").read_bytes() == b"print('old firmware')\n"
+
+
+def test_full_boot_survives_block_sinking_repl(tmp_path):
+    """The BlockSink quirk through the whole boot(): interrupt, probe,
+    REMOVE_MAIN, paste-mode staging. Review nit: _backup_main alone proved
+    the probe; this proves the staged firmware still runs end to end when
+    the editor would sink on any colon outside paste mode."""
+
+    class BlockSinkBoard(FakeBoard):
+        def __init__(self):
+            super().__init__()
+            self._sunk = False
+
+        def write(self, data: bytes) -> int:
+            text = data.decode("utf-8", "replace")
+            if "\x03" in text:
+                self._sunk = False
+            elif not self._paste_mode and ":" in text:
+                self._sunk = True  # block mode: nothing executes anymore
+            if self._sunk:
+                return len(data)  # swallowed - no echo, no execution
+            return super().write(data)
+
+    repl = RealRepl(BlockSinkBoard())
+    out = tmp_path / "art"
+    try:
+        status = repl.boot("print('staged')\n", deadline=time.monotonic() + 30, backup_dir=out)
+        assert status == "saved"
+        assert (out / "main.py.backup").read_bytes() == b"print('old firmware')\n"
+        # FakeBoard runs freshly staged code as its documented "echo ready"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and "echo ready" not in repl.output():
+            time.sleep(0.05)
+            repl._drain()
+        assert "echo ready" in repl.output(), "staged firmware must run to completion"
+    finally:
+        repl.close()
