@@ -52,6 +52,11 @@ def main(argv=None) -> int:
     run.add_argument("--task", help="task name (e.g. blink)")
     run.add_argument("--all", action="store_true", help="run all tasks")
     run.add_argument(
+        "--allow-real",
+        action="store_true",
+        help="confirm wiping main.py on live boards when --all includes real tasks (IH-79)",
+    )
+    run.add_argument(
         "--target",
         choices=TASK_TARGETS,
         default=None,
@@ -243,6 +248,18 @@ def main(argv=None) -> int:
             except ValueError as e:
                 print(f"refused: {e}")
                 return 2
+    # IH-79: --all is bulk; staging wipes main.py on live boards, so a wrong
+    # IRONHARNESS_REAL_PORT would destroy someone else's firmware - make the
+    # bulk wipe an explicit opt-in
+    if args.all and not args.task and not args.allow_real:
+        real_names = [t.name for t in selected if t.target == "real"]
+        if real_names:
+            print(
+                "refused: --all includes real tasks ("
+                + ", ".join(real_names)
+                + ") - staging wipes main.py on the board; pass --allow-real to confirm"
+            )
+            return 2
 
     with JsonlJournal(args.out / "journal.jsonl", actor="ironbench") as journal:
         all_passed = True

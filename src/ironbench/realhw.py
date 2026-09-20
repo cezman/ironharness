@@ -22,6 +22,7 @@ CH340/USB-UART constraints learned on live hardware (IH-2):
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any
 
 from io_core.errors import TransportIoError
@@ -116,7 +117,7 @@ class RealRepl:
                 break
             time.sleep(0.05)
 
-    def boot(self, code: str, *, deadline: float | None = None) -> None:
+    def boot(self, code: str, *, deadline: float | None = None, backup_dir=None) -> str:
         """Гигиена + запуск entry: снести чужой main.py, soft reset, залить код.
 
         Буфер очищается перед staging (вместе с _chunks — античит отображает
@@ -125,8 +126,14 @@ class RealRepl:
         кода: эхо и баннер paste-режима в оценку и античит не попадают, а
         рантайм-вывод не теряется (исполнение начинается только после
         Ctrl+D, так что рантайм-вывод не может оказаться до конца эха).
+        IH-79: перед сносом main.py сохраняется в backup_dir (файл
+        main.py.backup) — main.py принадлежит пользователю, а не харнессу.
+        Возвращает статус бэкапа: saved / absent / unknown / not requested.
         """
         self.interrupt()
+        backup_status = "not requested"
+        if backup_dir is not None:
+            backup_status = self._backup_main(backup_dir)
         self.write(REMOVE_MAIN)
         time.sleep(0.6)
         self._drain()
@@ -153,6 +160,51 @@ class RealRepl:
         self.write(CTRL_D)  # выполнить; вывод читается в wait_for/дочитывании
         self._drain()
         self._truncate_after_staging_echo(code)
+        return backup_status
+
+    def _backup_main(self, backup_dir) -> str:
+        """IH-79: main.py принадлежит пользователю — перед сносом содержимое
+        уходит в run-артефакты (main.py.backup). Читаем через cooked REPL в
+        hex (binascii) — cooked-режим ест UTF-8, hex безопасен.
+
+        Литералы маркеров разрезаны в исходнике пробы ('IH-BACK' + 'UP'):
+        cooked-REPL эхолит каждый принятый байт, и неразрезанный литерал
+        светился бы в собственном эхе раньше реального ответа (на эхоящей
+        плате проба всегда давала бы «absent», а main.py стирался бы).
+        Парсится только вывод ПОСЛЕ старта пробы — буфер может хранить
+        вывод прошлой прошивки. Статус: saved / absent / unknown."""
+        mark = len(self._text)
+        self.write(
+            b"try:\r\n"
+            b"    import binascii\r\n"
+            b"    _d = open('main.py', 'rb').read()\r\n"
+            b"    print('IH-BACK' + 'UP', binascii.hexlify(_d).decode())\r\n"
+            b"except OSError:\r\n"
+            b"    print('IH-BACK' + 'UP-ABSENT')\r\n"
+            b"\r\n"
+        )
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            time.sleep(0.2)
+            self._drain()
+            text = self._text[mark:]
+            if "IH-BACKUP-ABSENT" in text:
+                return "absent"
+            idx = text.find("IH-BACKUP ")
+            if idx >= 0:
+                rest = text[idx + len("IH-BACKUP "):]
+                nl = rest.find("\n")
+                if nl < 0:
+                    continue  # the answer line is still trickling in - wait
+                try:
+                    data = bytes.fromhex(rest[:nl].strip())
+                except ValueError:
+                    continue
+                backup_dir = Path(backup_dir)
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                (backup_dir / "main.py.backup").write_bytes(data)
+                return "saved"
+        return "unknown"
 
     def _truncate_after_staging_echo(self, code: str) -> None:
         """Срезает баннер paste-режима и эхо исходника: граница — конец эха
