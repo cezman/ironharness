@@ -12,6 +12,11 @@
 # When the owner re-solders the OLED, the live bench answers
 # MISSING=none/STATUS=ok and the golden expects must be re-authored for the
 # healthy state (same coupling as bme-read needing the BME280 on the bus).
+# Anti-cheat honesty: the stamp anchor condemns boot-dump cheaters and the
+# leak pin keeps the answer out of the prompt, but a reactive firmware that
+# fabricates the report without touching the bus is the documented
+# real-target residual (IH-44) - the same class bme-read had before
+# cross-sensor raised the bar with a physical cross-check.
 name: bus-diagnose
 description: >-
   A weather-station board has two devices on its I2C bus (SDA GPIO21, SCL

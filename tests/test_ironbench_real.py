@@ -825,3 +825,12 @@ def test_bus_diagnose_no_answer_is_honest_miss(tmp_path):
     assert not res.passed
     assert res.error is None
     assert any("MISSING=" in m for m in res.missed)
+
+
+def test_make_real_task_roundtrips_regex_backslashes(tmp_path):
+    # the class fix (IH-91): the helper's pattern lines are YAML double-quoted
+    # scalars built with json.dumps - a regex with backslashes must reach
+    # load_task intact (repr doubled them into a non-matching literal; found
+    # while authoring bus-diagnose, whose SCAN pattern needs \[)
+    task = make_real_task(tmp_path, expect=(r"SCAN=\[118\]", r"T=\d\.\d"))
+    assert task.expect == (r"SCAN=\[118\]", r"T=\d\.\d")
