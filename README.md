@@ -82,6 +82,9 @@ the hands: transports, sandbox, journal, verification.
 A ready-made agent skill — setup plus house rules for safe hardware work — lives
 in [`skills/ironharness/SKILL.md`](skills/ironharness/SKILL.md): drop it into
 your Claude Code skills directory or paste it into any agent's instructions.
+See it in action: [a live demo](https://cezman.github.io/ironharness/ops-demo.html)
+of wiping an ESP32 and writing a meteo station back — MCP tools vs bare hands,
+with the journal as proof.
 
 For unreliable-line testing there is `io_core.faults.FaultyTransport` — scripted
 failures (disconnect, delay, bit corruption, byte loss) over any transport — and

@@ -1,0 +1,99 @@
+# Debug class (IH-7 pattern) on the live board (IH-97, the self-fix-loop
+# golden): the buggy firmware ships in buggy.py, is embedded in the
+# description byte-for-byte, and must fail its own task - on the real board
+# a wrong fix comes back as a genuine MicroPython traceback through the
+# DIAGNOSIS parser (IH-64), so the solve loop runs repair iterations against
+# live hardware. The planted bug is a single line: the deployed build reads
+# the wrong calibration block, and the short-buffer struct unpack kills it
+# before any output (live-verified on 2026-09-20: "ValueError: buffer too
+# small" - MicroPython's message for what CPython reports as struct.error).
+# The bench sits at room temperature; the plausibility fail pattern (TEMP
+# negative or >= 60) condemns fixes that pull calibration-like bytes from
+# the wrong block and print well-formatted nonsense. Residual (same class
+# as cross-sensor's reactive cheater, runner_real.py:155-160): a
+# calibration-free rewrite that prints a plausible constant still passes -
+# the serial line alone cannot prove the sensor was read.
+# Wokwi twin deferred on purpose: chat A is reworking the wokwi anticheat
+# semantics right now (audit item A) - authoring a wokwi debug task into a
+# moving target would have to be re-pinned afterwards.
+name: debug-station
+description: |-
+  A firmware job, not a from-scratch build: this temperature logger is
+  deployed on a board with a BME280 on the I2C bus (SDA GPIO21, SCL GPIO22,
+  address 0x76, 400 kHz). Spec (how it must behave): on startup print exactly
+  "logger ready", then in an infinite loop wait for lines on the serial
+  console; every received line (ignore empty ones) triggers one forced-mode
+  measurement and is answered with a single line of the exact form
+  "TEMP=<temp> C" where <temp> is the datasheet-compensated temperature in
+  degrees Celsius with two decimals, computed from the raw value via the
+  T1/T2/T3 calibration triple exactly as in the code below. The bench sits
+  at ordinary room temperature - a plausible reading is roughly 15-35, and
+  anything far outside that (negative, or 60 and up) means the compensation
+  input is broken. The program never exits.
+
+  Field symptom: the logger never gets that far - it dies at boot with a
+  "ValueError: buffer too small" traceback before printing anything. Find
+  the bug in the code below and fix it (change as little as possible).
+
+  ```python
+  # Deployed temperature logger. Field report: dies at boot before any output.
+  import struct
+  import time
+
+  from machine import Pin, SoftI2C
+
+  ADDR = 0x76
+
+  i2c = SoftI2C(scl=Pin(22), sda=Pin(21), freq=400000)
+  cal = i2c.readfrom_mem(ADDR, 0xE1, 7)
+  T1, T2, T3, P1, P2, P3, P4, P5, P6, P7, P8, P9 = struct.unpack('<HhhHhhhhhhhh', cal)
+  print('logger ready')
+
+  while True:
+      if not input().strip():
+          continue
+      i2c.writeto_mem(ADDR, 0xF4, bytes([39]))
+      time.sleep(0.15)
+      d = i2c.readfrom_mem(ADDR, 0xF7, 8)
+      t_raw = (d[3] << 12) | (d[4] << 4) | (d[5] >> 4)
+      v1 = ((t_raw >> 3) - (T1 << 1)) * T2 >> 11
+      v2 = (((t_raw >> 4) - T1) * ((t_raw >> 4) - T1) >> 12) * T3 >> 14
+      t = (((v1 + v2) * 5 + 128) >> 8) / 100.0
+      print(f'TEMP={t:.2f} C')
+  ```
+entry: solution.py
+target: real
+timeout_sec: 20
+tags: [debug]
+level: 3
+environment:
+  device_modules: [machine, time, struct]
+  api_hint: |
+    from machine import Pin, SoftI2C
+    import struct, time
+    i2c = SoftI2C(scl=Pin(22), sda=Pin(21), freq=400000)
+    i2c.writeto_mem(addr, reg, bytes([value]))
+    data = i2c.readfrom_mem(addr, reg, count)
+expect:
+  - 'logger ready'
+  - 'TEMP=-?[0-9]+\.[0-9]{2} C'
+fail:
+  - 'Traceback'
+  - 'buffer too small'
+  # the bench is room temperature: a negative or 60+ reading means the
+  # compensation ran on wrong calibration bytes (well-formatted nonsense)
+  - 'TEMP=(-[0-9]+|[6-9][0-9]|[0-9]{3,})\.'
+stimulus:
+  # "logger ready" is boot output scored from the whole log; the reading is
+  # anchored to the request line - the real target carries the IH-14
+  # chunk-stamp anchor. The needle 'TEMP=' is deliberately task-specific
+  # (it lives in reading lines and in the trimmed staging echo only).
+  - delay: 1500ms
+  - write-serial: "read\r"
+  - wait-serial: 'TEMP='
+notes:
+  - 'BME280 calibration lives in two blocks: T1..P9, 24 bytes little-endian (struct format "<HhhHhhhhhhhh"), at register 0x88; humidity coefficients, 7 bytes, at 0xE1.'
+  - 'Forced-mode measurement: write 39 to 0xF4, wait >= 150 ms, read 8 bytes from 0xF7; the raw temperature is the 20 bits assembled from bytes 3-5.'
+  - 'A struct unpack fed a short buffer dies on the device (MicroPython: "ValueError: buffer too small"; CPython: struct.error "unpack requires a buffer of N bytes") - the buffer length disagrees with the struct format, count both sides.'
+  - 'The REPL eats cooked UTF-8: keep firmware output ASCII.'
+  - 'The COM port number changes across USB re-plugs: re-enumerate ports before opening.'
