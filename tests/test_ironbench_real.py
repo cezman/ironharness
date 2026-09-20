@@ -845,17 +845,20 @@ class FakeStationBoard(FakeBoard):
     """A REPL running the deployed logger (debug-station): "logger ready" at
     boot, one TEMP reading per received line. Modes model the builds the
     bench must tell apart: honest (the fixed firmware), crash (the SHIPPED
-    buggy build - dies at boot with the struct.error traceback before any
-    output), garbage (wrong calibration bytes: well-formatted readings far
-    outside room temperature - the plausibility fail pattern must condemn
-    them), silent (answers nothing - an honest miss).
+    buggy build - dies at boot with the device's short-buffer unpack
+    traceback "ValueError: buffer too small" before any output), garbage
+    (wrong calibration bytes: well-formatted readings far outside room
+    temperature - the plausibility fail pattern must condemn them), silent
+    (answers nothing - an honest miss).
     """
 
     BOOT = "logger ready\r\n"
     READING = "TEMP=26.19 C\r\n"
     # the LIVE board's answer to the shipped bug (verified 2026-09-20 via
     # serial_put of buggy.py): MicroPython reports a short struct-unpack
-    # buffer as ValueError, not CPython's struct.error
+    # buffer as ValueError, not CPython's struct.error. The file name in a
+    # paste-staged run is "<stdin>", not "main.py" (serial_put path) - do
+    # not pin the file name in any fail pattern.
     CRASH = (
         "Traceback (most recent call last):\r\n"
         '  File "main.py", line 11, in <module>\r\n'

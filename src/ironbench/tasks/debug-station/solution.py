@@ -1,7 +1,8 @@
 # Fixed temperature logger: the calibration block is read from where the
 # datasheet puts the 24-byte T1..P9 set (0x88); everything else is the
 # deployed code as-is. The single planted bug (wrong block, wrong length)
-# crashed the deployed build at boot with struct.error before any output.
+# crashed the deployed build at boot with the device's short-buffer unpack
+# error ("ValueError: buffer too small") before any output.
 import struct
 import time
 

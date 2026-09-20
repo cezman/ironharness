@@ -9,7 +9,10 @@
 # small" - MicroPython's message for what CPython reports as struct.error).
 # The bench sits at room temperature; the plausibility fail pattern (TEMP
 # negative or >= 60) condemns fixes that pull calibration-like bytes from
-# the wrong block and print well-formatted nonsense.
+# the wrong block and print well-formatted nonsense. Residual (same class
+# as cross-sensor's reactive cheater, runner_real.py:155-160): a
+# calibration-free rewrite that prints a plausible constant still passes -
+# the serial line alone cannot prove the sensor was read.
 # Wokwi twin deferred on purpose: chat A is reworking the wokwi anticheat
 # semantics right now (audit item A) - authoring a wokwi debug task into a
 # moving target would have to be re-pinned afterwards.
@@ -25,8 +28,8 @@ description: |-
   degrees Celsius with two decimals, computed from the raw value via the
   T1/T2/T3 calibration triple exactly as in the code below. The bench sits
   at ordinary room temperature - a plausible reading is roughly 15-35, and
-  anything outside that means the compensation input is broken. The program
-  never exits.
+  anything far outside that (negative, or 60 and up) means the compensation
+  input is broken. The program never exits.
 
   Field symptom: the logger never gets that far - it dies at boot with a
   "ValueError: buffer too small" traceback before printing anything. Find
