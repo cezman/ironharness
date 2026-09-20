@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 
 import pytest
@@ -413,6 +414,59 @@ def test_agent_solve_results_records_notes_fact(tmp_path, monkeypatch):
     cli_module.agent_solve_results(with_notes, cfg, attempts=1, solve_dir=tmp_path / "camp")
     record = json.loads((tmp_path / "camp" / "blink" / "results.jsonl").read_text("utf-8"))
     assert record["notes"] is True
+
+
+def test_torn_campaign_leaves_tombstone_not_old_results(tmp_path, monkeypatch, capsys):
+    # audit D (2026-09-20): a campaign that dies mid-run (SystemExit, Ctrl+C)
+    # must not leave the PREVIOUS campaign's results.jsonl in place - the
+    # report would aggregate stale rows as fresh data. A tombstone record
+    # replaces the file BEFORE the first attempt; attempt 1 lives in the
+    # journal, not in a file that pretends to be fresh.
+    import ironbench.cli as cli_module
+    from ironbench.agent import AttemptResult
+
+    solve_dir = tmp_path / "camp"
+    results_path = solve_dir / "blink" / "results.jsonl"
+    results_path.parent.mkdir(parents=True)
+    results_path.write_text(
+        json.dumps({"task": "blink", "attempt": 1, "solved": True, "stale": True}) + "\n",
+        encoding="utf-8",
+    )
+    task = make_task()
+    cfg = SolveConfig(base_url="http://x", api_key="k", model="m")
+
+    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None, allow_real=False):
+        if journal:
+            journal("attempt_result", {"task": task.name, "attempt": 1, "solved": False})
+        if attempts >= 2:
+            raise SystemExit("simulated mid-campaign abort")
+        return [
+            AttemptResult(
+                task=task.name,
+                attempt=1,
+                solved=False,
+                iterations=1,
+                duration_sec=1.0,
+                work_dir=out_dir / "attempt-1",
+            )
+        ]
+
+    monkeypatch.setattr(cli_module, "agent_solve", fake_agent_solve)
+    with pytest.raises(SystemExit):
+        cli_module.agent_solve_results(task, cfg, attempts=2, solve_dir=solve_dir)
+    rows = [json.loads(x) for x in results_path.read_text("utf-8").splitlines() if x.strip()]
+    assert len(rows) == 1 and rows[0].get("tombstone") is True, (
+        "a torn campaign must leave a tombstone, not the previous results"
+    )
+    assert not any(r.get("stale") for r in rows), "stale rows survived the abort"
+    journal_rows = [
+        json.loads(x)
+        for x in (solve_dir / "journal.jsonl").read_text("utf-8").splitlines()
+        if x.strip()
+    ]
+    assert any(r.get("kind") == "attempt_result" for r in journal_rows), (
+        "attempt 1 must be traceable in the journal"
+    )
 
 
 def test_parse_last_traceback_extracts_type_and_message():

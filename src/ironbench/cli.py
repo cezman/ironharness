@@ -348,6 +348,24 @@ def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path, allow_real
     task_dir.mkdir(parents=True, exist_ok=True)
     clean_stale_attempts(task_dir)
     results_path = task_dir / "results.jsonl"
+    # audit D (2026-09-20): a campaign that dies mid-run (SystemExit, Ctrl+C)
+    # used to leave the PREVIOUS campaign's results.jsonl in place - the
+    # report then aggregated stale rows as fresh data. A tombstone record is
+    # atomically written BEFORE the first attempt: a torn campaign is visible
+    # as "no rows" to the report, never as someone else's old numbers.
+    tombstone = json.dumps(
+        {
+            "task": task.name,
+            "tombstone": True,
+            "model": cfg.model,
+            "attempts": attempts,
+            "notes": bool(task.notes),
+        },
+        ensure_ascii=False,
+    )
+    tombstone_tmp = results_path.with_name(f"{results_path.name}.{os.getpid()}.tmp")
+    tombstone_tmp.write_text(tombstone + "\n", encoding="utf-8")
+    _replace_results_atomically(tombstone_tmp, results_path)
     with JsonlJournal(solve_dir / "journal.jsonl", actor="ironbench") as journal:
         started = time.monotonic()
         results = agent_solve(

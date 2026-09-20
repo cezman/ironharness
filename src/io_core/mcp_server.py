@@ -59,6 +59,7 @@ from io_core.errors import (
     TransportClosedError,
     TransportIoError,
 )
+from io_core.mprepl import MpReplError
 from io_core.session import Session
 
 mcp = MCPServer("ironharness")
@@ -84,6 +85,12 @@ _DOMAIN_ERRORS = (
     TransportClosedError,
     TransportIoError,
     ValueError,
+    # audit D (2026-09-20): RuntimeError carries the tool-refusal hints
+    # ("use serial_tail", "transfer in progress") and MpReplError carries the
+    # board's own traceback from raw-REPL put/get - the agent must see the
+    # text, not a bare crash
+    MpReplError,
+    RuntimeError,
     # OSError last-of-family: FileNotFoundError, ConnectionError, TimeoutError,
     # TransportIoError and pyserial SerialException are operational hardware
     # events with hint texts, not bugs - the agent must see them

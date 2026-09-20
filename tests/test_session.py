@@ -666,3 +666,61 @@ def test_esp_image_info_gate_lifted_by_real_flash_env(tmp_path, monkeypatch):
         assert seen["path"] == str(outside)
     finally:
         s.close()
+
+
+# --- audit D (2026-09-20): the surface tools get executed tests ---
+
+
+def test_status_empty_session_structure(session):
+    # audit D2: session_status is the self-recovery tool - its dict shape on
+    # a fresh session is pinned by calling it, not by trusting the wire
+    st = session.status()
+    assert st == {
+        "transports": {},
+        "readers": {},
+        "transfers": [],
+        "sandbox": str(session.sandbox.root),
+    }
+
+
+def test_status_reflects_serial_reader_and_transfer(session, monkeypatch):
+    session.serial_open("s", "loop://", timeout=0.5)
+    session.serial_reader_start("s")
+    monkeypatch.setattr(session, "_transfers", {"fake-put"}, raising=False)
+    st = session.status()
+    assert st["transports"]["s"]["kind"] == "serial"
+    assert st["transports"]["s"]["port"] == "loop://"
+    assert st["readers"]["s"]["alive"] is True
+    assert st["readers"]["s"]["buffered"] >= 0
+    assert st["transfers"] == ["fake-put"]
+    assert st["sandbox"] == str(session.sandbox.root)
+
+
+def test_serial_open_by_serial_resolves_device(session, monkeypatch):
+    # audit D3 (positive): by-serial resolves the floating COM number from
+    # the USB serial_number, case-insensitively
+    import io_core.session as session_module
+
+    class FakePort:
+        device = "loop://"
+        serial_number = "555ABBA"
+        vid = 0x1A86
+        pid = 0x7523
+        description = "fake bench"
+        location = "1-1"
+
+    monkeypatch.setattr(
+        session_module.serial.tools.list_ports, "comports", lambda: [FakePort()]
+    )
+    session.serial_open("board", "by-serial:5abba", timeout=0.5)
+    assert session.status()["transports"]["board"]["port"] == "loop://"
+
+
+def test_serial_open_by_serial_unknown_hints_serial_list(session, monkeypatch):
+    # audit D3 (negative): an unknown serial_number raises with the
+    # self-recovery hint instead of a bare error
+    import io_core.session as session_module
+
+    monkeypatch.setattr(session_module.serial.tools.list_ports, "comports", list)
+    with pytest.raises(ValueError, match="serial_list"):
+        session.serial_open("board", "by-serial:NOPE", timeout=0.5)

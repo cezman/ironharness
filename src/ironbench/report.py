@@ -128,6 +128,10 @@ def load_results(solve_dir: Path) -> tuple[list[dict], list[dict]]:
             if not isinstance(rec, dict):
                 bad += 1
                 continue
+            if rec.get("tombstone"):
+                # audit D: a torn campaign's marker row - "no data", never a
+                # scoreable attempt
+                continue
             records.append(rec)
         if bad:
             unparseable[str(path)] = bad
