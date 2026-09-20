@@ -193,10 +193,14 @@ class Session:
                 name: {"buffered": r.stats()["buffered"], "alive": r.running}
                 for name, r in self._readers.items()
             }
+            # audit D review: _transfers mutates under the lock - the sorted
+            # view must be taken inside it too (set changed size mid-sort on
+            # a concurrent serial_put is a latent crash)
+            transfers = sorted(self._transfers)
         return {
             "transports": transports,
             "readers": readers,
-            "transfers": sorted(self._transfers),
+            "transfers": transfers,
             "sandbox": str(self.sandbox.root),
         }
 

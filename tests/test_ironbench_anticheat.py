@@ -63,9 +63,15 @@ def test_unix_verbatim_cheater_fails(task, tmp_path, wsl_unix_ready):
         "write-serial" in s or "mqtt-publish" in s for s in task.stimulus
     )
     if has_trigger:
+        # audit D4: the canonical verdict is asserted as a class, not just
+        # "not passed" - the anchor must name the cheating explicitly
         assert (res.error or "").startswith("anti-cheat:"), (
             f"{task.name}: dump cheater was not caught by the wait-serial anchor "
             f"(error={res.error!r})"
+        )
+        assert res.error_kind == "run", (
+            f"{task.name}: the dump verdict must be classified run, "
+            f"got {res.error_kind!r}"
         )
 
 

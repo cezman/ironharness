@@ -1101,3 +1101,33 @@ def test_debug_station_no_answer_is_honest_miss(tmp_path):
     assert not res.passed
     assert res.error is None
     assert any("TEMP=" in m for m in res.missed)
+
+
+def test_real_dump_before_stimulus_is_pre_printed(tmp_path):
+    # audit D4 (offline twin of the real target): a firmware printing the
+    # waited needle at boot - before the stimulus write - is condemned with
+    # the canonical verdict, not credited from the dump
+    dump_entry = "print('bus ready')\nprint('ERR unknown')\nwhile True:\n    pass\n"
+    task = make_real_task(
+        tmp_path,
+        entry=dump_entry,
+        expect=("bus ready", "ERR unknown"),
+        stimulus=['write-serial: "x\\r"', "wait-serial: 'ERR unknown'"],
+    )
+
+    class DumpBoard(FakeBoard):
+        def write(self, data: bytes):
+            text = data.decode("utf-8", "replace")
+            if "\x04" in text and self._paste_mode:
+                # Ctrl+D executes the paste: the "firmware" dumps and hangs
+                self._paste_mode = False
+                self._started = True
+                self._emit("bus ready\r\nERR unknown\r\n")
+                return len(data)
+            return super().write(data)
+
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=DumpBoard())
+    assert not res.passed, f"boot dump passed on the real target: {res.error!r}"
+    assert (res.error or "").startswith("anti-cheat:"), res.error
+    assert "pre-printed" in res.error
+    assert res.error_kind == "run"

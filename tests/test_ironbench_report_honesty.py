@@ -320,3 +320,41 @@ def test_clean_stale_attempts_keeps_results_and_journal(tmp_path):
     assert (task_dir / "results.jsonl").is_file()
     assert (task_dir / "journal.jsonl").is_file()
     assert clean_stale_attempts(tmp_path / "nonexistent") == 0
+
+
+def test_tombstone_rows_skipped_by_the_report(tmp_path):
+    # audit D blocker: the tombstone row a torn campaign leaves in
+    # results.jsonl must be skipped by the report - without the skip this
+    # test fails (a phantom pair appears from the marker row)
+    from ironbench.report import load_results
+
+    solve_dir = tmp_path / "camp"
+    write_results(
+        solve_dir,
+        [
+            {"task": "t", "attempt": 1, "tombstone": True, "model": "m", "solved": False},
+            {"model": "m", "task": "t", "attempt": 1, "solved": True, "duration_sec": 1.0},
+        ],
+    )
+    records, unparseable = load_results(solve_dir)
+    assert len(records) == 1 and not records[0].get("tombstone")
+    assert unparseable == []
+    report = build_report(solve_dir)
+    assert report["groups"][0]["solved"] == 1 and report["groups"][0]["attempts"] == 1, (
+        "the tombstone row must not become a phantom attempt"
+    )
+
+
+def test_tombstone_only_campaign_is_no_data(tmp_path):
+    # a fully torn campaign (only the tombstone on disk) contributes nothing
+    from ironbench.report import build_report, load_results
+
+    solve_dir = tmp_path / "camp"
+    write_results(
+        solve_dir,
+        [{"task": "t", "attempt": 1, "tombstone": True, "model": "m", "attempts": 2}],
+    )
+    records, unparseable = load_results(solve_dir)
+    assert records == [] and unparseable == []
+    report = build_report(solve_dir)
+    assert report["groups"] == [], "a tombstone-only campaign must produce no groups"

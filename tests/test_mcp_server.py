@@ -30,6 +30,7 @@ from io_core.mcp_server import (
     reset_session,
     serial_close,
     serial_open,
+    serial_put,
     serial_read,
     serial_write,
 )
@@ -49,6 +50,7 @@ def test_tools_are_registered():
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}
     assert {"echo", "serial_open", "serial_write", "serial_read", "serial_close",
+            "session_status",
             "modbus_open", "modbus_read", "modbus_write", "modbus_close",
             "mqtt_open", "mqtt_publish", "mqtt_subscribe", "mqtt_read", "mqtt_close",
             "esp_image_info", "esp_flash", "esp_erase",
@@ -109,15 +111,17 @@ def test_serial_write_io_error_maps_to_tool_error(mcp_env, monkeypatch):
 
 
 def test_domain_errors_wrapper_passes_unmapped_through():
-    # IH-76 review: the dichotomy is pinned - an unmapped exception is a bug
-    # and keeps the SDK crash path (no ToolError conversion)
+    # IH-76 review, adjusted by audit D5: RuntimeError is now a MAPPED hint
+    # carrier (refusal texts, MpReplError) - the dichotomy example moves to a
+    # genuinely unmapped exception: an unmapped error is a bug and keeps the
+    # SDK crash path (no ToolError conversion)
     from io_core.mcp_server import _domain_errors
 
     @_domain_errors
     def boom():
-        raise RuntimeError("a bug, not a hint")
+        raise TypeError("a bug, not a hint")
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(TypeError):
         boom()
 
 
@@ -244,3 +248,42 @@ def test_get_session_race_creates_one_session(monkeypatch, tmp_path):
         assert len(results) == 2 and results[0] is results[1]
     finally:
         mcp_module.reset_session()
+
+
+def test_serial_put_board_error_maps_to_tool_error(mcp_env, monkeypatch):
+    # audit D5: MpReplError (the board's own traceback from raw-REPL put/get)
+    # and RuntimeError refusal hints must reach the agent as ToolError text -
+    # not as an unmapped crash
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from io_core.mprepl import MpReplError
+
+    serial_open("s", "loop://", timeout=0.5)
+
+    def boom(*args, **kwargs):
+        raise MpReplError(
+            'Traceback (most recent call last):\r\n  File "<stdin>" line 1\r\n'
+            "ValueError: buffer too small"
+        )
+
+    monkeypatch.setattr("io_core.session.Session.serial_put", boom)
+    with pytest.raises(ToolError) as exc_info:
+        serial_put("s", "local.py", "main.py")
+    assert isinstance(exc_info.value.__cause__, MpReplError)
+    assert "buffer too small" in str(exc_info.value)
+
+
+def test_runtime_error_refusal_maps_to_tool_error(mcp_env, monkeypatch):
+    # the RuntimeError family carries tool-refusal hints ("transfer in
+    # progress", "use serial_tail") - audit D5: those texts reach the agent
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    serial_open("s", "loop://", timeout=0.5)
+
+    def busy(*args, **kwargs):
+        raise RuntimeError("transfer in progress - call session_status first")
+
+    monkeypatch.setattr("io_core.session.Session.serial_put", busy)
+    with pytest.raises(ToolError) as exc_info:
+        serial_put("s", "local.py", "main.py")
+    assert "transfer in progress" in str(exc_info.value)
