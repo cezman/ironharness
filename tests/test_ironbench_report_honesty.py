@@ -49,17 +49,20 @@ def test_all_infra_pair_is_incomplete_and_excluded_from_pass_at_k(tmp_path):
             {"model": "m", "task": "broken-env", "attempt": 1, "solved": False, "error_kind": "infra"},
             {"model": "m", "task": "broken-env", "attempt": 2, "solved": False, "error_kind": "infra"},
             {"model": "m", "task": "ok-task", "attempt": 1, "solved": True, "error_kind": "none"},
+            {"model": "m", "task": "flaky", "attempt": 1, "solved": True, "error_kind": "none"},
+            {"model": "m", "task": "flaky", "attempt": 2, "solved": False, "error_kind": "run"},
         ],
     )
     report = build_report(tmp_path)
-    # pass@k counts only live pairs: 1 of 1 solved = 1.0 (broken-env says
+    # pass@k counts only live pairs: 2 of 2 solved = 1.0 (broken-env says
     # nothing about the model - counting it would fake a 0.5)
     assert report["pass_at_k"] == 1.0
     # IH-81: an all-infra pair is excluded from reliability and pass@1 via
-    # the complete-filter - without it the new formulas would count the
-    # all-infra pair as "reliable 0/0" and drag pass@1 to 2/3
-    assert report["pass_at_k_reliability"] == 1.0
-    assert report["pass_at_1"] == 1.0
+    # the complete-filter - without it the all-infra pair would drag
+    # reliability UP (0/0 counts as solved) and the discriminating live pair
+    # would be 2/3 instead of 1/2
+    assert report["pass_at_k_reliability"] == 0.5
+    assert report["pass_at_1"] == 0.75
     broken = next(g for g in report["groups"] if g["task"] == "broken-env")
     assert broken["incomplete"] is True
     assert broken["success_rate"] is None
