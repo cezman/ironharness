@@ -108,7 +108,7 @@ def _stage_firmware(task: Task, stage: Path) -> None:
                 )
 
 
-def _truncate_paste_echo(text: str, task: Task) -> tuple[str, str | None]:
+def _truncate_paste_echo(text: str, task: Task) -> tuple[str, str | None, bool]:
     """IH-74 (review): the Ctrl+E paste scenario echoes the pasted source
     back into the serial log - the same class as IH-55 on renode. Expect
     literals inside the pasted code used to be credited from the echo alone
@@ -118,64 +118,93 @@ def _truncate_paste_echo(text: str, task: Task) -> tuple[str, str | None]:
     instead of crediting a partial echo. Trade-off (shared with the renode
     trim, fail-closed): a legitimate firmware whose source contains an
     expect literal verbatim may false-FAIL if the simulation ends before
-    any runtime output - before the fix the same shape could false-PASS."""
+    any runtime output - before the fix the same shape could false-PASS.
+
+    The third return value (engaged) says the trim actually cut: a paste
+    happened and the pasted source was found. The boot-dump verdict is only
+    meaningful on a trimmed log - without the cut, a source line equal to a
+    stimulus payload would fake the anchor (audit A review).
+    """
     try:
         pasted = (task.directory / task.entry).read_text(encoding="utf-8")
     except OSError:
-        return text, None
+        return text, None, False
     last = [ln for ln in pasted.splitlines() if ln.strip()]
     if not last or "paste mode" not in text:
         # no paste happened (static scenario) or no echo at all - nothing to
         # trim and nothing suspect
-        return text, None
+        return text, None, False
     if last[0] not in text:
-        return text, None
+        return text, None, False
     pos = text.rfind(last[-1])
     if pos < 0:
         return (
             text,
             "paste echo truncated (serial log lost bytes) - the run cannot be scored",
+            False,
         )
-    return text[pos + len(last[-1]):], None
+    return text[pos + len(last[-1]):], None, True
 
 
 def _pre_printed_error(text: str, task: Task) -> str | None:
     """Position-based boot-dump verdict for the paste scenario (audit A, 2026-09-20).
 
     A wokwi serial log has no ingestion stamps (unix anchors on reader stamps,
-    real on chunk stamps) - only the final text is scoreable. Anchor: the first
-    write-serial payload. MicroPython input() echoes the characters it reads,
-    so an honest interaction shows the payload in the log before the answer
-    built on it; an expect literal occurring earlier than the anchor was
-    printed before the stimulus asked for it. If no payload is echoed the
-    ordering cannot be verified from the log - that residual is marked as
-    wokwi/unix non-equivalence in the leaderboard and README, not flagged
-    here (fail-open by design, like the IH-74 trim trade-off).
+    real on chunk stamps) - only the final text is scoreable. Callers pass the
+    trimmed post-echo segment (the trim must have engaged). Anchor: the first
+    whole line equal to a write-serial payload - MicroPython input() echoes the
+    characters it reads line-fed, so an honest interaction shows the payload
+    before the answer built on it (the line must not match inside an answer
+    line: "echo: hello" contains "hello"). An expect literal whose first
+    occurrence precedes the anchor was printed before the stimulus asked for
+    it - except a literal on the segment's first line, the firmware's startup
+    banner, which legitimate tasks (uart-echo 'echo ready', protocol 'proto
+    v1') print before any stimulus and list in expect.
+
+    Fail-open residuals (documented, marked non-equivalent on the leaderboard,
+    never guessed here): a log without a payload echo (script-mode stdin
+    without echo); regex-only expect patterns; multi-line payloads; CRLF is
+    normalized once, so offsets stay exact.
     """
+    text = text.replace("\r\n", "\n")
+    lines = text.splitlines()
     for step in task.stimulus:
         if "write-serial" not in step:
             continue
         payload = str(step["write-serial"]).replace("\r\n", "\r").replace("\n", "\r").strip()
         if not payload:
             continue
-        # the input() echo is line-fed: anchor on a whole line equal to the
-        # payload, never on the payload occurring inside an answer line
-        # ("echo: hello" contains "hello" - an answer must not anchor itself)
         anchor = None
         offset = 0
-        for line in text.splitlines():
+        for line in lines:
             if line.strip() == payload:
                 anchor = offset
                 break
             offset += len(line) + 1
         if anchor is None:
             continue
+        # The segment's first non-empty line may be the firmware's startup
+        # banner, which legit tasks (uart-echo 'echo ready', protocol 'proto
+        # v1') print before any stimulus and list in expect. It is exempt
+        # ONLY while it cannot be an answer: a line carrying a stimulus
+        # payload ("echo: hello" carries "hello") is scoreable output and is
+        # condemned like any other pre-anchor literal - otherwise a
+        # bannerless dump would hide on the first line.
+        banner_start = banner_end = 0
+        banner_text = ""
+        offset = 0
+        for line in lines:
+            if line.strip():
+                banner_start, banner_end, banner_text = offset, offset + len(line), line
+                break
+            offset += len(line) + 1
         for pattern in task.expect:
             plain = common._plain_text(pattern)
             if not plain:
                 continue
             pos = text.find(plain)
-            if 0 <= pos < anchor:
+            in_banner = banner_start <= pos < banner_end and payload not in banner_text
+            if 0 <= pos < anchor and not in_banner:
                 return (
                     f"anti-cheat: {plain!r} was printed before the stimulus "
                     "asked for it (pre-printed output)"
@@ -257,10 +286,10 @@ def _run_wokwi(
     serial_text = (
         serial_log.read_text(encoding="utf-8", errors="replace") if serial_log.is_file() else ""
     )
-    serial_text, echo_error = _truncate_paste_echo(serial_text, task)
+    serial_text, echo_error, trim_engaged = _truncate_paste_echo(serial_text, task)
     if echo_error is not None:
         error, error_kind = echo_error, common.ERROR_INFRA
-    if error is None:
+    if error is None and trim_engaged:
         dump_error = _pre_printed_error(serial_text, task)
         if dump_error is not None:
             error, error_kind = dump_error, common.ERROR_RUN

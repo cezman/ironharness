@@ -533,3 +533,61 @@ def test_wokwi_no_input_echo_is_fail_open_residual(tmp_path):
     res = _run_wokwi_fake(tmp_path, task, serial)
     assert res.passed, f"fail-open run must pass: {res.error!r}"
     assert not (res.error or "").startswith("anti-cheat:")
+
+
+def test_wokwi_startup_banner_exempt_from_pre_printed(tmp_path):
+    # PR #92 review blocker: uart-echo/protocol/protocol-retry print a boot
+    # banner that IS in expect, before any stimulus - legit, not a dump
+    task = _wokwi_task(
+        tmp_path,
+        expect=("echo ready", "echo: hello", "echo: world"),
+        stimulus=('write-serial: "hello\\r"', 'write-serial: "world\\r"'),
+    )
+    serial = (
+        "paste mode\nprint('hi')\necho ready\nhello\necho: hello\n"
+        "world\necho: world\n"
+    )
+    res = _run_wokwi_fake(tmp_path, task, serial)
+    assert res.passed, f"legit startup banner condemned: {res.error!r} missed={res.missed}"
+
+
+def test_wokwi_answers_before_input_echo_condemned_despite_banner(tmp_path):
+    # only the startup banner (first segment line) is exempt: answers printed
+    # before the input echo remain a dump
+    task = _wokwi_task(
+        tmp_path,
+        expect=("echo ready", "echo: hello", "echo: world"),
+        stimulus=('write-serial: "hello\\r"', 'write-serial: "world\\r"'),
+    )
+    serial = (
+        "paste mode\nprint('hi')\necho ready\necho: hello\necho: world\n"
+        "hello\necho: hello\nworld\necho: world\n"
+    )
+    res = _run_wokwi_fake(tmp_path, task, serial)
+    assert not res.passed, f"dump with banner passed: {res.error!r}"
+    assert (res.error or "").startswith("anti-cheat:")
+
+
+def test_wokwi_verdict_requires_engaged_trim(tmp_path):
+    # without a paste echo there is no trimmed segment and no trustworthy
+    # anchor (a source line equal to the payload would fake the anchor):
+    # the verdict must not fire (audit-A review class)
+    task = _wokwi_task(tmp_path)
+    serial = "echo: hello\nhello\necho: hello\n"
+    res = _run_wokwi_fake(tmp_path, task, serial)
+    assert res.passed, f"no-trim run must pass: {res.error!r}"
+    assert not (res.error or "").startswith("anti-cheat:")
+
+
+def test_wokwi_pre_printed_anchor_exact_on_crlf(tmp_path):
+    # review major: naive splitlines offsets undercount one byte per CRLF
+    # line, letting a literal hidden between the drifted and the true anchor
+    # escape condemnation - offsets must be computed after one normalization
+    from ironbench.runner_wokwi import _pre_printed_error
+
+    task = _wokwi_task(tmp_path)
+    text = "p\r\n" * 30 + "echo: hello\r\nhello\r\necho: hello\r\n"
+    error = _pre_printed_error(text, task)
+    assert error is not None and "pre-printed" in error, (
+        "CRLF drift let a pre-answer literal escape the verdict"
+    )
