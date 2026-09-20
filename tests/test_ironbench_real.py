@@ -836,3 +836,111 @@ def test_make_real_task_roundtrips_regex_backslashes(tmp_path):
     # while authoring bus-diagnose, whose SCAN pattern needs \[)
     task = make_real_task(tmp_path, expect=(r"SCAN=\[118\]", r"T=\d\.\d"))
     assert task.expect == (r"SCAN=\[118\]", r"T=\d\.\d")
+
+
+# --- IH-97: debug-station - the self-fix loop on the live bench ---
+
+
+class FakeStationBoard(FakeBoard):
+    """A REPL running the deployed logger (debug-station): "logger ready" at
+    boot, one TEMP reading per received line. Modes model the builds the
+    bench must tell apart: honest (the fixed firmware), crash (the SHIPPED
+    buggy build - dies at boot with the device's short-buffer unpack
+    traceback "ValueError: buffer too small" before any output), garbage
+    (wrong calibration bytes: well-formatted readings far outside room
+    temperature - the plausibility fail pattern must condemn them), silent
+    (answers nothing - an honest miss).
+    """
+
+    BOOT = "logger ready\r\n"
+    READING = "TEMP=26.19 C\r\n"
+    # the LIVE board's answer to the shipped bug (verified 2026-09-20 via
+    # serial_put of buggy.py): MicroPython reports a short struct-unpack
+    # buffer as ValueError, not CPython's struct.error. The file name in a
+    # paste-staged run is "<stdin>", not "main.py" (serial_put path) - do
+    # not pin the file name in any fail pattern.
+    CRASH = (
+        "Traceback (most recent call last):\r\n"
+        '  File "main.py", line 11, in <module>\r\n'
+        "ValueError: buffer too small\r\n"
+    )
+
+    def __init__(self, mode: str = "honest") -> None:
+        super().__init__()
+        self._mode = mode
+
+    def _reading(self) -> None:
+        self._emit(self.READING if self._mode == "honest" else "TEMP=-452.71 C\r\n")
+
+    def write(self, data: bytes) -> int:
+        text = data.decode("utf-8", "replace")
+        if "\x04" in text and self._paste_mode and self._paste_buf:
+            self._paste_mode = False
+            self._paste_buf = ""
+            if self._mode == "crash":
+                self._emit(self.CRASH)
+                return len(data)
+            self._started = True
+            self._emit(self.BOOT)
+            return len(data)
+        if (
+            self._started
+            and not self._paste_mode
+            and "\x03" not in text
+            and "main.py" not in text
+            and self._mode != "silent"
+        ):
+            if any(line.strip() for line in text.splitlines()):
+                self._reading()
+            return len(data)
+        return super().write(data)
+
+
+def _debug_station_task():
+    from pathlib import Path
+
+    return load_task(Path(__file__).parents[1] / "src" / "ironbench" / "tasks" / "debug-station")
+
+
+def test_real_target_golden_debug_station_passes(tmp_path):
+    task = _debug_station_task()
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeStationBoard())
+    assert res.passed, res.missed or res.error
+
+
+def test_debug_station_shipped_bug_fails(tmp_path):
+    # the debug-class core, offline twin of the live validation: the SHIPPED
+    # buggy build run as the entry must fail its own task - it dies before
+    # the boot marker and trips both fail patterns
+    import dataclasses
+
+    buggy = dataclasses.replace(_debug_station_task(), entry="buggy.py")
+    res = run_task(buggy, out_dir=tmp_path / "out", real_transport=FakeStationBoard(mode="crash"))
+    assert not res.passed
+    assert "logger ready" in res.missed
+    assert "Traceback" in res.hit_fail
+    assert "buffer too small" in res.hit_fail
+
+
+def test_debug_station_broken_calibration_fails(tmp_path):
+    # a fix that pulls calibration-like bytes from the wrong block produces
+    # well-formatted nonsense: the plausibility fail pattern condemns it
+    res = run_task(
+        _debug_station_task(),
+        out_dir=tmp_path / "out",
+        real_transport=FakeStationBoard(mode="garbage"),
+    )
+    assert not res.passed
+    assert res.error is None  # honest values, not a cheat verdict
+    assert any(p.startswith("TEMP=") for p in res.hit_fail)
+
+
+def test_debug_station_no_answer_is_honest_miss(tmp_path):
+    res = run_task(
+        _debug_station_task(),
+        out_dir=tmp_path / "out",
+        real_transport=FakeStationBoard(mode="silent"),
+    )
+    assert not res.passed
+    assert res.error is None
+    assert any("TEMP=" in m for m in res.missed)

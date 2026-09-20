@@ -180,6 +180,7 @@ def test_golden_tasks_all_load_and_include_expectations():
         "bme-read",
         "cross-sensor",
         "bus-diagnose",
+        "debug-station",
     } <= names
 
 
