@@ -150,7 +150,9 @@ class RealRepl:
         Ctrl+D, так что рантайм-вывод не может оказаться до конца эха).
         IH-79: перед сносом main.py сохраняется в backup_dir (файл
         main.py.backup) — main.py принадлежит пользователю, а не харнессу.
-        Возвращает статус бэкапа: saved / absent / unknown / not requested.
+        Возвращает статус бэкапа: saved / absent / not requested; unknown
+        (проба не получила разбираемого ответа) → ConnectionError, стирания
+        нет (audit B: чужая прошивка не удаляется наугад).
         """
         self.interrupt()
         backup_status = "not requested"

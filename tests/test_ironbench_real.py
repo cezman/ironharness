@@ -675,6 +675,36 @@ def test_solve_with_allow_real_passes_the_gate(tmp_path, capsys, monkeypatch):
     assert called.get("allow_real") is True
 
 
+def test_solve_target_override_to_real_requires_allow_real(tmp_path, capsys, monkeypatch):
+    # audit B review: the --target real OVERRIDE is the same gated path as a
+    # native real task (same check, not pinned separately before)
+    from ironbench.cli import main as cli_main
+
+    (tmp_path / "tasks").mkdir()
+    (tmp_path / "tasks" / "n").mkdir()
+    (tmp_path / "tasks" / "n" / "task.yaml").write_text(
+        "name: n\nexpect:\n  - 'ready'\n", encoding="utf-8"
+    )
+    (tmp_path / "tasks" / "n" / "main.py").write_text("print('ready')\n", encoding="utf-8")
+    monkeypatch.setenv("IRONBENCH_REAL_PORT", "COM_NOPE")
+    rc = cli_main(
+        [
+            "solve",
+            "--task",
+            "n",
+            "--target",
+            "real",
+            "--tasks-dir",
+            str(tmp_path / "tasks"),
+            "--out",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "refused" in out and "--allow-real" in out
+
+
 # --- paid lesson 2026-09-20: the cooked REPL auto-indents after a colon ---
 
 

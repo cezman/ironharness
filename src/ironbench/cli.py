@@ -54,7 +54,7 @@ def main(argv=None) -> int:
     run.add_argument(
         "--allow-real",
         action="store_true",
-        help="confirm wiping main.py on live boards when --all includes real tasks (IH-79)",
+        help="confirm wiping main.py on live boards for real-target tasks (audit B)",
     )
     run.add_argument(
         "--target",
