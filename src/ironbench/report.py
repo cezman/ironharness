@@ -11,6 +11,9 @@ working run. Infra attempts are excluded from success rates and from the
 pass@k denominator; a pair whose attempts are ALL infra is marked
 "incomplete" and shown as n/a. Unparseable results.jsonl lines are skipped
 and reported ("N unparseable in <path>") instead of killing every campaign.
+Tombstone rows (audit D: a campaign aborted mid-run rewrites results.jsonl
+with a marker before its first attempt) are skipped as "no data" - a torn
+campaign can never contribute someone else's stale numbers.
 
 Taxonomy: when a map of task metadata (class tags + level from task.yaml) is
 given, the report gains a per-class profile - the model's success rate on each

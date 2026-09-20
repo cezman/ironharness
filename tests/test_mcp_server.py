@@ -50,6 +50,7 @@ def test_tools_are_registered():
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}
     assert {"echo", "serial_open", "serial_write", "serial_read", "serial_close",
+            "session_status",
             "modbus_open", "modbus_read", "modbus_write", "modbus_close",
             "mqtt_open", "mqtt_publish", "mqtt_subscribe", "mqtt_read", "mqtt_close",
             "esp_image_info", "esp_flash", "esp_erase",
