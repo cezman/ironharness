@@ -157,9 +157,10 @@ def _pre_printed_error(text: str, task: Task) -> str | None:
     before the answer built on it (the line must not match inside an answer
     line: "echo: hello" contains "hello"). An expect literal whose first
     occurrence precedes the anchor was printed before the stimulus asked for
-    it - except a literal on the segment's first line, the firmware's startup
-    banner, which legitimate tasks (uart-echo 'echo ready', protocol 'proto
-    v1') print before any stimulus and list in expect.
+    it. The task declares its startup output via boot_expect (loader-validated
+    expect members): those literals are exempt wherever they appear - glued
+    banner dumps, bannerless dumps, decorated and suffixed banners are all
+    condemned (fail-closed; the round-1/2 review history is in PR #92).
 
     Fail-open residuals (documented, marked non-equivalent on the leaderboard,
     never guessed here): a log without a payload echo (script-mode stdin
@@ -183,28 +184,17 @@ def _pre_printed_error(text: str, task: Task) -> str | None:
             offset += len(line) + 1
         if anchor is None:
             continue
-        # The segment's first non-empty line may be the firmware's startup
-        # banner, which legit tasks (uart-echo 'echo ready', protocol 'proto
-        # v1') print before any stimulus and list in expect. It is exempt
-        # ONLY while it cannot be an answer: a line carrying a stimulus
-        # payload ("echo: hello" carries "hello") is scoreable output and is
-        # condemned like any other pre-anchor literal - otherwise a
-        # bannerless dump would hide on the first line.
-        banner_start = banner_end = 0
-        banner_text = ""
-        offset = 0
-        for line in lines:
-            if line.strip():
-                banner_start, banner_end, banner_text = offset, offset + len(line), line
-                break
-            offset += len(line) + 1
+        # Task-declared startup output (boot_expect): the firmware prints it
+        # before any stimulus, so it is not an answer. Everything else found
+        # before the anchor is condemned - glued banner dumps, bannerless
+        # dumps, decorated banners (fail-closed by design; the task declares
+        # its startup literals via boot_expect, validated as expect members).
         for pattern in task.expect:
             plain = common._plain_text(pattern)
-            if not plain:
+            if not plain or plain in task.boot_expect:
                 continue
             pos = text.find(plain)
-            in_banner = banner_start <= pos < banner_end and payload not in banner_text
-            if 0 <= pos < anchor and not in_banner:
+            if 0 <= pos < anchor:
                 return (
                     f"anti-cheat: {plain!r} was printed before the stimulus "
                     "asked for it (pre-printed output)"

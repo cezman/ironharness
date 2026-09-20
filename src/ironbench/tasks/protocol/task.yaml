@@ -14,6 +14,8 @@ expect:
   - 'state: off'
   - 'state: on'
   - 'ERR unknown'
+boot_expect:
+  - 'proto v1'
 fail:
   - 'Traceback'
 stimulus:

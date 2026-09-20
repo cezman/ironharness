@@ -39,7 +39,7 @@ FAKE_CLI = textwrap.dedent(
 )
 
 
-def make_task(tmp_path, expect=("blink 0: on",), fail=(), write_entry=True, stimulus=()):
+def make_task(tmp_path, expect=("blink 0: on",), fail=(), write_entry=True, stimulus=(), boot_expect=()):
     d = tmp_path / "t"
     d.mkdir()
     text = "name: fake\n"
@@ -49,6 +49,8 @@ def make_task(tmp_path, expect=("blink 0: on",), fail=(), write_entry=True, stim
         text += "fail:\n" + "".join(f"  - {p!r}\n" for p in fail)
     if stimulus:
         text += "stimulus:\n" + "\n".join(f"  - {s}" for s in stimulus) + "\n"
+    if boot_expect:
+        text += "boot_expect:\n" + "".join(f"  - {b!r}\n" for b in boot_expect)
     (d / "task.yaml").write_text(text, encoding="utf-8")
     # the entry file is needed by the paste-scenario generator
     if write_entry:
@@ -495,8 +497,8 @@ def test_push_to_wsl_clean_wipes_the_real_remote_dir(monkeypatch):
 WOKWI_STIMULUS = ('write-serial: "hello\\r"',)
 
 
-def _wokwi_task(tmp_path, expect=("echo: hello",), stimulus=WOKWI_STIMULUS):
-    return make_task(tmp_path, expect=expect, stimulus=stimulus)
+def _wokwi_task(tmp_path, expect=("echo: hello",), stimulus=WOKWI_STIMULUS, boot_expect=()):
+    return make_task(tmp_path, expect=expect, stimulus=stimulus, boot_expect=boot_expect)
 
 
 def _run_wokwi_fake(tmp_path, task, serial):
@@ -537,11 +539,13 @@ def test_wokwi_no_input_echo_is_fail_open_residual(tmp_path):
 
 def test_wokwi_startup_banner_exempt_from_pre_printed(tmp_path):
     # PR #92 review blocker: uart-echo/protocol/protocol-retry print a boot
-    # banner that IS in expect, before any stimulus - legit, not a dump
+    # banner that IS in expect, before any stimulus - legit, not a dump; the
+    # task declares the banner via boot_expect
     task = _wokwi_task(
         tmp_path,
         expect=("echo ready", "echo: hello", "echo: world"),
         stimulus=('write-serial: "hello\\r"', 'write-serial: "world\\r"'),
+        boot_expect=("echo ready",),
     )
     serial = (
         "paste mode\nprint('hi')\necho ready\nhello\necho: hello\n"
@@ -552,12 +556,13 @@ def test_wokwi_startup_banner_exempt_from_pre_printed(tmp_path):
 
 
 def test_wokwi_answers_before_input_echo_condemned_despite_banner(tmp_path):
-    # only the startup banner (first segment line) is exempt: answers printed
-    # before the input echo remain a dump
+    # the declared banner is exempt; answers printed before the input echo
+    # remain a dump
     task = _wokwi_task(
         tmp_path,
         expect=("echo ready", "echo: hello", "echo: world"),
         stimulus=('write-serial: "hello\\r"', 'write-serial: "world\\r"'),
+        boot_expect=("echo ready",),
     )
     serial = (
         "paste mode\nprint('hi')\necho ready\necho: hello\necho: world\n"
@@ -577,6 +582,43 @@ def test_wokwi_verdict_requires_engaged_trim(tmp_path):
     res = _run_wokwi_fake(tmp_path, task, serial)
     assert res.passed, f"no-trim run must pass: {res.error!r}"
     assert not (res.error or "").startswith("anti-cheat:")
+
+
+def test_wokwi_glued_banner_dump_condemned(tmp_path):
+    # PR #92 round-2: only boot_expect literals are exempt - a cheater
+    # gluing every expected literal onto the banner line ("proto v1 state: on
+    # state: off ERR unknown" - protocol shape) is condemned: 'state: on' etc.
+    # are not declared startup output
+    task = _wokwi_task(
+        tmp_path,
+        expect=("proto v1", "state: on", "state: off", "ERR unknown"),
+        stimulus=('write-serial: "1\\r"', 'write-serial: "2\\r"', 'write-serial: "x\\r"'),
+        boot_expect=("proto v1",),
+    )
+    serial = (
+        "paste mode\nprint('hi')\n"
+        "proto v1 state: on state: off ERR unknown\n"
+        "1\nstate: on\n2\nstate: off\nx\nERR unknown\n"
+    )
+    res = _run_wokwi_fake(tmp_path, task, serial)
+    assert not res.passed, f"glued banner dump passed: {res.error!r}"
+    assert (res.error or "").startswith("anti-cheat:")
+
+
+def test_wokwi_exact_banner_still_exempt(tmp_path):
+    # the declared banner stays exempt wherever it is printed (protocol shape)
+    task = _wokwi_task(
+        tmp_path,
+        expect=("proto v1", "state: on", "state: off", "ERR unknown"),
+        stimulus=('write-serial: "1\\r"', 'write-serial: "2\\r"', 'write-serial: "x\\r"'),
+        boot_expect=("proto v1",),
+    )
+    serial = (
+        "paste mode\nprint('hi')\nproto v1\n"
+        "1\nstate: on\n2\nstate: off\nx\nERR unknown\n"
+    )
+    res = _run_wokwi_fake(tmp_path, task, serial)
+    assert res.passed, f"exact banner condemned: {res.error!r} missed={res.missed}"
 
 
 def test_wokwi_pre_printed_anchor_exact_on_crlf(tmp_path):

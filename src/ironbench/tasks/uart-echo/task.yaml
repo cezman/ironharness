@@ -12,6 +12,8 @@ expect:
   - 'echo ready'
   - 'echo: hello'
   - 'echo: world'
+boot_expect:
+  - 'echo ready'
 fail:
   - 'Traceback'
 stimulus:

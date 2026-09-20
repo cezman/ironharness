@@ -17,6 +17,8 @@ expect:
   - 'ACK hello'
   - 'NAK'
   - 'ACK world'
+boot_expect:
+  - 'proto checksum'
 fail:
   - 'Traceback'
 stimulus:
