@@ -178,6 +178,8 @@ def test_golden_tasks_all_load_and_include_expectations():
         "pid-antiwindup",
         "system-id",
         "bme-read",
+        "cross-sensor",
+        "bus-diagnose",
     } <= names
 
 
@@ -221,6 +223,11 @@ def test_bus_diagnose_is_real_target_with_notes():
     # the scan report is pinned with an escaped bracket class, not a bare
     # literal (a bare 'SCAN=[60, 118]' regex is a char class matching 'SCAN=6')
     assert r"SCAN=\[60, 118\]" in task.expect
+    # the healthy report lines are pinned in full: a partial revert of the
+    # bench-state coupling (one line left from the degraded variant) must
+    # fail here, not only on the live bench
+    assert "MISSING=none" in task.expect
+    assert "STATUS=ok" in task.expect
     assert "ENODEV" in task.fail
     assert "Traceback" in task.fail
 
