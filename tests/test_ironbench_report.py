@@ -57,6 +57,36 @@ def test_build_report_pass_at_k(tmp_path):
     assert report["tasks"] == ["a", "b"]
 
 
+def test_reliability_excludes_infra_and_pass_at_1(tmp_path):
+    # IH-81 (review): pass^k reliability counted infra attempts against the
+    # denominator (solved == attempts) - a pair with an infra attempt could
+    # never be reliable even when every LIVE attempt solved. pass@1 (the
+    # attempt-level estimate) lands next to the pair-level pass@k.
+    write_results(
+        tmp_path,
+        [
+            {"model": "m", "task": "a", "attempt": 1, "solved": True, "iterations": 1},
+            {
+                "model": "m",
+                "task": "a",
+                "attempt": 2,
+                "solved": False,
+                "iterations": 1,
+                "error_kind": "infra",
+            },
+            {"model": "m", "task": "b", "attempt": 1, "solved": False, "iterations": 5},
+        ],
+    )
+    report = build_report(tmp_path)
+    groups = {g["task"]: g for g in report["groups"]}
+    # pair a: the single LIVE attempt solved, the infra attempt does not
+    # count against all_solved
+    assert groups["a"]["all_solved"] is True
+    assert report["pass_at_k_reliability"] == 0.5
+    assert report["pass_at_1"] == 0.5  # attempt-level: (1/1 + 0/1) / 2
+    assert report["pass_at_k"] == 0.5  # pair-level: a solved at least once
+
+
 def test_build_report_empty(tmp_path):
     tmp_path.mkdir(exist_ok=True)
     report = build_report(tmp_path)
@@ -134,7 +164,8 @@ def test_report_html_renders_profile_table(tmp_path):
 
 def test_report_includes_pass_k_reliability(tmp_path):
     """IH-67: pass^k (reliability) - the fraction of (model, task) groups
-    where ALL attempts solved. Bounded per-group, honest for flaky boards:
+    where all LIVE attempts solved (IH-81: infra attempts are excluded from
+    the comparison). Bounded per-group, honest for flaky boards:
     a group with one failed attempt out of three drops out of reliability
     but stays in pass@k."""
     import json as _json
