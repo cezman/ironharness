@@ -44,3 +44,10 @@ stimulus:
   - wait-serial: "SUM=6"
   - write-serial: "3\r"           # exit
   - wait-serial: "BYE"
+# Expert notes from the live bench (2026-09-20, IH-21 A/B difficulty knob):
+# fed to the solve agent's prompt; the fact is recorded in results.jsonl
+# (benchmark honesty, IH-21).
+notes:
+  - 'The serial console IS the USB REPL: read with input() and answer with print() - machine.UART is an unrelated, unwired bus on this board.'
+  - 'input() returns the line without its trailing newline; an "empty line" is input() == "".'
+  - 'Print the labels EXACTLY as specified: "MENU 1=greet 2=sum 3=quit", "NAME?", "HELLO <name>", "NUMS?", "SUM=<n>", "ERR", "BYE" - the checker matches them literally.'
