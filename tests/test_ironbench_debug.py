@@ -27,6 +27,7 @@ def test_debug_tasks_exist():
         "debug-hysteresis",
         "debug-pinlock",
         "debug-ringbuf",
+        "debug-station",
     ]
 
 
@@ -46,11 +47,26 @@ def test_golden_differs_from_buggy(task):
     assert solution != buggy
 
 
+def test_debug_station_fix_is_not_leaked_by_the_description():
+    # IH-97: the datasheet register map ships in the notes (reference data,
+    # IH-65 knowledge-before-the-error), but the description itself - the
+    # runner-visible prompt - must not hand over the corrected read
+    task = next(t for t in DEBUG_TASKS if t.name == "debug-station")
+    assert "0x88" not in task.description
+    assert task.target == "real"
+    assert task.tags == ("debug",)
+
+
 @pytest.mark.parametrize("task", DEBUG_TASKS, ids=lambda t: t.name)
 def test_buggy_firmware_fails_its_own_task(task, tmp_path, wsl_unix_ready):
     # The point of a debug task: the shipped bug is detectable. The buggy
     # firmware is run as the entry - it must not pass (missing expects and/or
     # a fail pattern like 'alarm').
+    if task.target != "unix":
+        pytest.skip(
+            "unix-runner detectability; non-unix debug goldens pin it against "
+            "their own fakes (test_ironbench_real.py) and live validation"
+        )
     if not wsl_unix_ready:
         pytest.skip("needs a WSL distro with micropython")
     buggy = dataclasses.replace(task, entry="buggy.py")
