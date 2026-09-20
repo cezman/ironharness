@@ -608,3 +608,50 @@ def test_run_named_task_with_all_flag_does_not_need_allow_real(tmp_path, capsys)
     )
     assert rc != 2
     assert "--allow-real" not in capsys.readouterr().out
+
+
+# --- paid lesson 2026-09-20: the cooked REPL auto-indents after a colon ---
+
+
+def test_cooked_mode_writes_never_open_a_block():
+    """The live board (2026-09-20): the MicroPython cooked REPL auto-indents
+    after a colon line; a hand-indented multi-line block never executes and
+    the board sits in the line editor where Ctrl+D/Ctrl+E are dead - staging
+    died with "did not enter paste mode". Every cooked-mode write in realhw
+    (REMOVE_MAIN, the backup probe) must stay colon-free, so each line
+    executes immediately at the prompt. Staging code is exempt: it is pasted
+    inside paste mode, where no auto-indent exists."""
+    assert b":" not in realhw.REMOVE_MAIN
+    for line in realhw._BACKUP_PROBE_LINES:
+        assert b":" not in line, (
+            "a colon in a cooked-mode write opens a REPL block the board "
+            "never leaves (live failure 2026-09-20)"
+        )
+
+
+def test_backup_main_survives_block_sinking_repl(tmp_path):
+    """Behavioral pin: a REPL that sinks into block mode on the first colon
+    byte (the live quirk) must still answer the probe, because the shipped
+    probe opens no block. The fake swallows every cooked chunk after a colon
+    until Ctrl+C - exactly what the live board did to the old try/except."""
+
+    class BlockSinkBoard(FakeBoard):
+        def __init__(self):
+            super().__init__()
+            self._sunk = False
+
+        def write(self, data: bytes) -> int:
+            text = data.decode("utf-8", "replace")
+            if "\x03" in text:
+                self._sunk = False
+            elif not self._paste_mode and ":" in text:
+                self._sunk = True  # block mode: nothing executes anymore
+            if self._sunk:
+                return len(data)  # swallowed - no echo, no execution
+            return super().write(data)
+
+    repl = RealRepl(BlockSinkBoard())
+    out = tmp_path / "art"
+    status = repl._backup_main(out)
+    assert status == "saved"
+    assert (out / "main.py.backup").read_bytes() == b"print('old firmware')\n"
