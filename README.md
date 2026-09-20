@@ -21,6 +21,19 @@ An agent harness for I/O and firmware. Two modules:
 - **ironbench** — a benchmark for firmware agents: golden tasks in simulators
   (Wokwi ESP32/MicroPython, plus Renode), an agent loop over an OpenAI-compatible chat API, pass@k reports.
 
+**Who it is for.** Developers building agents that drive real hardware — serial
+instruments, Modbus devices, ESP32-class boards — and anyone measuring what LLM
+agents can actually do on firmware, on a simulator and on a live board.
+
+**What is measured and why the numbers can be trusted.** A task counts as solved
+only when a *runner* verifies the firmware's observable behavior (serial protocol,
+pin timing, sensor values) — not when strings look right. Scoring sits on
+anticheat anchors (wait-serial ingestion stamps, canonical verdicts, byte-capped
+logs); every I/O operation lands in a JSONL journal; every attempt carries a
+structured `error_kind`, so environment failures are excluded from the rates
+instead of silently inflating them; raw per-attempt data is published with every
+leaderboard generation so the numbers can be re-checked.
+
 ## Quick start
 
 ```bash
@@ -74,7 +87,9 @@ failures (disconnect, delay, bit corruption, byte loss) over any transport — a
 
 ```bash
 uv run ironbench list                              # catalog of golden tasks
-uv run ironbench run --all                         # reference runs (needs WOKWI_CLI_TOKEN)
+uv run ironbench run --task uart-echo              # one reference run (wokwi tasks need WOKWI_CLI_TOKEN)
+uv run ironbench run --all --allow-real            # all tasks in one pass; without --allow-real
+                                                   #   this refuses - staging wipes main.py on live boards
 uv run ironbench solve --task blink --attempts 3   # an LLM agent solves a task
 uv run ironbench report                            # pass@k: report.json + report.html
 ```
@@ -92,6 +107,12 @@ Every task has a class (io/data/protocol/fsm/control/
 resilience/debug) and a level 1–5; `ironbench report` shows a model's profile across
 classes, not a single number. LLM config — environment variables: `LLM_BASE_URL`
 (default: local LM Studio), `LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT`.
+
+Live numbers: the [leaderboard](https://cezman.github.io/ironharness/), archived
+generations with pinned criteria and raw per-attempt data
+([generations](https://cezman.github.io/ironharness/generations/)), and the case
+study from the live board: [3 lines of expert notes — 4/4 solves on the first
+iteration vs 2/4 with the full 5-iteration budget at 10x the wall time](https://cezman.github.io/ironharness/case-study-notes-ab.html).
 
 ## Safety / intended use
 
@@ -112,10 +133,19 @@ classes, not a single number. LLM config — environment variables: `LLM_BASE_UR
   directory (relative writes stay inside the run artifacts), but they can read
   or write anything the user can. Only run tasks from authors you trust; for
   hostile code use a VM or a container.
+- **Live-board benchmark runs are opt-in and bounded**: `--target real` needs
+  `IRONBENCH_REAL_PORT`; every run is deadline-limited; staging a task onto the
+  board backs the board's `main.py` up into the run artifacts before wiping it,
+  and a bulk `run --all` refuses to proceed without `--allow-real`.
 - **Known measurement caveat**: the firmware's serial output is fed back into
   the solving model's prompt as feedback. It cannot flip the PASS/FAIL verdict
   (scoring is done by the runner), but a model can be steered by its own
   firmware's output - an accepted distortion of the benchmark.
+- **Anticheat boundary (wokwi)**: on the wokwi target, expect/fail patterns are
+  scored against the whole serial log — a "solution" that merely prints the
+  expected lines is not caught there by the wait-serial anchor (the unix and real
+  targets have it). The gap is documented, not hidden; the published leaderboard
+  generations contain no wokwi-scored runs.
 - **Serial ports are whitelisted to local ports only** — `COM*`, `/dev/tty*`,
   `/dev/pts/*`, `loop://`, `pty://`. pyserial also supports network URLs
   (`socket://host:port` is an outbound TCP connection, `rfc2217://` is remote
@@ -138,5 +168,6 @@ classes, not a single number. LLM config — environment variables: `LLM_BASE_UR
 
 ## Status
 
-MVP under active development. Example benchmark results live in [`reports/`](reports/)
-— recorded runs (JSON + HTML, open in a browser).
+MVP under active development. Recorded benchmark results live on
+[gh-pages](https://cezman.github.io/ironharness/): the leaderboard, archived
+generations with raw per-attempt data, and the expert-notes case study.
