@@ -42,9 +42,12 @@ class FakeBoard:
         self.main_py = b"print('old firmware')\n"
         self._acc = ""
 
-    def _emit(self, text: str) -> None:
+    def _emit_bytes(self, data: bytes) -> None:
         with self._lock:
-            self._buf += text.encode("utf-8")
+            self._buf += data
+
+    def _emit(self, text: str) -> None:
+        self._emit_bytes(text.encode("utf-8"))
 
     def write(self, data: bytes) -> int:
         text = data.decode("utf-8", "replace")
@@ -498,36 +501,37 @@ def test_real_run_backs_up_main_py_with_echoing_board(tmp_path):
 def test_backup_main_waits_for_full_answer_line(tmp_path):
     # IH-79 review: the answer line trickles in at line rate - parsing it
     # mid-line saved a truncated backup with status saved (fromhex accepts
-    # an even-length prefix)
-    class Trickle:
-        """Answers only after the probe is written; the answer line arrives
-        in two reads - half, then the tail with the newline (line rate)."""
+    # an even-length prefix). The tail arrives in REAL TIME (threading
+    # Timer): a read()-bound split would be drained by a single _pump and
+    # never cross the poll boundary.
+    import threading
 
-        def __init__(self, main_py):
+    main_py = b"ab" * 300 + b"cd" * 10  # 620 hex chars - a real-size line
+
+    class Trickle(FakeBoard):
+        def __init__(self):
+            super().__init__()
             self.main_py = main_py
-            self.probe_seen = False
             self._probe = b""
-            self._answer = b""
+            self._answered = False
 
         def write(self, data):
             import binascii
 
             self._probe += data
-            # the trigger literal can straddle a 24-byte write chunk
-            if b"UP-ABSENT')" in self._probe:
-                self.probe_seen = True
-                self._answer = b"IH-BACKUP " + binascii.hexlify(self.main_py) + b"\r\n"
+            if b"UP-ABSENT')" in self._probe and not self._answered:
+                self._answered = True
+                answer = b"IH-BACKUP " + binascii.hexlify(self.main_py) + b"\r\n"
+                half = len(answer) // 2
+                self._emit_bytes(answer[:half])
+                threading.Timer(0.4, self._emit_bytes, args=(answer[half:],)).start()
             return len(data)
 
-        def read(self, size=256):
-            chunk, self._answer = self._answer[:256], self._answer[256:]
-            return chunk
-
-    repl = RealRepl(Trickle(b"ab" * 300 + b"cd" * 10))
+    repl = RealRepl(Trickle())
     out = tmp_path / "art"
     status = repl._backup_main(out)
     assert status == "saved"
-    assert (out / "main.py.backup").read_bytes() == b"ab" * 300 + b"cd" * 10
+    assert (out / "main.py.backup").read_bytes() == main_py
 
 
 def test_real_run_backs_up_main_py(tmp_path):
