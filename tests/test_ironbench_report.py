@@ -78,10 +78,12 @@ def test_reliability_excludes_infra_and_pass_at_1(tmp_path):
         ],
     )
     report = build_report(tmp_path)
-    # pair a: both LIVE attempts solved (the infra attempt does not count
-    # against reliability) - pair b: unsolved
+    groups = {g["task"]: g for g in report["groups"]}
+    # pair a: the single LIVE attempt solved, the infra attempt does not
+    # count against all_solved
+    assert groups["a"]["all_solved"] is True
     assert report["pass_at_k_reliability"] == 0.5
-    assert report["pass_at_1"] == 0.5  # attempt-level: (2/2 + 0/1) / 2
+    assert report["pass_at_1"] == 0.5  # attempt-level: (1/1 + 0/1) / 2
     assert report["pass_at_k"] == 0.5  # pair-level: a solved at least once
 
 

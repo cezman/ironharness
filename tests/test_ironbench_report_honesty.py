@@ -55,6 +55,11 @@ def test_all_infra_pair_is_incomplete_and_excluded_from_pass_at_k(tmp_path):
     # pass@k counts only live pairs: 1 of 1 solved = 1.0 (broken-env says
     # nothing about the model - counting it would fake a 0.5)
     assert report["pass_at_k"] == 1.0
+    # IH-81: an all-infra pair is excluded from reliability and pass@1 via
+    # the complete-filter - without it the new formulas would count the
+    # all-infra pair as "reliable 0/0" and drag pass@1 to 2/3
+    assert report["pass_at_k_reliability"] == 1.0
+    assert report["pass_at_1"] == 1.0
     broken = next(g for g in report["groups"] if g["task"] == "broken-env")
     assert broken["incomplete"] is True
     assert broken["success_rate"] is None
