@@ -192,16 +192,18 @@ class RealRepl:
                 return "absent"
             idx = text.find("IH-BACKUP ")
             if idx >= 0:
-                hex_part = text[idx + len("IH-BACKUP "):].split()
-                if hex_part:
-                    try:
-                        data = bytes.fromhex(hex_part[0])
-                    except ValueError:
-                        continue  # строка ещё доливается — ждать хвост
-                    backup_dir = Path(backup_dir)
-                    backup_dir.mkdir(parents=True, exist_ok=True)
-                    (backup_dir / "main.py.backup").write_bytes(data)
-                    return "saved"
+                rest = text[idx + len("IH-BACKUP "):]
+                nl = rest.find("\n")
+                if nl < 0:
+                    continue  # the answer line is still trickling in - wait
+                try:
+                    data = bytes.fromhex(rest[:nl].strip())
+                except ValueError:
+                    continue
+                backup_dir = Path(backup_dir)
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                (backup_dir / "main.py.backup").write_bytes(data)
+                return "saved"
         return "unknown"
 
     def _truncate_after_staging_echo(self, code: str) -> None:

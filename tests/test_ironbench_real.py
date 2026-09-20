@@ -83,6 +83,14 @@ class FakeBoard:
             self._started = False  # гигиена: прошивка прошлой задачи снесена
             self.main_py = None
             return
+        if self._paste_mode:
+            # the REPL does not execute paste lines - the probe branch below
+            # must not fire while paste mode is on
+            if not self._paste_buf:
+                self._emit("=== ")
+            self._paste_buf += line
+            self._emit(line + "\r\n")
+            return
         if "binascii.hexlify" in line:
             # IH-79 backup probe: the try/except answers per main.py presence
             if self.main_py is None:
@@ -487,6 +495,41 @@ def test_real_run_backs_up_main_py_with_echoing_board(tmp_path):
     assert backups[0].read_bytes() == b"print('old firmware')\n"
 
 
+def test_backup_main_waits_for_full_answer_line(tmp_path):
+    # IH-79 review: the answer line trickles in at line rate - parsing it
+    # mid-line saved a truncated backup with status saved (fromhex accepts
+    # an even-length prefix)
+    class Trickle:
+        """Answers only after the probe is written; the answer line arrives
+        in two reads - half, then the tail with the newline (line rate)."""
+
+        def __init__(self, main_py):
+            self.main_py = main_py
+            self.probe_seen = False
+            self._probe = b""
+            self._answer = b""
+
+        def write(self, data):
+            import binascii
+
+            self._probe += data
+            # the trigger literal can straddle a 24-byte write chunk
+            if b"UP-ABSENT')" in self._probe:
+                self.probe_seen = True
+                self._answer = b"IH-BACKUP " + binascii.hexlify(self.main_py) + b"\r\n"
+            return len(data)
+
+        def read(self, size=256):
+            chunk, self._answer = self._answer[:256], self._answer[256:]
+            return chunk
+
+    repl = RealRepl(Trickle(b"ab" * 300 + b"cd" * 10))
+    out = tmp_path / "art"
+    status = repl._backup_main(out)
+    assert status == "saved"
+    assert (out / "main.py.backup").read_bytes() == b"ab" * 300 + b"cd" * 10
+
+
 def test_real_run_backs_up_main_py(tmp_path):
     task = make_real_task(tmp_path)
     res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeBoard())
@@ -538,3 +581,26 @@ def test_run_all_refuses_real_tasks_without_allow_real(tmp_path, capsys):
     assert rc == 2
     out = capsys.readouterr().out
     assert "--allow-real" in out and "wipes main.py" in out
+
+
+def test_run_named_task_with_all_flag_does_not_need_allow_real(tmp_path, capsys):
+    # IH-79 review nit: the gate keys on the bulk selection, not the flag
+    # combination - a named task stays explicit even with --all present
+    from ironbench.cli import main as cli_main
+
+    (tmp_path / "tasks").mkdir()
+    make_real_task(tmp_path / "tasks")
+    rc = cli_main(
+        [
+            "run",
+            "--task",
+            "fake",
+            "--all",
+            "--tasks-dir",
+            str(tmp_path / "tasks"),
+            "--out",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert rc != 2
+    assert "--allow-real" not in capsys.readouterr().out
