@@ -164,8 +164,10 @@ def _pre_printed_error(text: str, task: Task) -> str | None:
 
     Fail-open residuals (documented, marked non-equivalent on the leaderboard,
     never guessed here): a log without a payload echo (script-mode stdin
-    without echo); regex-only expect patterns; multi-line payloads; CRLF is
-    normalized once, so offsets stay exact.
+    without echo); regex-only expect patterns; multi-line payloads; a dump
+    printed only AFTER the first payload echo (the single-anchor design -
+    per-step anchors would false-condemn honest answers between neighbouring
+    stimuli); CRLF is normalized once, so offsets stay exact.
     """
     text = text.replace("\r\n", "\n")
     lines = text.splitlines()

@@ -124,12 +124,17 @@ class FakeBoard:
         self.closed = True
 
 
-def make_real_task(tmp_path, entry=ECHO_ENTRY, stimulus=(), expect=("echo ready",)):
+def make_real_task(tmp_path, entry=ECHO_ENTRY, stimulus=(), expect=("echo ready",), fail=()):
     d = tmp_path / "t"
     d.mkdir(exist_ok=True)
+    # json.dumps, not repr(): the line is parsed as a YAML double-quoted
+    # scalar, and repr's backslash doubling would turn a regex like
+    # SCAN=\[118\] into a double-backslash literal that matches nothing
     text = "name: fake\ntarget: real\ntimeout_sec: 2\nentry: main.py\nexpect:\n" + "".join(
-        f"  - {p!r}\n" for p in expect
+        f"  - {json.dumps(p)}\n" for p in expect
     )
+    if fail:
+        text += "fail:\n" + "".join(f"  - {json.dumps(p)}\n" for p in fail)
     if stimulus:
         text += "stimulus:\n" + "\n".join(f"  - {s}" for s in stimulus) + "\n"
     (d / "task.yaml").write_text(text, encoding="utf-8")
@@ -693,3 +698,139 @@ def test_full_boot_survives_block_sinking_repl(tmp_path):
         assert "echo ready" in repl.output(), "staged firmware must run to completion"
     finally:
         repl.close()
+
+
+# --- IH-91: bus-diagnose - degradation diagnosis on the live bench ---
+
+
+class FakeDiagBoard(FakeBoard):
+    """A REPL running the bus-diagnose protocol: "bus ready" at boot, one
+    diagnosis round per received line. The emulated bus answers [118]
+    (BME280 at 0x76) while the expected OLED at 0x3C is absent - the state
+    the golden's expects pin. Modes model the firmware kinds the bench must
+    tell apart: honest (scans and reports), boot_dumps (prints the whole
+    diagnosis at boot and ignores input - the stamp anchor must condemn
+    it), healthy_hardcode (reports the healthy bus - the prompt never says
+    WHICH device is gone, so firmware that guesses instead of scanning
+    fails on the missed expect), crasher (dies at boot with the real
+    station's unhandled ENODEV traceback - the fail patterns must fire),
+    silent (answers nothing - an honest miss, no anti-cheat verdict).
+    """
+
+    BOOT = "bus ready\r\n"
+    DIAG = "SCAN=[118] MISSING=0x3C\r\nSTATUS=degraded\r\n"
+    CRASH = (
+        "Traceback (most recent call last):\r\n"
+        '  File "main.py", line 4, in <module>\r\n'
+        "OSError: [Errno 19] ENODEV\r\n"
+    )
+
+    def __init__(self, mode: str = "honest") -> None:
+        super().__init__()
+        self._mode = mode
+
+    def _answer(self) -> None:
+        if self._mode == "healthy_hardcode":
+            self._emit("SCAN=[60, 118] MISSING=none\r\nSTATUS=ok\r\n")
+        else:
+            self._emit(self.DIAG)
+
+    def write(self, data: bytes) -> int:
+        text = data.decode("utf-8", "replace")
+        if "\x04" in text and self._paste_mode and self._paste_buf:
+            self._paste_mode = False
+            self._paste_buf = ""
+            if self._mode == "crasher":
+                self._emit(self.BOOT + self.CRASH)
+                return len(data)
+            self._started = True
+            self._emit(self.BOOT)
+            if self._mode == "boot_dumps":
+                self._emit(self.DIAG)
+            return len(data)
+        if (
+            self._started
+            and not self._paste_mode
+            and "\x03" not in text
+            and "main.py" not in text
+            and self._mode not in ("boot_dumps", "silent")
+        ):
+            if any(line.strip() for line in text.splitlines()):
+                self._answer()
+            return len(data)
+        return super().write(data)
+
+
+DIAG_TASK_KWARGS = {
+    "entry": (
+        "print('bus ready')\n"
+        "while True:\n"
+        "    if not input().strip():\n"
+        "        continue\n"
+        "    print('SCAN=[118] MISSING=0x3C')\n"
+        "    print('STATUS=degraded')\n"
+    ),
+    "stimulus": ('write-serial: "diag\\n"', 'wait-serial: "MISSING="'),
+    "expect": ("bus ready", r"SCAN=\[118\]", "MISSING=0x3C", "STATUS=degraded"),
+    "fail": ("Traceback", "ENODEV"),
+}
+
+
+def test_real_target_golden_bus_diagnose_passes(tmp_path):
+    task = make_real_task(tmp_path, **DIAG_TASK_KWARGS)
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeDiagBoard())
+    assert res.passed, res.missed or res.error
+
+
+def test_bus_diagnose_boot_dump_cheater_fails(tmp_path):
+    # the diagnosis printed at boot (before the "diag" request) trips the
+    # IH-14 chunk-stamp anchor: a pre-printed answer is a cheat verdict
+    # (error_kind "run"), so solve keeps iterating
+    task = make_real_task(tmp_path, **DIAG_TASK_KWARGS)
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeDiagBoard(mode="boot_dumps"))
+    assert not res.passed
+    assert "anti-cheat" in (res.error or "")
+    assert res.error_kind == "run"
+    assert not is_infra_error(res)
+
+
+def test_bus_diagnose_healthy_guess_fails(tmp_path):
+    # the prompt names the EXPECTED device set only - firmware that guesses
+    # the healthy answer instead of scanning the bus misses the pinned
+    # degraded expects (this is what makes the task a diagnosis, not a
+    # copy-from-description exercise)
+    task = make_real_task(tmp_path, **DIAG_TASK_KWARGS)
+    res = run_task(
+        task, out_dir=tmp_path / "out", real_transport=FakeDiagBoard(mode="healthy_hardcode")
+    )
+    assert not res.passed
+    assert res.error is None  # honest miss, not a cheat verdict
+    assert "MISSING=0x3C" in res.missed
+    assert "STATUS=degraded" in res.missed
+
+
+def test_bus_diagnose_crasher_fails_on_fail_patterns(tmp_path):
+    # the real station's failure mode: firmware inits the absent OLED, the
+    # unhandled ENODEV traceback kills main.py - the fail patterns must
+    # fire, not merely the missed expects
+    task = make_real_task(tmp_path, **DIAG_TASK_KWARGS)
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeDiagBoard(mode="crasher"))
+    assert not res.passed
+    assert res.hit_fail == ("Traceback", "ENODEV")
+
+
+def test_bus_diagnose_no_answer_is_honest_miss(tmp_path):
+    task = make_real_task(tmp_path, **DIAG_TASK_KWARGS)
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeDiagBoard(mode="silent"))
+    assert not res.passed
+    assert res.error is None
+    assert any("MISSING=" in m for m in res.missed)
+
+
+def test_make_real_task_roundtrips_regex_backslashes(tmp_path):
+    # the class fix (IH-91): the helper's pattern lines are YAML double-quoted
+    # scalars built with json.dumps - a regex with backslashes must reach
+    # load_task intact (repr doubled them into a non-matching literal; found
+    # while authoring bus-diagnose, whose SCAN pattern needs \[)
+    task = make_real_task(tmp_path, expect=(r"SCAN=\[118\]", r"T=\d\.\d"))
+    assert task.expect == (r"SCAN=\[118\]", r"T=\d\.\d")

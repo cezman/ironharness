@@ -44,9 +44,10 @@ def make_task(tmp_path, expect=("blink 0: on",), fail=(), write_entry=True, stim
     d.mkdir()
     text = "name: fake\n"
     if expect:
-        text += "expect:\n" + "".join(f"  - {p!r}\n" for p in expect)
+        # json.dumps, not repr(): backslashes must survive the YAML roundtrip
+        text += "expect:\n" + "".join(f"  - {json.dumps(p)}\n" for p in expect)
     if fail:
-        text += "fail:\n" + "".join(f"  - {p!r}\n" for p in fail)
+        text += "fail:\n" + "".join(f"  - {json.dumps(p)}\n" for p in fail)
     if stimulus:
         text += "stimulus:\n" + "\n".join(f"  - {s}" for s in stimulus) + "\n"
     if boot_expect:

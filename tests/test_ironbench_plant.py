@@ -133,8 +133,9 @@ expect:
 """
     text = textwrap.dedent(text)
     expect = task_overrides.get("expect", ())
+    # json.dumps, not repr(): backslashes must survive the YAML roundtrip
     text += (
-        "".join(f"  - {p!r}\n" for p in expect) if expect else "  []\n"  # an empty expect is valid
+        "".join(f"  - {json.dumps(p)}\n" for p in expect) if expect else "  []\n"  # an empty expect is valid
     )
     (d / "task.yaml").write_text(text, encoding="utf-8")
     (d / "solution.py").write_text(controller, encoding="utf-8")

@@ -55,7 +55,8 @@ target: unix
 timeout_sec: {timeout_sec}
 expect:
 """
-    text += "".join(f"  - {p!r}\n" for p in expect)
+    # json.dumps, not repr(): backslashes must survive the YAML roundtrip
+    text += "".join(f"  - {json.dumps(p)}\n" for p in expect)
     if stimulus:
         text += "stimulus:\n" + "\n".join(f"  - {s}" for s in stimulus) + "\n"
     (d / "task.yaml").write_text(textwrap.dedent(text), encoding="utf-8")
@@ -495,7 +496,7 @@ timeout_sec: {timeout_sec}
 {noise_yaml}
 expect:
 """
-    text += "".join(f"  - {p!r}\n" for p in expect)
+    text += "".join(f"  - {json.dumps(p)}\n" for p in expect)
     text += "stimulus:\n" + "\n".join(f"  - {s}" for s in stimulus) + "\n"
     (d / "task.yaml").write_text(textwrap.dedent(text), encoding="utf-8")
     (d / "solution.py").write_text('print("hi")\n', encoding="utf-8")
