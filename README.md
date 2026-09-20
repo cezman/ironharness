@@ -115,7 +115,7 @@ be run on a simulator and on hardware — that contrast is what `real` is for;
 can carry expert `notes:` from the bench - they are fed into the solve agent's
 prompt, and the has-notes fact is recorded in results.jsonl.
 Every task has a class (io/data/protocol/fsm/control/
-resilience/debug) and a level 1–5; `ironbench report` shows a model's profile across
+resilience/debug) and a level 1–5; `python -m ironbench.cli report` shows a model's profile across
 classes, not a single number. LLM config — environment variables: `LLM_BASE_URL`
 (default: local LM Studio), `LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT`.
 

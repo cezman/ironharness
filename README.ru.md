@@ -110,7 +110,7 @@ system-id) и **живая плата** (`--target real`: MicroPython REPL по 
 на этом контрасте `real` и построен; `bme-read` (датчик BME280 по I2C) оценивается только
 на живой плате. Задача может нести экспертные `notes:` со стенда — они попадают в промпт
 solve-агента, а факт «с notes / без» фиксируется в results.jsonl. У каждой задачи класс
-(io/data/protocol/fsm/control/resilience/debug) и уровень 1–5; `ironbench report`
+(io/data/protocol/fsm/control/resilience/debug) и уровень 1–5; `python -m ironbench.cli report`
 показывает профиль модели по классам, а не одно число. LLM-конфиг — переменные окружения:
 `LLM_BASE_URL` (по умолчанию локальный LM Studio), `LLM_MODEL`, `LLM_API_KEY`,
 `LLM_TIMEOUT`.

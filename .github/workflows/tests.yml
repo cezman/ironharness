@@ -57,6 +57,7 @@ jobs:
         run: |
           python - <<'PY'
           import glob
+          import tarfile
           import zipfile
 
           wheel = zipfile.ZipFile(glob.glob("dist/ironharness-*.whl")[0])
@@ -68,8 +69,8 @@ jobs:
           text = wheel.read(entry).decode()
           assert "ironharness-mcp" in text, "MCP entry point missing"
           assert "ironbench" not in text, "ironbench console script must not ship in the wheel"
-          sdist = zipfile.ZipFile(glob.glob("dist/ironharness-*.tar.gz")[0])
-          assert any("src/ironbench" in n for n in sdist.namelist()), \
+          sdist = tarfile.open(glob.glob("dist/ironharness-*.tar.gz")[0])
+          assert any("src/ironbench" in n for n in sdist.getnames()), \
               "sdist must keep the benchmark sources (bench ships from source)"
           print("wheel core-only, sdist complete: ok")
           PY
