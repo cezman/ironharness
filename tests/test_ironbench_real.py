@@ -700,25 +700,27 @@ def test_full_boot_survives_block_sinking_repl(tmp_path):
         repl.close()
 
 
-# --- IH-91: bus-diagnose - degradation diagnosis on the live bench ---
+# --- IH-91/93: bus-diagnose - degradation diagnosis on the live bench ---
 
 
 class FakeDiagBoard(FakeBoard):
     """A REPL running the bus-diagnose protocol: "bus ready" at boot, one
-    diagnosis round per received line. The emulated bus answers [118]
-    (BME280 at 0x76) while the expected OLED at 0x3C is absent - the state
-    the golden's expects pin. Modes model the firmware kinds the bench must
-    tell apart: honest (scans and reports), boot_dumps (prints the whole
-    diagnosis at boot and ignores input - the stamp anchor must condemn
-    it), healthy_hardcode (reports the healthy bus - the prompt never says
-    WHICH device is gone, so firmware that guesses instead of scanning
-    fails on the missed expect), crasher (dies at boot with the real
-    station's unhandled ENODEV traceback - the fail patterns must fire),
-    silent (answers nothing - an honest miss, no anti-cheat verdict).
+    diagnosis round per received line. The emulated bus answers [60, 118]
+    - both expected devices (BME280 at 0x76, OLED at 0x3C) present, the
+    healthy state the golden's expects pin since IH-93. Modes model the
+    firmware kinds the bench must tell apart: honest (scans and reports),
+    boot_dumps (prints the whole diagnosis at boot and ignores input - the
+    stamp anchor must condemn it), degraded_hardcode (reports the degraded
+    bus - the prompt never says WHICH state the bus is in, so firmware
+    that guesses instead of scanning fails on the missed expect), crasher
+    (dies at boot with the station's unhandled ENODEV traceback - the
+    fail patterns must fire), silent (answers nothing - an honest miss,
+    no anti-cheat verdict).
     """
 
     BOOT = "bus ready\r\n"
-    DIAG = "SCAN=[118] MISSING=0x3C\r\nSTATUS=degraded\r\n"
+    TRUTH = "SCAN=[60, 118] MISSING=none\r\nSTATUS=ok\r\n"
+    WRONG = "SCAN=[118] MISSING=0x3C\r\nSTATUS=degraded\r\n"
     CRASH = (
         "Traceback (most recent call last):\r\n"
         '  File "main.py", line 4, in <module>\r\n'
@@ -730,10 +732,10 @@ class FakeDiagBoard(FakeBoard):
         self._mode = mode
 
     def _answer(self) -> None:
-        if self._mode == "healthy_hardcode":
-            self._emit("SCAN=[60, 118] MISSING=none\r\nSTATUS=ok\r\n")
+        if self._mode == "degraded_hardcode":
+            self._emit(self.WRONG)
         else:
-            self._emit(self.DIAG)
+            self._emit(self.TRUTH)
 
     def write(self, data: bytes) -> int:
         text = data.decode("utf-8", "replace")
@@ -746,7 +748,7 @@ class FakeDiagBoard(FakeBoard):
             self._started = True
             self._emit(self.BOOT)
             if self._mode == "boot_dumps":
-                self._emit(self.DIAG)
+                self._emit(self.TRUTH)
             return len(data)
         if (
             self._started
@@ -767,11 +769,11 @@ DIAG_TASK_KWARGS = {
         "while True:\n"
         "    if not input().strip():\n"
         "        continue\n"
-        "    print('SCAN=[118] MISSING=0x3C')\n"
-        "    print('STATUS=degraded')\n"
+        "    print('SCAN=[60, 118] MISSING=none')\n"
+        "    print('STATUS=ok')\n"
     ),
     "stimulus": ('write-serial: "diag\\n"', 'wait-serial: "MISSING="'),
-    "expect": ("bus ready", r"SCAN=\[118\]", "MISSING=0x3C", "STATUS=degraded"),
+    "expect": ("bus ready", r"SCAN=\[60, 118\]", "MISSING=none", "STATUS=ok"),
     "fail": ("Traceback", "ENODEV"),
 }
 
@@ -794,19 +796,19 @@ def test_bus_diagnose_boot_dump_cheater_fails(tmp_path):
     assert not is_infra_error(res)
 
 
-def test_bus_diagnose_healthy_guess_fails(tmp_path):
+def test_bus_diagnose_degraded_guess_fails(tmp_path):
     # the prompt names the EXPECTED device set only - firmware that guesses
-    # the healthy answer instead of scanning the bus misses the pinned
-    # degraded expects (this is what makes the task a diagnosis, not a
+    # the degraded answer instead of scanning the bus misses the pinned
+    # healthy expects (this is what makes the task a diagnosis, not a
     # copy-from-description exercise)
     task = make_real_task(tmp_path, **DIAG_TASK_KWARGS)
     res = run_task(
-        task, out_dir=tmp_path / "out", real_transport=FakeDiagBoard(mode="healthy_hardcode")
+        task, out_dir=tmp_path / "out", real_transport=FakeDiagBoard(mode="degraded_hardcode")
     )
     assert not res.passed
     assert res.error is None  # honest miss, not a cheat verdict
-    assert "MISSING=0x3C" in res.missed
-    assert "STATUS=degraded" in res.missed
+    assert "MISSING=none" in res.missed
+    assert "STATUS=ok" in res.missed
 
 
 def test_bus_diagnose_crasher_fails_on_fail_patterns(tmp_path):
