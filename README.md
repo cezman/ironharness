@@ -81,7 +81,8 @@ the hands: transports, sandbox, journal, verification.
 
 For unreliable-line testing there is `io_core.faults.FaultyTransport` — scripted
 failures (disconnect, delay, bit corruption, byte loss) over any transport — and
-`io_core.mqtt_sim.MqttSimBroker`, a minimal MQTT broker for offline runs.
+`io_core.mqtt_sim.MqttSimBroker`, a minimal broker for an MQTT 3.1.1 subset, for
+offline runs.
 
 ## ironbench — a benchmark for firmware agents
 
