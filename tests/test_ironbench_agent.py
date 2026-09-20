@@ -461,3 +461,37 @@ def test_serial_feedback_without_traceback_has_no_diagnosis(tmp_path):
     log.write_text("bme ready\nread\n", encoding="utf-8")
     feedback = _serial_feedback(log)
     assert "DIAGNOSIS" not in feedback
+
+
+# --- IH-82: transient LLM errors retry, auth/config errors abort loudly ---
+
+
+def test_solve_attempt_llm_auth_error_aborts_loudly(tmp_path):
+    # IH-82: an auth/config error cannot be retried - the campaign aborts
+    # loudly instead of burning hollow attempts into pass@k
+    task = make_task()
+    cfg = SolveConfig(base_url="http://x", api_key="bad", model="m")
+
+    def llm(cfg, msgs):
+        raise OSError("401 Unauthorized: invalid api key")
+
+    with pytest.raises(SystemExit):
+        solve_attempt(task, cfg, out_dir=tmp_path, llm=llm, runner=fake_runner(True))
+
+
+def test_solve_attempt_retries_transient_llm_errors(tmp_path, monkeypatch):
+    # a transient failure is retried instead of burning the attempt
+    monkeypatch.setattr("ironbench.agent._LLM_RETRY_SLEEP", 0.0)
+    task = make_task()
+    cfg = SolveConfig(base_url="http://x", api_key="k", model="m")
+    calls = {"n": 0}
+
+    def llm(cfg, msgs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("reset by peer")
+        return GOOD_RESPONSE
+
+    res = solve_attempt(task, cfg, out_dir=tmp_path, llm=llm, runner=fake_runner(True))
+    assert res.solved and res.iterations == 1
+    assert calls["n"] == 2

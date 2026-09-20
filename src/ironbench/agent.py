@@ -29,6 +29,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+# IH-82: pause between transient LLM failures before the retry
+_LLM_RETRY_SLEEP = 2.0
+
 from ironbench.runner import (
     ERROR_INFRA,
     ERROR_NONE,
@@ -323,14 +326,32 @@ def solve_attempt(
     run_kind: str | None = None  # error_kind of the last runner verdict; None = never ran
     while iterations < cfg.max_iterations:
         iterations += 1
-        try:
-            response = llm(cfg, messages)
-        except (OSError, ValueError, LookupError, TypeError) as e:
-            # network/HTTP/broken LLM server response (incl. an empty "choices") -
-            # an attempt error, not a runner crash; for the agent this is
-            # environment-level (it cannot fix the server)
-            error = f"LLM error: {e}"
-            llm_failed = True
+        _llm_tries = 3
+        while True:
+            try:
+                response = llm(cfg, messages)
+                break
+            except (OSError, ValueError, LookupError, TypeError) as e:
+                # network/HTTP/broken LLM server response (incl. an empty "choices") -
+                # an attempt error, not a runner crash; for the agent this is
+                # environment-level (it cannot fix the server)
+                lowered = str(e).lower()
+                if any(
+                    tag in lowered for tag in ("401", "403", "unauthorized", "api key")
+                ):
+                    # IH-82: auth/config errors cannot be retried - abort the
+                    # campaign loudly instead of burning hollow attempts into
+                    # pass@k
+                    raise SystemExit(
+                        f"LLM auth/config error - aborting the campaign: {e}"
+                    ) from e
+                _llm_tries -= 1
+                if _llm_tries <= 0:
+                    error = f"LLM error: {e}"
+                    llm_failed = True
+                    break
+                time.sleep(_LLM_RETRY_SLEEP)
+        if llm_failed:
             break
         code = extract_code(response)
         if code is None:
