@@ -349,7 +349,7 @@ def test_agent_solve_results_writes_error_kind(tmp_path, monkeypatch):
     import ironbench.cli as cli_module
     from ironbench.agent import AttemptResult
 
-    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None):
+    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None, allow_real=False):
         return [
             AttemptResult(
                 task=task.name,
@@ -394,7 +394,7 @@ def test_agent_solve_results_records_notes_fact(tmp_path, monkeypatch):
     import ironbench.cli as cli_module
     from ironbench.agent import AttemptResult
 
-    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None):
+    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None, allow_real=False):
         return [
             AttemptResult(
                 task=task.name,

@@ -177,6 +177,7 @@ def run_task(
     journal=None,
     real_transport=None,
     real_port: str | None = None,
+    allow_real: bool = False,
 ) -> TaskResult:
     """Target dispatcher: wokwi/renode/unix/plant/real are implemented.
 
@@ -186,6 +187,9 @@ def run_task(
     journal - io_core.JsonlJournal: we write task_start/task_result. real:
     real_transport - a ready transport (tests, usually loop://), real_port -
     the live board's COM port (otherwise env IRONBENCH_REAL_PORT).
+    allow_real - the live-hardware opt-in (audit B): every real-target run
+    must pass it explicitly; the only exception is an injected transport
+    (offline tests never touch hardware).
     """
     # IH-38: a target swapped in after load_task (--target override) is
     # re-validated here - the enforcement point every caller shares, so a
@@ -217,6 +221,26 @@ def run_task(
     if task.target == "plant":
         return _run_plant(task, out_dir=out_dir, journal=journal)
     if task.target == "real":
+        # audit B (2026-09-20): the live-hardware gate lives in the dispatcher
+        # every caller shares - run --all, a named run and solve can no longer
+        # reach the board without the explicit opt-in. An injected transport
+        # (offline tests) is exempt by design.
+        if not allow_real and real_transport is None:
+            result = TaskResult(
+                task=task.name,
+                passed=False,
+                exit_code=None,
+                duration_sec=0.0,
+                serial_log=None,
+                missed=tuple(task.expect),
+                error=(
+                    "refused: the real target wipes main.py on the live board - "
+                    "pass --allow-real (CLI) / allow_real=True (library) to opt in"
+                ),
+                error_kind=ERROR_INFRA,
+            )
+            _journal_result(journal, result)
+            return result
         return _run_real(
             task, out_dir=out_dir, transport=real_transport, port=real_port, journal=journal
         )

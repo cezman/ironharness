@@ -305,12 +305,15 @@ def solve_attempt(
     llm=chat,
     runner=run_task,
     journal=None,
+    allow_real: bool = False,
 ) -> AttemptResult:
     """One attempt to solve the task: the "LLM answer -> main.py -> run -> feedback" loop.
 
     llm/runner are injection points for offline tests (a fake LLM and runner).
     IH-82: transient LLM failures are retried (bounded); auth/config failures
     (401/403/404, api-key strings) abort the campaign via SystemExit.
+    allow_real: the live-hardware opt-in, forwarded to the real runner only
+    (audit B) - fake runners in tests keep their narrow signature.
     """
     attempt_dir = out_dir / f"attempt-{attempt}"
     work_dir = attempt_dir / "work"
@@ -377,7 +380,12 @@ def solve_attempt(
         (work_dir / AGENT_FILE).write_text(code, encoding="utf-8")
         if journal:
             journal("iteration", {"task": task.name, "attempt": attempt, "n": iterations})
-        result = runner(work_task, out_dir=attempt_dir, journal=journal)
+        result = runner(
+            work_task,
+            out_dir=attempt_dir,
+            journal=journal,
+            **({"allow_real": allow_real} if task.target == "real" else {}),
+        )
         run_kind = result.error_kind
         # iteration artifacts: the code and serial output are saved before the next move overwrites them
         (attempt_dir / f"iter-{iterations}.main.py").write_text(code, encoding="utf-8")
@@ -444,11 +452,19 @@ def solve(
     llm=chat,
     runner=run_task,
     journal=None,
+    allow_real: bool = False,
 ) -> list[AttemptResult]:
     """A pass@k campaign: attempts independent tries at solving the task."""
     results = [
         solve_attempt(
-            task, cfg, attempt=n, out_dir=out_dir, llm=llm, runner=runner, journal=journal
+            task,
+            cfg,
+            attempt=n,
+            out_dir=out_dir,
+            llm=llm,
+            runner=runner,
+            journal=journal,
+            allow_real=allow_real,
         )
         for n in range(1, attempts + 1)
     ]

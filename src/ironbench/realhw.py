@@ -56,6 +56,11 @@ _BACKUP_PROBE_LINES = (
         b"if 'main.py' in os.listdir() else print('IH-BACK' + 'UP-ABSENT')\r\n"
     ),
 )
+# audit B: the probe waits on a sliding idle deadline - quiet window per chunk,
+# bounded overall so a silent board cannot stall the staging
+_PROBE_QUIET_SEC = 2.0
+_PROBE_TOTAL_CAP = 10.0
+_PROBE_MAX_BYTES = 256 * 1024
 
 
 class RealRepl:
@@ -151,6 +156,14 @@ class RealRepl:
         backup_status = "not requested"
         if backup_dir is not None:
             backup_status = self._backup_main(backup_dir)
+            # audit B (2026-09-20): the probe could not read main.py and could
+            # not prove it absent - wiping now could destroy user firmware we
+            # never captured. Refuse before any destructive write.
+            if backup_status == "unknown":
+                raise ConnectionError(
+                    "refusing to wipe main.py without a verified backup "
+                    "(the backup probe got no parseable answer)"
+                )
         self.write(REMOVE_MAIN)
         time.sleep(0.6)
         self._drain()
@@ -197,10 +210,16 @@ class RealRepl:
         for line in _BACKUP_PROBE_LINES:
             self.write(line)
             time.sleep(0.1)
-        deadline = time.monotonic() + 5
+        started = time.monotonic()
+        deadline = started + _PROBE_QUIET_SEC
+        # audit B: the answer trickles in at line rate - every new chunk
+        # extends the window (sliding idle deadline), bounded by a total cap
         while time.monotonic() < deadline:
             time.sleep(0.2)
+            before = len(self._text)
             self._drain()
+            if len(self._text) > before and len(self._text) - mark < _PROBE_MAX_BYTES:
+                deadline = min(time.monotonic() + _PROBE_QUIET_SEC, started + _PROBE_TOTAL_CAP)
             text = self._text[mark:]
             if "IH-BACKUP-ABSENT" in text:
                 return "absent"
