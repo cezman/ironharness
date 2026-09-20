@@ -1,0 +1,2 @@
+{"task": "coop-scheduler", "attempt": 1, "solved": true, "iterations": 1, "model": "glm-4.6v-flash", "duration_sec": 813.56, "error": null}
+{"task": "coop-scheduler", "attempt": 2, "solved": true, "iterations": 3, "model": "glm-4.6v-flash", "duration_sec": 1756.72, "error": null}

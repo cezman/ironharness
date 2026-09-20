@@ -1,0 +1,2 @@
+{"task": "noisy-frames", "attempt": 1, "solved": true, "iterations": 2, "model": "qwen3.5-4b", "duration_sec": 136.85, "error": null}
+{"task": "noisy-frames", "attempt": 2, "solved": false, "iterations": 5, "model": "qwen3.5-4b", "duration_sec": 165.18, "error": "iteration limit (5) exhausted"}

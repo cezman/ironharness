@@ -1,0 +1,2 @@
+{"task": "pid-antiwindup", "attempt": 1, "solved": true, "iterations": 3, "model": "qwen2.5-7b-instruct", "duration_sec": 22.48, "error": null}
+{"task": "pid-antiwindup", "attempt": 2, "solved": false, "iterations": 5, "model": "qwen2.5-7b-instruct", "duration_sec": 34.1, "error": "iteration limit (5) exhausted"}

@@ -1,0 +1,8 @@
+model=zai-org/glm-4.7-flash base=http://localhost:1234/v1 attempts/arm=4 out=.ironbench\campaigns\2026-09-20-real-ab\zai-org_glm-4.7-flash
+=== arm=notes attempt=1 ===
+arm=notes attempt=1: solved=False iters=5 2049.66s error_kind=none error='iteration limit (5) exhausted'
+=== arm=bare attempt=1 ===
+arm=bare attempt=1: solved=False iters=5 2033.24s error_kind=none error='iteration limit (5) exhausted'
+SYSTEMATIC WALL: both arms failed with the same signature:
+  >>>
+the A/B cannot measure a notes effect here - aborting (pass --force to continue anyway)

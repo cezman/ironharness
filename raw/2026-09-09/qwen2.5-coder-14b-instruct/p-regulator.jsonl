@@ -1,0 +1,2 @@
+{"task": "p-regulator", "attempt": 1, "solved": true, "iterations": 1, "model": "qwen2.5-coder-14b-instruct", "duration_sec": 19.25, "error": null}
+{"task": "p-regulator", "attempt": 2, "solved": false, "iterations": 5, "model": "qwen2.5-coder-14b-instruct", "duration_sec": 118.28, "error": "iteration limit (5) exhausted"}

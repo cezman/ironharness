@@ -1,0 +1,2 @@
+{"task": "uart-menu", "attempt": 1, "solved": true, "iterations": 1, "model": "qwen3.5-4b", "duration_sec": 76.02, "error": null}
+{"task": "uart-menu", "attempt": 2, "solved": false, "iterations": 5, "model": "qwen3.5-4b", "duration_sec": 175.2, "error": "iteration limit (5) exhausted"}

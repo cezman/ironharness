@@ -1,0 +1,2 @@
+{"task": "uart-menu", "attempt": 1, "solved": true, "iterations": 1, "model": "qwen2.5-7b-instruct", "duration_sec": 4.72, "error": null}
+{"task": "uart-menu", "attempt": 2, "solved": true, "iterations": 1, "model": "qwen2.5-7b-instruct", "duration_sec": 4.52, "error": null}

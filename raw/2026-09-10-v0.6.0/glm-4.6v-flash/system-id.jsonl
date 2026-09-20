@@ -1,0 +1,2 @@
+{"task": "system-id", "attempt": 1, "solved": true, "iterations": 2, "model": "glm-4.6v-flash", "duration_sec": 1322.96, "error": null}
+{"task": "system-id", "attempt": 2, "solved": false, "iterations": 1, "model": "glm-4.6v-flash", "duration_sec": 902.03, "error": "LLM error: timed out"}

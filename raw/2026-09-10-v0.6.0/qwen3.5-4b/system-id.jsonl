@@ -1,0 +1,2 @@
+{"task": "system-id", "attempt": 1, "solved": true, "iterations": 4, "model": "qwen3.5-4b", "duration_sec": 92.1, "error": null}
+{"task": "system-id", "attempt": 2, "solved": false, "iterations": 5, "model": "qwen3.5-4b", "duration_sec": 100.35, "error": "iteration limit (5) exhausted"}

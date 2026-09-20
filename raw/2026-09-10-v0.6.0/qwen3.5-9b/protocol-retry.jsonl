@@ -1,0 +1,2 @@
+{"task": "protocol-retry", "attempt": 1, "solved": false, "iterations": 1, "model": "qwen3.5-9b", "duration_sec": 902.06, "error": "LLM error: timed out"}
+{"task": "protocol-retry", "attempt": 2, "solved": false, "iterations": 1, "model": "qwen3.5-9b", "duration_sec": 902.02, "error": "LLM error: timed out"}

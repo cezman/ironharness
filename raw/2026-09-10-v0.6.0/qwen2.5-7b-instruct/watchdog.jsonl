@@ -1,0 +1,2 @@
+{"task": "watchdog", "attempt": 1, "solved": true, "iterations": 3, "model": "qwen2.5-7b-instruct", "duration_sec": 105.62, "error": null}
+{"task": "watchdog", "attempt": 2, "solved": true, "iterations": 4, "model": "qwen2.5-7b-instruct", "duration_sec": 17.71, "error": null}

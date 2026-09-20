@@ -1,0 +1,2 @@
+{"task": "p-regulator", "attempt": 1, "solved": true, "iterations": 1, "model": "qwen3.5-9b", "duration_sec": 407.02, "error": null}
+{"task": "p-regulator", "attempt": 2, "solved": false, "iterations": 1, "model": "qwen3.5-9b", "duration_sec": 902.05, "error": "LLM error: timed out"}

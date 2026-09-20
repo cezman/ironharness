@@ -1,0 +1,2 @@
+{"task": "uart-echo", "attempt": 1, "solved": true, "iterations": 1, "model": "qwen2.5-coder-14b-instruct", "duration_sec": 14.45, "error": null}
+{"task": "uart-echo", "attempt": 2, "solved": true, "iterations": 1, "model": "qwen2.5-coder-14b-instruct", "duration_sec": 10.8, "error": null}

@@ -1,0 +1,20 @@
+task=uart-menu model=zai-org/glm-4.7-flash base=http://localhost:1234/v1 attempts/arm=4 out=.ironbench\campaigns\2026-09-20-real-ab-uart-menu\zai-org_glm-4.7-flash
+=== arm=notes attempt=1 ===
+arm=notes attempt=1: solved=True iters=1 146.01s error_kind=none error=None
+=== arm=bare attempt=1 ===
+arm=bare attempt=1: solved=False iters=5 1619.59s error_kind=run error='iteration limit (5) exhausted'
+=== arm=notes attempt=2 ===
+arm=notes attempt=2: solved=True iters=1 96.73s error_kind=none error=None
+=== arm=bare attempt=2 ===
+arm=bare attempt=2: solved=True iters=5 1139.99s error_kind=none error=None
+=== arm=notes attempt=3 ===
+arm=notes attempt=3: solved=True iters=1 112.05s error_kind=none error=None
+=== arm=bare attempt=3 ===
+arm=bare attempt=3: solved=False iters=5 1537.4s error_kind=run error='iteration limit (5) exhausted'
+=== arm=notes attempt=4 ===
+arm=notes attempt=4: solved=True iters=1 69.61s error_kind=none error=None
+=== arm=bare attempt=4 ===
+arm=bare attempt=4: solved=True iters=1 114.55s error_kind=none error=None
+== summary ==
+notes: 4/4 solved, iterations=[1, 1, 1, 1], kind=['none', 'none', 'none', 'none']
+bare: 2/4 solved, iterations=[5, 5, 5, 1], kind=['run', 'none', 'run', 'none']

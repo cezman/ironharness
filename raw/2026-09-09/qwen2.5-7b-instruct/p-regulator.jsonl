@@ -1,0 +1,2 @@
+{"task": "p-regulator", "attempt": 1, "solved": true, "iterations": 1, "model": "qwen2.5-7b-instruct", "duration_sec": 3.55, "error": null}
+{"task": "p-regulator", "attempt": 2, "solved": true, "iterations": 1, "model": "qwen2.5-7b-instruct", "duration_sec": 2.99, "error": null}

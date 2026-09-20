@@ -1,0 +1,20 @@
+task=uart-echo model=zai-org/glm-4.7-flash base=http://localhost:1234/v1 attempts/arm=4 out=.ironbench\campaigns\2026-09-20-real-ab-uart-echo\zai-org_glm-4.7-flash
+=== arm=notes attempt=1 ===
+arm=notes attempt=1: solved=True iters=1 43.39s error_kind=none error=None
+=== arm=bare attempt=1 ===
+arm=bare attempt=1: solved=True iters=1 69.24s error_kind=none error=None
+=== arm=notes attempt=2 ===
+arm=notes attempt=2: solved=True iters=1 40.51s error_kind=none error=None
+=== arm=bare attempt=2 ===
+arm=bare attempt=2: solved=True iters=1 58.19s error_kind=none error=None
+=== arm=notes attempt=3 ===
+arm=notes attempt=3: solved=True iters=1 45.53s error_kind=none error=None
+=== arm=bare attempt=3 ===
+arm=bare attempt=3: solved=True iters=1 84.06s error_kind=none error=None
+=== arm=notes attempt=4 ===
+arm=notes attempt=4: solved=True iters=1 39.02s error_kind=none error=None
+=== arm=bare attempt=4 ===
+arm=bare attempt=4: solved=True iters=1 113.59s error_kind=none error=None
+== summary ==
+notes: 4/4 solved, iterations=[1, 1, 1, 1], kind=['none', 'none', 'none', 'none']
+bare: 4/4 solved, iterations=[1, 1, 1, 1], kind=['none', 'none', 'none', 'none']

@@ -1,0 +1,2 @@
+{"task": "coop-scheduler", "attempt": 1, "solved": true, "iterations": 1, "model": "qwen3.5-9b", "duration_sec": 130.8, "error": null}
+{"task": "coop-scheduler", "attempt": 2, "solved": true, "iterations": 2, "model": "qwen3.5-9b", "duration_sec": 512.63, "error": null}

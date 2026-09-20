@@ -1,0 +1,2 @@
+{"task": "coop-scheduler", "attempt": 1, "solved": false, "iterations": 5, "model": "qwen2.5-7b-instruct", "duration_sec": 203.13, "error": "iteration limit (5) exhausted"}
+{"task": "coop-scheduler", "attempt": 2, "solved": false, "iterations": 5, "model": "qwen2.5-7b-instruct", "duration_sec": 249.74, "error": "iteration limit (5) exhausted"}
