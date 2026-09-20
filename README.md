@@ -116,6 +116,12 @@ classes, not a single number. LLM config — environment variables: `LLM_BASE_UR
   the solving model's prompt as feedback. It cannot flip the PASS/FAIL verdict
   (scoring is done by the runner), but a model can be steered by its own
   firmware's output - an accepted distortion of the benchmark.
+- **Anti-cheat boundary (wokwi)**: on the wokwi target, interactive tasks are
+  anchored on the line-fed `input()` echo (an answer printed before the first
+  stimulus write is condemned as pre-printed), and the leaderboard carries a
+  standing note that wokwi passes are not unix-equivalent: a wokwi serial log
+  has no ingestion stamps, so output-only tasks remain unanchored there -
+  unix and real anchor everything (chunk/reader stamps).
 - **Serial ports are whitelisted to local ports only** — `COM*`, `/dev/tty*`,
   `/dev/pts/*`, `loop://`, `pty://`. pyserial also supports network URLs
   (`socket://host:port` is an outbound TCP connection, `rfc2217://` is remote

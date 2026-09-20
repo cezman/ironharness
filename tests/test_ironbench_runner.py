@@ -487,3 +487,49 @@ def test_push_to_wsl_clean_wipes_the_real_remote_dir(monkeypatch):
     # clean=False (default) must not remove anything
     runner_common._push_to_wsl(b"blob", "$HOME/ironharness-runs/t-unix", "STAGE-PUSHED")
     assert "rm -rf" not in seen["cmd"][-1]
+
+
+# --- audit A (2026-09-20): wokwi boot-dump verdict (position-based anchor) ---
+
+
+WOKWI_STIMULUS = ('write-serial: "hello\\r"',)
+
+
+def _wokwi_task(tmp_path, expect=("echo: hello",), stimulus=WOKWI_STIMULUS):
+    return make_task(tmp_path, expect=expect, stimulus=stimulus)
+
+
+def _run_wokwi_fake(tmp_path, task, serial):
+    return run_fake(tmp_path, task, {"FAKE_SERIAL": serial})
+
+
+def test_wokwi_boot_dumper_caught_as_pre_printed(tmp_path):
+    # a firmware that answers before the input echo is a boot dump: the
+    # answer must not be credited (audit A: the wokwi serial log has no
+    # stamps, the anchor is the line-fed input() echo)
+    task = _wokwi_task(tmp_path)
+    serial = "paste mode\nprint('hi')\necho: hello\nhello\necho: hello\n"
+    res = _run_wokwi_fake(tmp_path, task, serial)
+    assert not res.passed, f"boot dump passed: error={res.error!r}"
+    assert (res.error or "").startswith("anti-cheat:"), res.error
+    assert "pre-printed" in res.error
+    assert res.error_kind == "run"
+
+
+def test_wokwi_honest_interaction_passes(tmp_path):
+    # input() echo ("hello") precedes the answer built on it - legal
+    task = _wokwi_task(tmp_path)
+    serial = "paste mode\nprint('hi')\nhello\necho: hello\n"
+    res = _run_wokwi_fake(tmp_path, task, serial)
+    assert res.passed, f"honest interaction failed: {res.error!r} missed={res.missed}"
+
+
+def test_wokwi_no_input_echo_is_fail_open_residual(tmp_path):
+    # without a line-fed input echo the ordering cannot be verified from the
+    # log: fail-open by design, the residual is marked non-equivalent in the
+    # leaderboard (publish) instead of guessed here
+    task = _wokwi_task(tmp_path)
+    serial = "paste mode\nprint('hi')\necho: hello\n"
+    res = _run_wokwi_fake(tmp_path, task, serial)
+    assert res.passed, f"fail-open run must pass: {res.error!r}"
+    assert not (res.error or "").startswith("anti-cheat:")

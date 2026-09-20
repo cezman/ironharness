@@ -139,6 +139,51 @@ def _truncate_paste_echo(text: str, task: Task) -> tuple[str, str | None]:
     return text[pos + len(last[-1]):], None
 
 
+def _pre_printed_error(text: str, task: Task) -> str | None:
+    """Position-based boot-dump verdict for the paste scenario (audit A, 2026-09-20).
+
+    A wokwi serial log has no ingestion stamps (unix anchors on reader stamps,
+    real on chunk stamps) - only the final text is scoreable. Anchor: the first
+    write-serial payload. MicroPython input() echoes the characters it reads,
+    so an honest interaction shows the payload in the log before the answer
+    built on it; an expect literal occurring earlier than the anchor was
+    printed before the stimulus asked for it. If no payload is echoed the
+    ordering cannot be verified from the log - that residual is marked as
+    wokwi/unix non-equivalence in the leaderboard and README, not flagged
+    here (fail-open by design, like the IH-74 trim trade-off).
+    """
+    for step in task.stimulus:
+        if "write-serial" not in step:
+            continue
+        payload = str(step["write-serial"]).replace("\r\n", "\r").replace("\n", "\r").strip()
+        if not payload:
+            continue
+        # the input() echo is line-fed: anchor on a whole line equal to the
+        # payload, never on the payload occurring inside an answer line
+        # ("echo: hello" contains "hello" - an answer must not anchor itself)
+        anchor = None
+        offset = 0
+        for line in text.splitlines():
+            if line.strip() == payload:
+                anchor = offset
+                break
+            offset += len(line) + 1
+        if anchor is None:
+            continue
+        for pattern in task.expect:
+            plain = common._plain_text(pattern)
+            if not plain:
+                continue
+            pos = text.find(plain)
+            if 0 <= pos < anchor:
+                return (
+                    f"anti-cheat: {plain!r} was printed before the stimulus "
+                    "asked for it (pre-printed output)"
+                )
+        return None
+    return None
+
+
 def _run_wokwi(
     task: Task,
     *,
@@ -215,6 +260,10 @@ def _run_wokwi(
     serial_text, echo_error = _truncate_paste_echo(serial_text, task)
     if echo_error is not None:
         error, error_kind = echo_error, common.ERROR_INFRA
+    if error is None:
+        dump_error = _pre_printed_error(serial_text, task)
+        if dump_error is not None:
+            error, error_kind = dump_error, common.ERROR_RUN
     missed, hit_fail = common._check_patterns(serial_text, task.expect, task.fail)
     passed = exit_code in OK_EXIT_CODES and not missed and not hit_fail and error is None
     result = common.TaskResult(

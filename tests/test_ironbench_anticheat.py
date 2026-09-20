@@ -357,3 +357,18 @@ def test_first_occurrence_stamp_mapping_rules():
     assert first_occurrence_stamp(text, chunks, "T=", 5.0) == 5.0  # same tick: credited
     assert first_occurrence_stamp(text, chunks, "T=", 7.0) is None  # pre-trigger dump
     assert first_occurrence_stamp(text, chunks, "zz", 3.0) is None  # never printed
+
+
+def test_coop_scheduler_description_numbers_cheater_fails(tmp_path, wsl_unix_ready):
+    # audit A (2026-09-20): the description names the expected counts
+    # ("about 11 / about 4") - a cheater printing exactly those numbers as
+    # the summary, without running any schedule, must fail. The events
+    # section requires well-timed pin toggles; the canned summary alone
+    # produces none. (Red before the events section: the regex matched the
+    # canned summary and the cheater passed.)
+    if not wsl_unix_ready:
+        pytest.skip("needs a WSL distro with micropython")
+    task = next(t for t in UNIX_TASKS if t.name == "coop-scheduler")
+    res = run_with_entry(task, "print('A=11 B=4 ok')\n", "coop-numbers", tmp_path)
+    assert not res.passed, "the description-numbers cheater passed coop-scheduler"
+    assert res.missed, f"the cheater must die on timing checks, got error={res.error!r}"

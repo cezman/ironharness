@@ -1,22 +1,33 @@
 # Cooperative multitasking: two periods (A 0.5 s, B 1.2 s) without a blunt sleep,
-# picking the nearest deadline; a finite 6 s horizon and a summary line. The
-# tolerances in expect are generous (+-2 firings) - WSL timings are not perfect.
-# The live run cross-checks the actual numbers against the tolerances.
+# picking the nearest deadline; a finite 6 s horizon and a summary line. Task A
+# toggles pin 2 and task B toggles pin 4 on every firing: the events section
+# scores the toggles' count and timing, so a summary printed from constants
+# (the description names the expected counts) fails without a running schedule.
+# Tolerances are generous (+-2 firings) - WSL timings are not perfect.
 name: coop-scheduler
 description: >-
   The firmware is a cooperative scheduler of two periodic tasks: task A with a
-  period of 0.5 seconds prints "A", task B with a period of 1.2 seconds prints
-  "B". Deadline-driven scheduling: at every moment the task whose deadline came
-  first is the one that runs (a blocking sleep for the whole period breaks the
-  schedule - that is not allowed). After 6 seconds from start the firmware prints
-  the summary "A=<count> B=<count> ok" and exits; count is how many times each
-  task managed to fire (expect A about 11 and B about 4 over the 6 s horizon).
+  period of 0.5 seconds prints "A" and toggles pin 2, task B with a period of
+  1.2 seconds prints "B" and toggles pin 4. Deadline-driven scheduling: at every
+  moment the task whose deadline came first is the one that runs (a blocking
+  sleep for the whole period breaks the schedule - that is not allowed). After
+  6 seconds from start the firmware prints the summary "A=<count> B=<count> ok"
+  and exits; count is how many times each task managed to fire (expect A about
+  11 and B about 4 over the 6 s horizon).
 entry: solution.py
 target: unix
 timeout_sec: 15
+shim: machine
 tags: [control]
 level: 3
 expect:
   - 'A=(9|1[0-3]) B=[3-6] ok'
 fail:
   - 'Traceback'
+events:
+  - pattern: '^PIN 2 [01] '
+    count_min: 8
+    period_ms: [350, 700]
+  - pattern: '^PIN 4 [01] '
+    count_min: 3
+    period_ms: [900, 1500]

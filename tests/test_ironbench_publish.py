@@ -75,6 +75,9 @@ def test_publish_creates_orphan_branch(tmp_path, source_repo):
     assert len(sha) == 40
     html = git("--git-dir", str(origin), "show", "refs/heads/gh-pages:index.html").stdout
     assert "<td>m1</td>" in html
+    assert "wokwi-target passes are not unix-equivalent" in html, (
+        "audit A: the published page must carry the wokwi non-equivalence note"
+    )
     data = json.loads(
         git("--git-dir", str(origin), "show", "refs/heads/gh-pages:data.json").stdout
     )
