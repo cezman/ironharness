@@ -21,3 +21,10 @@ stimulus:
   - write-serial: "hello\r"
   - delay: 400ms
   - write-serial: "world\r"
+# Expert notes from the live bench (2026-09-20, IH-21 A/B difficulty knob):
+# fed to the solve agent's prompt; the fact is recorded in results.jsonl
+# (benchmark honesty, IH-21).
+notes:
+  - 'The serial console IS the USB REPL: read with input() and answer with print() - machine.UART is an unrelated, unwired bus on this board.'
+  - 'input() returns the received line without its trailing newline; answer each line immediately with exactly "echo: <line>".'
+  - 'Print "echo ready" once at startup, then loop forever - the program must never exit.'
