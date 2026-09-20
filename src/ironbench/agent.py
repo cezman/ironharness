@@ -29,6 +29,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+# IH-82: pause between transient LLM failures before the retry
+_LLM_RETRY_SLEEP = 2.0
+
 from ironbench.runner import (
     ERROR_INFRA,
     ERROR_NONE,
@@ -306,6 +309,8 @@ def solve_attempt(
     """One attempt to solve the task: the "LLM answer -> main.py -> run -> feedback" loop.
 
     llm/runner are injection points for offline tests (a fake LLM and runner).
+    IH-82: transient LLM failures are retried (bounded); auth/config failures
+    (401/403/404, api-key strings) abort the campaign via SystemExit.
     """
     attempt_dir = out_dir / f"attempt-{attempt}"
     work_dir = attempt_dir / "work"
@@ -323,14 +328,40 @@ def solve_attempt(
     run_kind: str | None = None  # error_kind of the last runner verdict; None = never ran
     while iterations < cfg.max_iterations:
         iterations += 1
-        try:
-            response = llm(cfg, messages)
-        except (OSError, ValueError, LookupError, TypeError) as e:
-            # network/HTTP/broken LLM server response (incl. an empty "choices") -
-            # an attempt error, not a runner crash; for the agent this is
-            # environment-level (it cannot fix the server)
-            error = f"LLM error: {e}"
-            llm_failed = True
+        _llm_tries = 3
+        while True:
+            transient: Exception
+            try:
+                response = llm(cfg, messages)
+                break
+            except urllib.error.HTTPError as e:
+                # IH-82 review: 404/400 are permanent config errors (a typo in
+                # LLM_MODEL, junk in the base_url path) - same loud-abort class
+                # as auth, not retryable
+                if e.code in (400, 401, 403, 404):
+                    raise SystemExit(
+                        f"LLM config error (HTTP {e.code}) - aborting the campaign: {e}"
+                    ) from e
+                transient = e  # other codes are transient - retried below
+            except (OSError, ValueError, LookupError, TypeError) as e:
+                transient = e
+            lowered = str(transient).lower()
+            if any(tag in lowered for tag in ("401", "403", "unauthorized", "api key")):
+                # IH-82: auth/config errors cannot be retried - abort the
+                # campaign loudly instead of burning hollow attempts into pass@k
+                raise SystemExit(
+                    f"LLM auth/config error - aborting the campaign: {transient}"
+                ) from transient
+            _llm_tries -= 1
+            if _llm_tries <= 0:
+                # network/HTTP/broken LLM server response (incl. an empty "choices") -
+                # an attempt error, not a runner crash; for the agent this is
+                # environment-level (it cannot fix the server)
+                error = f"LLM error: {transient}"
+                llm_failed = True
+                break
+            time.sleep(_LLM_RETRY_SLEEP)
+        if llm_failed:
             break
         code = extract_code(response)
         if code is None:

@@ -230,17 +230,23 @@ def test_solve_attempt_asks_again_without_code_block(tmp_path):
     assert res.solved and res.iterations == 2
 
 
-def test_solve_attempt_llm_error_is_clean_fail(tmp_path):
+def test_solve_attempt_llm_error_is_clean_fail(tmp_path, monkeypatch):
+    # IH-22: the LLM server is environment; IH-82: transient failures are
+    # retried a pinned 3 times (3 llm calls) before the attempt gives up
+    monkeypatch.setattr("ironbench.agent._LLM_RETRY_SLEEP", 0.0)
     task = make_task()
     cfg = SolveConfig(base_url="http://x", api_key="k", model="m")
+    calls = {"n": 0}
 
     def boom(cfg, msgs):
+        calls["n"] += 1
         raise ConnectionError("server down")
 
     res = solve_attempt(task, cfg, out_dir=tmp_path, llm=boom, runner=fake_runner(True))
     assert not res.solved
     assert "LLM error" in (res.error or "")
     assert res.error_kind == "infra"  # IH-22: the LLM server is environment
+    assert calls["n"] == 3
 
 
 def test_solve_attempt_kind_run_when_never_ran(tmp_path):
@@ -461,3 +467,54 @@ def test_serial_feedback_without_traceback_has_no_diagnosis(tmp_path):
     log.write_text("bme ready\nread\n", encoding="utf-8")
     feedback = _serial_feedback(log)
     assert "DIAGNOSIS" not in feedback
+
+
+# --- IH-82: transient LLM errors retry, auth/config errors abort loudly ---
+
+
+def test_solve_attempt_llm_auth_error_aborts_loudly(tmp_path):
+    # IH-82: an auth/config error cannot be retried - the campaign aborts
+    # loudly instead of burning hollow attempts into pass@k
+    task = make_task()
+    cfg = SolveConfig(base_url="http://x", api_key="bad", model="m")
+
+    def llm(cfg, msgs):
+        raise OSError("401 Unauthorized: invalid api key")
+
+    with pytest.raises(SystemExit):
+        solve_attempt(task, cfg, out_dir=tmp_path, llm=llm, runner=fake_runner(True))
+
+
+def test_solve_attempt_http_404_aborts_loudly(tmp_path):
+    # IH-82 review: 404 is a permanent config error (typo in LLM_MODEL) -
+    # the same loud abort as auth, not a retryable transient
+    import urllib.error
+
+    task = make_task()
+    cfg = SolveConfig(base_url="http://x", api_key="k", model="m")
+
+    def boom(cfg, msgs):
+        raise urllib.error.HTTPError(
+            "http://x/v1/chat/completions", 404, "model not found", None, None
+        )
+
+    with pytest.raises(SystemExit):
+        solve_attempt(task, cfg, out_dir=tmp_path, llm=boom, runner=fake_runner(True))
+
+
+def test_solve_attempt_retries_transient_llm_errors(tmp_path, monkeypatch):
+    # a transient failure is retried instead of burning the attempt
+    monkeypatch.setattr("ironbench.agent._LLM_RETRY_SLEEP", 0.0)
+    task = make_task()
+    cfg = SolveConfig(base_url="http://x", api_key="k", model="m")
+    calls = {"n": 0}
+
+    def llm(cfg, msgs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("reset by peer")
+        return GOOD_RESPONSE
+
+    res = solve_attempt(task, cfg, out_dir=tmp_path, llm=llm, runner=fake_runner(True))
+    assert res.solved and res.iterations == 1
+    assert calls["n"] == 2
