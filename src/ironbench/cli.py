@@ -54,7 +54,7 @@ def main(argv=None) -> int:
     run.add_argument(
         "--allow-real",
         action="store_true",
-        help="confirm wiping main.py on live boards when --all includes real tasks (IH-79)",
+        help="confirm wiping main.py on live boards for real-target tasks (audit B)",
     )
     run.add_argument(
         "--target",
@@ -71,6 +71,11 @@ def main(argv=None) -> int:
     solve_p.add_argument("--attempts", type=int, default=1, help="attempts per task (k)")
     solve_p.add_argument(
         "--iterations", type=int, default=None, help="iteration limit per attempt"
+    )
+    solve_p.add_argument(
+        "--allow-real",
+        action="store_true",
+        help="confirm wiping main.py on the live board for real-target tasks (audit B)",
     )
     solve_p.add_argument(
         "--target",
@@ -184,11 +189,21 @@ def main(argv=None) -> int:
             except ValueError as e:
                 print(f"refused: {e}")
                 return 2
+        # audit B: a real-target solve (native or overridden) wipes main.py on
+        # the live board - refuse BEFORE any LLM token is spent
+        if task.target == "real" and not args.allow_real:
+            print(
+                "refused: the real target wipes main.py on the live board; "
+                "pass --allow-real to confirm"
+            )
+            return 2
         cfg = resolve_llm_config()
         if args.iterations is not None:
             cfg = dataclasses.replace(cfg, max_iterations=args.iterations)
         solve_dir = args.out / SOLVE_DIR_NAME
-        results = agent_solve_results(task, cfg, attempts=args.attempts, solve_dir=solve_dir)
+        results = agent_solve_results(
+            task, cfg, attempts=args.attempts, solve_dir=solve_dir, allow_real=True
+        )
         # pass@k semantics: the campaign succeeds if the task was solved by at least one attempt
         return 0 if any(r.solved for r in results) else 1
 
@@ -248,14 +263,16 @@ def main(argv=None) -> int:
             except ValueError as e:
                 print(f"refused: {e}")
                 return 2
-    # IH-79: --all is bulk; staging wipes main.py on live boards, so a wrong
-    # IRONHARNESS_REAL_PORT would destroy someone else's firmware - make the
-    # bulk wipe an explicit opt-in
-    if args.all and not args.task and not args.allow_real:
+    # audit B (was IH-79, --all only): ANY real-target selection wipes main.py
+    # on the live board - a named run is gated the same as the bulk one
+    if not args.allow_real:
         real_names = [t.name for t in selected if t.target == "real"]
         if real_names:
+            scope = "--all includes real tasks" if args.all and not args.task else (
+                f"task {args.task!r} targets the live board"
+            )
             print(
-                "refused: --all includes real tasks ("
+                f"refused: {scope} ("
                 + ", ".join(real_names)
                 + ") - staging wipes main.py on the board; pass --allow-real to confirm"
             )
@@ -264,7 +281,7 @@ def main(argv=None) -> int:
     with JsonlJournal(args.out / "journal.jsonl", actor="ironbench") as journal:
         all_passed = True
         for t in selected:
-            res = run_task(t, out_dir=args.out, journal=journal)
+            res = run_task(t, out_dir=args.out, journal=journal, allow_real=args.allow_real)
             print(_fmt_result(res))
             if args.serial and res.serial_log:
                 lines = res.serial_log.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -317,7 +334,7 @@ def clean_stale_attempts(task_dir: Path) -> int:
     return removed
 
 
-def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path):
+def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path, allow_real: bool = False):
     """A solve campaign: attempts + writing results.jsonl + progress printing.
 
     results.jsonl lives in the task directory and is replaced atomically
@@ -334,7 +351,12 @@ def agent_solve_results(task, cfg, *, attempts: int, solve_dir: Path):
     with JsonlJournal(solve_dir / "journal.jsonl", actor="ironbench") as journal:
         started = time.monotonic()
         results = agent_solve(
-            task, cfg, attempts=attempts, out_dir=task_dir, journal=journal
+            task,
+            cfg,
+            attempts=attempts,
+            out_dir=task_dir,
+            journal=journal,
+            allow_real=allow_real,
         )
         payload = "".join(
             json.dumps(

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ironbench - report</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", sans-serif; margin: 2rem; color: #222; }
+  h1 { font-size: 1.3rem; }
+  table { border-collapse: collapse; margin-top: 1rem; }
+  th, td { border: 1px solid #ccc; padding: 6px 14px; text-align: left; }
+  th { background: #f4f4f4; }
+  .pass { color: #0a7d24; font-weight: 600; }
+  .fail { color: #b3261e; font-weight: 600; }
+  footer { margin-top: 1.5rem; color: #777; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<h1>ironbench report 2026-09-10</h1>
+<table>
+<tr><th>Model</th><th>Task</th><th>Attempts</th><th>Solved</th><th>Success rate</th><th>Avg iterations</th><th>Avg time, s</th></tr>
+<tr><td>glm-4.6v-flash</td><td>blink-unix <small>(io · lvl 1)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.5</td><td>293.2</td></tr>
+<tr><td>glm-4.6v-flash</td><td>coop-scheduler <small>(control · lvl 3)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>2.0</td><td>1285.1</td></tr>
+<tr><td>glm-4.6v-flash</td><td>frame-corrupt <small>(resilience · lvl 4)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>2246.3</td></tr>
+<tr><td>glm-4.6v-flash</td><td>mqtt-device <small>(protocol · lvl 5)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>1.0</td><td>902.1</td></tr>
+<tr><td>glm-4.6v-flash</td><td>noisy-frames <small>(resilience, protocol · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>3.5</td><td>1561.1</td></tr>
+<tr><td>glm-4.6v-flash</td><td>p-regulator <small>(control · lvl 2)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>1.0</td><td>902.0</td></tr>
+<tr><td>glm-4.6v-flash</td><td>pid-antiwindup <small>(control · lvl 3)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>3.0</td><td>1993.5</td></tr>
+<tr><td>glm-4.6v-flash</td><td>protocol <small>(protocol · lvl 2)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>1510.1</td></tr>
+<tr><td>glm-4.6v-flash</td><td>protocol-retry <small>(protocol, resilience · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>2256.3</td></tr>
+<tr><td>glm-4.6v-flash</td><td>system-id <small>(control · lvl 4)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>1.5</td><td>1112.5</td></tr>
+<tr><td>glm-4.6v-flash</td><td>uart-echo <small>(io · lvl 1)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>81.9</td></tr>
+<tr><td>glm-4.6v-flash</td><td>uart-menu <small>(fsm · lvl 3)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>3.0</td><td>1380.8</td></tr>
+<tr><td>glm-4.6v-flash</td><td>watchdog <small>(resilience · lvl 3)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>283.4</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>blink-unix <small>(io · lvl 1)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>9.7</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>coop-scheduler <small>(control · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>37.2</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>frame-corrupt <small>(resilience · lvl 4)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>25.6</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>mqtt-device <small>(protocol · lvl 5)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>74.7</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>noisy-frames <small>(resilience, protocol · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>159.8</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>p-regulator <small>(control · lvl 2)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>43.8</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>pid-antiwindup <small>(control · lvl 3)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>4.0</td><td>28.3</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>protocol <small>(protocol · lvl 2)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>25.6</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>protocol-retry <small>(protocol, resilience · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>28.0</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>system-id <small>(control · lvl 4)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>3.5</td><td>65.5</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>uart-echo <small>(io · lvl 1)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>3.0</td><td>14.6</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>uart-menu <small>(fsm · lvl 3)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>4.6</td></tr>
+<tr><td>qwen2.5-7b-instruct</td><td>watchdog <small>(resilience · lvl 3)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>3.5</td><td>61.7</td></tr>
+<tr><td>qwen3.5-4b</td><td>blink-unix <small>(io · lvl 1)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.5</td><td>106.2</td></tr>
+<tr><td>qwen3.5-4b</td><td>coop-scheduler <small>(control · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>389.1</td></tr>
+<tr><td>qwen3.5-4b</td><td>frame-corrupt <small>(resilience · lvl 4)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>377.0</td></tr>
+<tr><td>qwen3.5-4b</td><td>mqtt-device <small>(protocol · lvl 5)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>233.6</td></tr>
+<tr><td>qwen3.5-4b</td><td>noisy-frames <small>(resilience, protocol · lvl 3)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>3.5</td><td>151.0</td></tr>
+<tr><td>qwen3.5-4b</td><td>p-regulator <small>(control · lvl 2)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>367.7</td></tr>
+<tr><td>qwen3.5-4b</td><td>pid-antiwindup <small>(control · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>311.5</td></tr>
+<tr><td>qwen3.5-4b</td><td>protocol <small>(protocol · lvl 2)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>162.0</td></tr>
+<tr><td>qwen3.5-4b</td><td>protocol-retry <small>(protocol, resilience · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>242.9</td></tr>
+<tr><td>qwen3.5-4b</td><td>system-id <small>(control · lvl 4)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>4.5</td><td>96.2</td></tr>
+<tr><td>qwen3.5-4b</td><td>uart-echo <small>(io · lvl 1)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>70.3</td></tr>
+<tr><td>qwen3.5-4b</td><td>uart-menu <small>(fsm · lvl 3)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>3.0</td><td>125.6</td></tr>
+<tr><td>qwen3.5-4b</td><td>watchdog <small>(resilience · lvl 3)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>2.0</td><td>133.7</td></tr>
+<tr><td>qwen3.5-9b</td><td>blink-unix <small>(io · lvl 1)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>367.7</td></tr>
+<tr><td>qwen3.5-9b</td><td>coop-scheduler <small>(control · lvl 3)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.5</td><td>321.7</td></tr>
+<tr><td>qwen3.5-9b</td><td>frame-corrupt <small>(resilience · lvl 4)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>1.0</td><td>902.0</td></tr>
+<tr><td>qwen3.5-9b</td><td>mqtt-device <small>(protocol · lvl 5)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>1.0</td><td>902.0</td></tr>
+<tr><td>qwen3.5-9b</td><td>noisy-frames <small>(resilience, protocol · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>1.0</td><td>902.0</td></tr>
+<tr><td>qwen3.5-9b</td><td>p-regulator <small>(control · lvl 2)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>1.0</td><td>654.5</td></tr>
+<tr><td>qwen3.5-9b</td><td>pid-antiwindup <small>(control · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>1.0</td><td>902.1</td></tr>
+<tr><td>qwen3.5-9b</td><td>protocol <small>(protocol · lvl 2)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>1324.7</td></tr>
+<tr><td>qwen3.5-9b</td><td>protocol-retry <small>(protocol, resilience · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>1.0</td><td>902.0</td></tr>
+<tr><td>qwen3.5-9b</td><td>system-id <small>(control · lvl 4)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>1.0</td><td>902.0</td></tr>
+<tr><td>qwen3.5-9b</td><td>uart-echo <small>(io · lvl 1)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>288.2</td></tr>
+<tr><td>qwen3.5-9b</td><td>uart-menu <small>(fsm · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>3.0</td><td>1055.8</td></tr>
+<tr><td>qwen3.5-9b</td><td>watchdog <small>(resilience · lvl 3)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>4.5</td><td>550.5</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>blink-unix <small>(io · lvl 1)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>99.9</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>coop-scheduler <small>(control · lvl 3)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>1872.4</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>frame-corrupt <small>(resilience · lvl 4)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>1569.0</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>mqtt-device <small>(protocol · lvl 5)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>1853.1</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>noisy-frames <small>(resilience, protocol · lvl 3)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>4.0</td><td>823.0</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>p-regulator <small>(control · lvl 2)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>274.3</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>pid-antiwindup <small>(control · lvl 3)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>2.0</td><td>707.0</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>protocol <small>(protocol · lvl 2)</small></td><td>2</td><td>0</td><td class="fail">0%</td><td>5.0</td><td>1143.0</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>protocol-retry <small>(protocol, resilience · lvl 3)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>3.5</td><td>849.4</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>system-id <small>(control · lvl 4)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>324.8</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>uart-echo <small>(io · lvl 1)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>164.9</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>uart-menu <small>(fsm · lvl 3)</small></td><td>2</td><td>1</td><td class="pass">50%</td><td>3.5</td><td>801.3</td></tr>
+<tr><td>zai-org/glm-4.7-flash</td><td>watchdog <small>(resilience · lvl 3)</small></td><td>2</td><td>2</td><td class="pass">100%</td><td>1.0</td><td>131.0</td></tr>
+</table>
+<footer>Generated by ironbench · pass@k = fraction of pairs solved by at least one of k attempts: 52% · pass@1 (attempt-level) = 42%<br>
+</footer>
+<h1>Class profile (solved/attempts, attempt success rate)</h1><table><tr><th>Model</th><th>control</th><th>fsm</th><th>io</th><th>protocol</th><th>resilience</th></tr><tr><td>glm-4.6v-flash</td><td>4/8 (50%)</td><td>1/2 (50%)</td><td>4/4 (100%)</td><td>0/8 (0%)</td><td>2/8 (25%)</td></tr><tr><td>qwen2.5-7b-instruct</td><td>4/8 (50%)</td><td>2/2 (100%)</td><td>3/4 (75%)</td><td>0/8 (0%)</td><td>2/8 (25%)</td></tr><tr><td>qwen3.5-4b</td><td>1/8 (12%)</td><td>1/2 (50%)</td><td>4/4 (100%)</td><td>1/8 (12%)</td><td>3/8 (38%)</td></tr><tr><td>qwen3.5-9b</td><td>3/8 (38%)</td><td>0/2 (0%)</td><td>4/4 (100%)</td><td>0/8 (0%)</td><td>1/8 (12%)</td></tr><tr><td>zai-org/glm-4.7-flash</td><td>6/8 (75%)</td><td>1/2 (50%)</td><td>4/4 (100%)</td><td>2/8 (25%)</td><td>4/8 (50%)</td></tr></table>
+</body>
+</html>

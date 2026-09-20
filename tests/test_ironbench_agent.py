@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -349,7 +350,7 @@ def test_agent_solve_results_writes_error_kind(tmp_path, monkeypatch):
     import ironbench.cli as cli_module
     from ironbench.agent import AttemptResult
 
-    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None):
+    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None, allow_real=False):
         return [
             AttemptResult(
                 task=task.name,
@@ -394,7 +395,7 @@ def test_agent_solve_results_records_notes_fact(tmp_path, monkeypatch):
     import ironbench.cli as cli_module
     from ironbench.agent import AttemptResult
 
-    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None):
+    def fake_agent_solve(task, cfg, *, attempts, out_dir, journal=None, allow_real=False):
         return [
             AttemptResult(
                 task=task.name,
@@ -518,3 +519,38 @@ def test_solve_attempt_retries_transient_llm_errors(tmp_path, monkeypatch):
     res = solve_attempt(task, cfg, out_dir=tmp_path, llm=llm, runner=fake_runner(True))
     assert res.solved and res.iterations == 1
     assert calls["n"] == 2
+
+
+def test_solve_attempt_forwards_allow_real_only_to_real(tmp_path):
+    # audit B review: the allow_real forward is pinned - a real-target task
+    # carries the opt-in to the runner, a non-real one keeps the narrow
+    # signature (offline fake runners must not need the kwarg)
+    seen = {}
+
+    def pinning_runner(task, *, out_dir, journal=None, allow_real=False):
+        seen["target"] = task.target
+        seen["allow_real"] = allow_real
+        return fake_runner(True)(task, out_dir=out_dir, journal=journal)
+
+    cfg = SolveConfig(base_url="http://x", api_key="k", model="m", max_iterations=2)
+
+    real_task = dataclasses.replace(make_task(), target="real")
+    solve_attempt(
+        real_task,
+        cfg,
+        out_dir=tmp_path / "real",
+        llm=lambda c, m: GOOD_RESPONSE,
+        runner=pinning_runner,
+        allow_real=True,
+    )
+    assert seen == {"target": "real", "allow_real": True}
+
+    solve_attempt(
+        make_task(),
+        cfg,
+        out_dir=tmp_path / "unix",
+        llm=lambda c, m: GOOD_RESPONSE,
+        runner=pinning_runner,
+        allow_real=True,
+    )
+    assert seen == {"target": "wokwi", "allow_real": False}

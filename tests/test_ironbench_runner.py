@@ -407,12 +407,25 @@ def test_real_target_without_port_is_infra_fail(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner_module, "_run_wokwi", forbidden_backend)
     monkeypatch.setattr(runner_module, "_run_renode", forbidden_backend)
-    res = run_task(task, out_dir=tmp_path / "out")
+    # the opt-in is passed: this test exercises the PORT path, not the gate
+    res = run_task(task, out_dir=tmp_path / "out", allow_real=True)
     assert not res.passed
     assert res.exit_code is None
     assert "IRONBENCH_REAL_PORT" in (res.error or "")
     assert res.missed == task.expect  # the checks never ran
     assert res.error_kind == "infra"
+
+
+def test_real_target_without_opt_in_is_refused_at_dispatch(tmp_path):
+    # audit B: the dispatcher refuses a real-target run without the explicit
+    # opt-in - the library caller cannot reach the board by accident
+    task = dataclasses.replace(make_task(tmp_path), target="real")
+    res = run_task(task, out_dir=tmp_path / "out")
+    assert not res.passed
+    assert (res.error or "").startswith("refused:"), res.error
+    assert "--allow-real" in res.error
+    assert res.error_kind == "infra"
+    assert res.missed == task.expect  # the checks never ran
 
 
 def test_renode_target_without_section_is_clean_fail(tmp_path, monkeypatch):

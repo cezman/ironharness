@@ -144,7 +144,10 @@ iteration vs 2/4 with the full 5-iteration budget at 10x the wall time](https://
 - **Live-board benchmark runs are opt-in and bounded**: `--target real` needs
   `IRONBENCH_REAL_PORT`; every run is deadline-limited; staging a task onto the
   board backs the board's `main.py` up into the run artifacts before wiping it,
-  and a bulk `run --all` refuses to proceed without `--allow-real`.
+  and any real-target `run`/`solve` refuses to proceed without `--allow-real`.
+  If the probe cannot verify the backup, the wipe is refused outright. To put
+  your own firmware back after a run, flash `main.py.backup` from the run
+  artifacts back to the board (e.g. via serial_put / ampy).
 - **Known measurement caveat**: the firmware's serial output is fed back into
   the solving model's prompt as feedback. It cannot flip the PASS/FAIL verdict
   (scoring is done by the runner), but a model can be steered by its own

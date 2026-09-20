@@ -593,27 +593,116 @@ def test_run_all_refuses_real_tasks_without_allow_real(tmp_path, capsys):
     assert "--allow-real" in out and "wipes main.py" in out
 
 
-def test_run_named_task_with_all_flag_does_not_need_allow_real(tmp_path, capsys):
-    # IH-79 review nit: the gate keys on the bulk selection, not the flag
-    # combination - a named task stays explicit even with --all present
+def test_run_named_real_task_requires_allow_real_too(tmp_path, capsys, monkeypatch):
+    # audit B (supersedes the IH-79 review nit): the gate keys on the TASK
+    # target, not the flag combination - a named real task is gated exactly
+    # like the bulk run (it wipes main.py all the same)
     from ironbench.cli import main as cli_main
 
     (tmp_path / "tasks").mkdir()
     make_real_task(tmp_path / "tasks")
+    # a port that does not exist: the gate must pass without touching any
+    # hardware (the run then infra-fails on the missing port)
+    monkeypatch.setenv("IRONBENCH_REAL_PORT", "COM_NOPE")
+    argv = [
+        "run",
+        "--task",
+        "fake",
+        "--tasks-dir",
+        str(tmp_path / "tasks"),
+        "--out",
+        str(tmp_path / "out"),
+    ]
+    rc = cli_main(argv)
+    assert rc == 2
+    assert "refused" in capsys.readouterr().out
+    # with the opt-in the gate passes (no board attached: infra, not refusal)
+    rc = cli_main([*argv, "--allow-real"])
+    assert rc != 2
+    assert "refused" not in capsys.readouterr().out
+
+
+def test_solve_native_real_task_requires_allow_real(tmp_path, capsys, monkeypatch):
+    # audit B: the exact acceptance - a solve on a native real task with the
+    # port set refuses with rc 2 BEFORE any LLM call
+    from ironbench.cli import main as cli_main
+
+    (tmp_path / "tasks").mkdir()
+    make_real_task(tmp_path / "tasks")
+    monkeypatch.setenv("IRONBENCH_REAL_PORT", "COM6")
     rc = cli_main(
         [
-            "run",
+            "solve",
             "--task",
             "fake",
-            "--all",
             "--tasks-dir",
             str(tmp_path / "tasks"),
             "--out",
             str(tmp_path / "out"),
         ]
     )
-    assert rc != 2
-    assert "--allow-real" not in capsys.readouterr().out
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "refused" in out and "--allow-real" in out
+
+
+def test_solve_with_allow_real_passes_the_gate(tmp_path, capsys, monkeypatch):
+    from ironbench.cli import main as cli_main
+
+    (tmp_path / "tasks").mkdir()
+    make_real_task(tmp_path / "tasks")
+    monkeypatch.setenv("IRONBENCH_REAL_PORT", "COM6")
+    called = {}
+
+    def fake_results(task, cfg, *, attempts, solve_dir, allow_real=False):
+        called["allow_real"] = allow_real
+        return []
+
+    monkeypatch.setattr("ironbench.cli.agent_solve_results", fake_results)
+    rc = cli_main(
+        [
+            "solve",
+            "--task",
+            "fake",
+            "--allow-real",
+            "--tasks-dir",
+            str(tmp_path / "tasks"),
+            "--out",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert rc != 2, "the opt-in must pass the CLI gate"
+    assert called.get("allow_real") is True
+
+
+def test_solve_target_override_to_real_requires_allow_real(tmp_path, capsys, monkeypatch):
+    # audit B review: the --target real OVERRIDE is the same gated path as a
+    # native real task (same check, not pinned separately before)
+    from ironbench.cli import main as cli_main
+
+    (tmp_path / "tasks").mkdir()
+    (tmp_path / "tasks" / "n").mkdir()
+    (tmp_path / "tasks" / "n" / "task.yaml").write_text(
+        "name: n\nexpect:\n  - 'ready'\n", encoding="utf-8"
+    )
+    (tmp_path / "tasks" / "n" / "main.py").write_text("print('ready')\n", encoding="utf-8")
+    monkeypatch.setenv("IRONBENCH_REAL_PORT", "COM_NOPE")
+    rc = cli_main(
+        [
+            "solve",
+            "--task",
+            "n",
+            "--target",
+            "real",
+            "--tasks-dir",
+            str(tmp_path / "tasks"),
+            "--out",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "refused" in out and "--allow-real" in out
 
 
 # --- paid lesson 2026-09-20: the cooked REPL auto-indents after a colon ---
@@ -837,6 +926,74 @@ def test_make_real_task_roundtrips_regex_backslashes(tmp_path):
     task = make_real_task(tmp_path, expect=(r"SCAN=\[118\]", r"T=\d\.\d"))
     assert task.expect == (r"SCAN=\[118\]", r"T=\d\.\d")
 
+
+# --- audit B (2026-09-20): no wipe without a verified backup ---
+
+
+def test_boot_refuses_wipe_without_verified_backup(tmp_path):
+    """The probe got no parseable answer (status unknown) - boot must refuse
+    before any destructive write: user firmware it never captured must not
+    be removed on a guess."""
+
+    class MuteProbeBoard(FakeBoard):
+        def _handle_line(self, line):
+            if "binascii.hexlify" in line:
+                return  # the probe is never answered: status unknown
+            super()._handle_line(line)
+
+    repl = RealRepl(MuteProbeBoard())
+    out = tmp_path / "art"
+    seen = bytearray()
+    original_write = repl.write
+
+    def spy(data):
+        seen.extend(data)
+        original_write(data)
+
+    repl.write = spy
+    try:
+        with pytest.raises(ConnectionError, match="refusing to wipe main.py"):
+            repl.boot("print('x')\n", deadline=time.monotonic() + 30, backup_dir=out)
+    finally:
+        repl.close()
+    assert b"os.remove" not in seen, "REMOVE_MAIN ran without a verified backup"
+    assert not (out / "main.py.backup").exists()
+
+
+def test_probe_sliding_deadline_outlives_the_fixed_window(tmp_path):
+    """audit B: the answer trickles in slowly - every arriving chunk extends
+    the probe window (total-capped), so a slow board is not misread as
+    'unknown' (which would now refuse the whole staging)."""
+    import binascii
+    import threading
+
+    main_py = b"ab" * 200
+    answer = b"IH-BACKUP " + binascii.hexlify(main_py) + b"\r\n"
+
+    class SlowTrickle(FakeBoard):
+        def __init__(self):
+            super().__init__()
+            self.main_py = main_py
+            self._probe = b""
+            self._sent = 0
+
+        def write(self, data):
+            self._probe += data
+            if b"binascii.hexlify" in self._probe and not self._sent:
+                self._sent = 1
+                chunks = [answer[i : i + 40] for i in range(0, len(answer), 40)]
+                for delay, chunk in enumerate(chunks, start=1):
+                    threading.Timer(0.4 * delay, self._emit_bytes, args=(chunk,)).start()
+            return len(data)
+
+    repl = RealRepl(SlowTrickle())
+    out = tmp_path / "art"
+    try:
+        status = repl._backup_main(out)
+    finally:
+        repl.close()
+    assert status == "saved", "the sliding probe window gave up on a slow board"
+    assert (out / "main.py.backup").read_bytes() == main_py
 
 # --- IH-97: debug-station - the self-fix loop on the live bench ---
 

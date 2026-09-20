@@ -1,0 +1,6 @@
+
+echo ready
+hello
+echo: hello
+world
+echo: world
