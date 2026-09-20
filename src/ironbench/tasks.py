@@ -114,6 +114,10 @@ class Task:
     # task bme-read): fed into the solve agent's prompt; the has-notes fact
     # is recorded in results.jsonl for benchmark honesty.
     notes: tuple[str, ...] = ()
+    # Audit A (2026-09-20): startup literals exempt from the wokwi boot-dump
+    # verdict (validated as expect members by the loader) - the firmware
+    # prints them before any stimulus, so their presence is not an answer.
+    boot_expect: tuple[str, ...] = ()
     # IH-65: modules available on the device (bare MicroPython frozen/builtin
     # set) - surfaced into the solve prompt so agents do not assume a
     # pip-installable library ecosystem. Empty = not declared.
@@ -449,6 +453,21 @@ def load_task(task_dir: Path) -> Task:
         isinstance(n, str) and n.strip() for n in notes
     ):
         raise ValueError(f"{task_file}: notes must be a list of non-empty strings")
+    # Audit A (2026-09-20): startup literals the firmware legitimately prints
+    # before any stimulus (the boot banner). The wokwi boot-dump verdict
+    # exempts only these from the pre-printed check - everything else found
+    # in the log before the first stimulus echo is condemned. Must be plain
+    # members of expect (they are scored as usual on the stamped targets).
+    boot_expect = raw.get("boot_expect") or []
+    if not isinstance(boot_expect, list) or not all(
+        isinstance(b, str) and b.strip() for b in boot_expect
+    ):
+        raise ValueError(f"{task_file}: boot_expect must be a list of non-empty strings")
+    unknown_boot = [b for b in boot_expect if b not in expect]
+    if unknown_boot:
+        raise ValueError(
+            f"{task_file}: boot_expect {unknown_boot} must be members of expect"
+        )
     # IH-65: the device environment - modules available on the board. Surfaced
     # into the solve prompt: agents otherwise assume a pip-installable library
     # ecosystem that bare MicroPython does not have (the A/B 0/4 root cause).
@@ -502,6 +521,7 @@ def load_task(task_dir: Path) -> Task:
         tags=tuple(tags),
         level=level,
         notes=tuple(notes),
+        boot_expect=tuple(boot_expect),
         device_modules=tuple(environment.get("device_modules") or []),
         api_hint=api_hint,
     )

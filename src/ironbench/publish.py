@@ -37,6 +37,28 @@ def _rmtree_readonly(func, path, _exc) -> None:
     func(path)
 
 
+WOKWI_NOTE = (
+    '<div style="margin:12px;padding:10px 14px;border:1px solid #c8a24a;'
+    'background:#fdf6e3;border-radius:6px;font-size:14px">'
+    "<b>Note.</b> Target passes are not all equivalent: unix and real anchor "
+    "every wait on ingestion stamps, while the stampless wokwi serial log "
+    "anchors interactive tasks on the line-fed input() echo only - a literal "
+    "on the startup line is exempt, and output-only tasks, regex-only "
+    "expectations and unechoed input remain unanchored there. Renode relies "
+    "on paste-echo trimming alone. See the README anti-cheat boundary."
+    "</div>"
+)
+
+
+def _inject_wokwi_note(html: str) -> str:
+    """The audit-A non-equivalence banner: after <body> when present, else appended."""
+    if "Target passes are not all equivalent" in html:
+        return html
+    if "<body>" in html:
+        return html.replace("<body>", "<body>\n" + WOKWI_NOTE, 1)
+    return html + WOKWI_NOTE
+
+
 def publish_report(
     report: dict,
     html: str,
@@ -53,7 +75,13 @@ def publish_report(
     files already on the branch are preserved. A run whose page is identical
     to what is already published pushes nothing and returns the current sha.
     A missing git binary raises FileNotFoundError (the CLI reports it).
+
+    Audit A (2026-09-20): the page carries a standing note that wokwi-target
+    passes are not unix-equivalent - the wokwi serial log has no ingestion
+    stamps, so interactive tasks anchor on the input() echo and output-only
+    tasks remain unanchored there (unix/real anchor everything).
     """
+    html = _inject_wokwi_note(html)
     proc = subprocess.run(
         ["git", "-C", str(repo), "remote", "get-url", remote],
         capture_output=True, text=True, shell=False, check=False, env=_GIT_ENV,

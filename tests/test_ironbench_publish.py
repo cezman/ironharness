@@ -75,6 +75,9 @@ def test_publish_creates_orphan_branch(tmp_path, source_repo):
     assert len(sha) == 40
     html = git("--git-dir", str(origin), "show", "refs/heads/gh-pages:index.html").stdout
     assert "<td>m1</td>" in html
+    assert "Target passes are not all equivalent" in html, (
+        "audit A: the published page must carry the wokwi non-equivalence note"
+    )
     data = json.loads(
         git("--git-dir", str(origin), "show", "refs/heads/gh-pages:data.json").stdout
     )
@@ -106,6 +109,19 @@ def test_publish_requires_remote(tmp_path):
     assert git("init", str(src)).returncode == 0
     with pytest.raises(PublishError, match="no git remote"):
         publish_report({}, "<html></html>", repo=src)
+
+
+def test_wokwi_note_injection_paths():
+    # audit A review: the note lands after <body> when present, is appended
+    # otherwise, and never duplicates itself
+    from ironbench.publish import _inject_wokwi_note
+
+    with_body = _inject_wokwi_note("<html><body>x</body></html>")
+    assert with_body.index("not all equivalent") > with_body.index("<body>")
+    no_body = _inject_wokwi_note("<html>plain</html>")
+    assert no_body.startswith("<html>plain</html>") and "not all equivalent" in no_body
+    once = _inject_wokwi_note("<html><body>x</body></html>")
+    assert _inject_wokwi_note(once) == once, "the note must be idempotent"
 
 
 def test_publish_unreachable_remote(tmp_path):

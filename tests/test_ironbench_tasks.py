@@ -449,3 +449,21 @@ def test_plant_nan_numerics_are_rejected(tmp_path):
     )
     with pytest.raises(ValueError, match="finite"):
         load_task(d)
+
+
+def test_boot_expect_must_be_expect_members(tmp_path):
+    # audit A: boot_expect drives the wokwi pre-printed exemption - a
+    # literal outside expect would silently exempt unscoreable output
+    d = write_task(
+        tmp_path,
+        "name: n\nexpect:\n  - 'ready'\nboot_expect:\n  - 'other'\n",
+        dirname="bad-boot",
+    )
+    with pytest.raises(ValueError, match="boot_expect .* must be members of expect"):
+        load_task(d)
+    ok = write_task(
+        tmp_path,
+        "name: n\nexpect:\n  - 'ready'\nboot_expect:\n  - 'ready'\n",
+        dirname="good-boot",
+    )
+    assert load_task(ok).boot_expect == ("ready",)

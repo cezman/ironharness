@@ -146,10 +146,13 @@ iteration vs 2/4 with the full 5-iteration budget at 10x the wall time](https://
   the solving model's prompt as feedback. It cannot flip the PASS/FAIL verdict
   (scoring is done by the runner), but a model can be steered by its own
   firmware's output - an accepted distortion of the benchmark.
-- **Anticheat boundary (wokwi)**: on the wokwi target, expect/fail patterns are
-  scored against the whole serial log — a "solution" that merely prints the
-  expected lines is not caught there by the wait-serial anchor (the unix and real
-  targets have it). The gap is documented, not hidden; the published leaderboard
+- **Anti-cheat boundary (wokwi)**: on the wokwi target, interactive tasks are
+  anchored on the line-fed `input()` echo (an undeclared answer printed before
+  the first stimulus write is condemned as pre-printed; startup literals are
+  declared per task via `boot_expect`), and the leaderboard carries a standing
+  note that wokwi passes are not unix-equivalent: a wokwi serial log has no
+  ingestion stamps, so output-only tasks remain unanchored there - unix and
+  real anchor everything (chunk/reader stamps). The published leaderboard
   generations contain no wokwi-scored runs.
 - **Serial ports are whitelisted to local ports only** — `COM*`, `/dev/tty*`,
   `/dev/pts/*`, `loop://`, `pty://`. pyserial also supports network URLs
