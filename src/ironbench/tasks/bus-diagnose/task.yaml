@@ -17,6 +17,11 @@
 # fabricates the report without touching the bus is the documented
 # real-target residual (IH-44) - the same class bme-read had before
 # cross-sensor raised the bar with a physical cross-check.
+# Liveness honesty: "never exits" is enforced only as "never crashes"
+# (the fail patterns); a firmware that answers one round and exits still
+# matches the stateless contract's patterns, and a missed wait does not
+# score - sibling-consistent with bme-read/cross-sensor ("The program
+# never exits" has no scoring mechanism there either).
 name: bus-diagnose
 description: >-
   A weather-station board has two devices on its I2C bus (SDA GPIO21, SCL
