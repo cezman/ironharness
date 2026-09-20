@@ -16,7 +16,7 @@
 - **io-core** — безопасный I/O-слой для агентов: транспорты (serial, Modbus TCP, MQTT,
   файловая песочница), симулятор Modbus, инструменты прошивки ESP32 (esptool: разбор образа
   офлайн, flash/erase на живой плате), JSONL-журнал всех операций, реплеер, лимиты
-  (rate-limit, дедлайны), верификация эффектов (`expect_read`), MCP-сервер (30 инструментов).
+  (rate-limit, дедлайны), верификация эффектов (`expect_read`), MCP-сервер (32 инструмента).
 - **ironbench** — бенчмарк для firmware-агентов: золотые задачи в симуляторах
   (Wokwi ESP32/MicroPython, плюс Renode), агентский цикл поверх LLM API, отчёты pass@k.
 
@@ -38,14 +38,15 @@ uv run ironharness-mcp               # MCP-сервер (stdio; или: python -
 
 ## Инструменты агента (MCP)
 
-`echo` · `serial_list` (порты с VID/PID) · `serial_open/write/read/read_line/close` · `serial_put/get` (перекачка файлов на плату и обратно через raw REPL) · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (фоновый ридер: вывод устройства между вызовами инструментов буферизуется, а не теряется) · `serial_reset` (сброс платы импульсом RTS между попытками solve) · `modbus_open/read/write/close` ·
+`echo` · `serial_list` (порты с VID/PID) · `serial_wait` (блокируется до появления VID:PID) · `session_status` · `serial_open/write/read/read_line/close` (`serial_open` принимает `by-serial:<sn>`) · `serial_put/get` (перекачка файлов на плату и обратно через raw REPL) · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (фоновый ридер: вывод устройства между вызовами инструментов буферизуется, а не теряется) · `serial_reset` (сброс платы импульсом RTS между попытками solve) · `modbus_open/read/write/close` ·
 `mqtt_open/publish/subscribe/read/close` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
 
 Все операции автоматически пишутся в JSONL-журнал (`$IRONHARNESS_HOME/journal.jsonl`,
 по умолчанию `~/.ironharness/`); файловые операции изолированы песочницей
-(`$IRONHARNESS_SANDBOX`, по умолчанию `~/.ironharness/sandbox`). Один писатель
-на файл журнала: конкурентные потоки одной сессии безопасны, но два процесса
-с общим `IRONHARNESS_HOME` могут молча терять строки (один агент — один home-каталог).
+(`$IRONHARNESS_SANDBOX`, по умолчанию `~/.ironharness/sandbox`). Конкурентная запись
+безопасна: потоки одной сессии и отдельные процессы с общим `IRONHARNESS_HOME`
+сериализуются sidecar-локом, а ротация по размеру (32 МБ, хранить 5 частей)
+совместима с несколькими писателями.
 
 ## Подключение внешнего агента
 
