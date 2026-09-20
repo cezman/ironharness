@@ -70,7 +70,7 @@ def test_reliability_excludes_infra_and_pass_at_1(tmp_path):
                 "model": "m",
                 "task": "a",
                 "attempt": 2,
-                "solved": True,
+                "solved": False,
                 "iterations": 1,
                 "error_kind": "infra",
             },
@@ -162,7 +162,8 @@ def test_report_html_renders_profile_table(tmp_path):
 
 def test_report_includes_pass_k_reliability(tmp_path):
     """IH-67: pass^k (reliability) - the fraction of (model, task) groups
-    where ALL attempts solved. Bounded per-group, honest for flaky boards:
+    where all LIVE attempts solved (IH-81: infra attempts are excluded from
+    the comparison). Bounded per-group, honest for flaky boards:
     a group with one failed attempt out of three drops out of reliability
     but stays in pass@k."""
     import json as _json

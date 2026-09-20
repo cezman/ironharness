@@ -89,11 +89,14 @@ class GroupStats:
 
     @property
     def avg_iterations(self) -> float:
+        """Average iterations per attempt, over ALL attempts including infra
+        ones (the cost axis - an infra attempt still burns iterations)."""
         return round(self.total_iterations / self.attempts, 1) if self.attempts else 0.0
 
     @property
     def avg_duration(self) -> float:
-        """Average attempt time, seconds - the latency axis next to pass/fail."""
+        """Average attempt time, seconds - the latency axis next to pass/fail.
+        Averaged over ALL attempts, including infra ones."""
         return round(self.total_duration / self.attempts, 1) if self.attempts else 0.0
 
     @property
@@ -222,7 +225,9 @@ def build_report(solve_dir: Path, task_meta: dict | None = None) -> dict:
             "avg_iterations": s.avg_iterations,
             "avg_duration": s.avg_duration,
             "passed": s.passed,
-            "all_solved": s.passed and s.solved == s.attempts,
+            # IH-81: same infra exclusion as reliability - a pair whose every
+            # LIVE attempt solved counts as all-solved
+            "all_solved": s.passed and s.solved == s.effective_attempts,
             "incomplete": s.incomplete,
             "tags": meta_of(s.task)["tags"],
             "level": meta_of(s.task)["level"],
@@ -284,7 +289,9 @@ def render_html(report: dict) -> str:
         campaign=html_escape(report["campaign"]),
         rows="\n".join(rows),
         pass_at_k=f"{report['pass_at_k']:.0%}",
-        pass_at_1=f"{report.get('pass_at_1', 0.0):.0%}",
+        pass_at_1=(
+            f"{report['pass_at_1']:.0%}" if "pass_at_1" in report else "n/a"
+        ),
         honesty_note=honesty_note,
         profile_table=profile_table,
     )
@@ -296,7 +303,8 @@ def _honesty_note(report: dict) -> str:
     if any(g.get("infra_failures") or g.get("incomplete") for g in report["groups"]):
         notes.append(
             "attempts marked infra (environment failures) are excluded from "
-            "success rates and pass@k; incomplete pairs are shown as n/a"
+            "success rates, pass@k, pass^k and pass@1; incomplete pairs are "
+            "shown as n/a"
         )
     unparseable = report.get("unparseable") or []
     if unparseable:
