@@ -44,6 +44,15 @@ FAKE_UPY = textwrap.dedent(
 )
 
 
+
+@pytest.fixture(autouse=True)
+def _wsl_distro_env(monkeypatch):
+    """audit C: the distro default is gone (private infra name leaked). These
+    tests exercise other concerns - give them a distro explicitly."""
+    monkeypatch.setenv("IRONBENCH_RENODE_DISTRO", "test-distro")
+
+
+
 def make_unix_task(tmp_path, expect=("boot ok",), stimulus=(), timeout_sec=5):
     d = tmp_path / "t"
     d.mkdir()
@@ -393,7 +402,7 @@ def test_unix_without_cmd_pushes_entry_and_runs_wsl(tmp_path, monkeypatch):
     assert not res.passed
     assert "not found" in (res.error or "")
     assert len(runs) == 1 and "/home/tester/ironharness-runs" in runs[0][-1]
-    assert popens[0][:3] == ["wsl", "-d", "OpenClawGateway"]
+    assert popens[0][:3] == ["wsl", "-d", "test-distro"]
     assert "~/bin/micropython" in popens[0][-1]
     assert popens[0][-1].startswith("exec ")  # micropython replaces bash
 
@@ -606,3 +615,17 @@ expect:
     (d / "task.yaml").write_text(textwrap.dedent(text), encoding="utf-8")
     with pytest.raises(ValueError, match="the unix target"):
         load_task(d)
+
+
+def test_renode_distro_env_override_and_unset_error(monkeypatch):
+    # audit C (2026-09-20): the distro has no code default anymore - the
+    # owner's private distro name leaked into src. Both branches pinned by
+    # the test_unix_bin_env_override_and_default template: the env var wins
+    # when set, and an unset variable is a loud authoring error naming it.
+    from ironbench import runner_common
+
+    monkeypatch.setenv("IRONBENCH_RENODE_DISTRO", "my-distro")
+    assert runner_common._wsl_distro() == "my-distro"
+    monkeypatch.delenv("IRONBENCH_RENODE_DISTRO", raising=False)
+    with pytest.raises(ValueError, match="IRONBENCH_RENODE_DISTRO"):
+        runner_common._wsl_distro()

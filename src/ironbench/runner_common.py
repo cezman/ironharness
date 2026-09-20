@@ -375,7 +375,17 @@ def _journal_result(journal, result: TaskResult) -> None:
 
 
 def _wsl_distro() -> str:
-    return os.environ.get("IRONBENCH_RENODE_DISTRO", "OpenClawGateway")
+    """The WSL distro staging pushes into. Audit C (2026-09-20): the default
+    was the owner's private distro name - private infra config leaked into
+    the code. There is no generic default: an unset variable is a loud
+    authoring error naming the env var to set."""
+    distro = os.environ.get("IRONBENCH_RENODE_DISTRO", "").strip()
+    if not distro:
+        raise ValueError(
+            "IRONBENCH_RENODE_DISTRO is not set - the WSL distro to stage into "
+            "is machine-specific; export it (e.g. export IRONBENCH_RENODE_DISTRO=Ubuntu)"
+        )
+    return distro
 
 
 def _tar_of(path: Path, arcname: str) -> bytes:
