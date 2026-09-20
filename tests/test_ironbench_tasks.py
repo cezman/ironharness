@@ -202,6 +202,47 @@ def test_bme_read_is_real_target_with_notes():
     assert any("-?" in p for p in task.expect)
 
 
+def test_bus_diagnose_is_real_target_with_notes():
+    # IH-91 pin: the degradation-diagnosis golden stays target "real", keeps
+    # the bench notes, and its fail patterns include the exact failure mode
+    # of the station firmware it diagnoses (unhandled ENODEV at boot)
+    from pathlib import Path
+
+    task = load_task(
+        Path(__file__).parents[1] / "src" / "ironbench" / "tasks" / "bus-diagnose"
+    )
+    assert task.target == "real"
+    assert task.tags == ("resilience",)
+    assert task.level == 3
+    assert task.notes, "the bench lessons must ship with the task (IH-21)"
+    waits = [s["wait-serial"] for s in task.stimulus if "wait-serial" in s]
+    assert waits == ["MISSING="]
+    assert any("write-serial" in s for s in task.stimulus)
+    # the scan report is pinned with an escaped bracket class, not a bare
+    # literal (a bare 'SCAN=[118]' regex is a char class matching 'SCAN=1')
+    assert r"SCAN=\[118\]" in task.expect
+    assert "ENODEV" in task.fail
+    assert "Traceback" in task.fail
+
+
+def test_bus_diagnose_answer_is_not_leaked_by_the_prompt():
+    # the task is a diagnosis only if the answer is not in the prompt: the
+    # description names the EXPECTED device set (0x76, 0x3C) and the output
+    # contract, while the observed bus state (which device is gone, the
+    # exact report lines) lives only in expect/ - a firmware that hardcodes
+    # the contract answer from the prompt must fail the degraded-vs-healthy
+    # distinction (pinned end-to-end by test_bus_diagnose_healthy_guess_fails)
+    from pathlib import Path
+
+    raw = (
+        Path(__file__).parents[1] / "src" / "ironbench" / "tasks" / "bus-diagnose" / "task.yaml"
+    ).read_text(encoding="utf-8")
+    prompt_sections = raw.split("expect:", 1)[0]
+    assert "SCAN=[118]" not in prompt_sections
+    assert "MISSING=0x3C" not in prompt_sections
+    assert "STATUS=degraded" not in prompt_sections
+
+
 def test_wokwi_stimulus_controls_exist_in_diagram():
     # set-control references only parts from the task's diagram.json (catches typos in ids)
     import json

@@ -10,6 +10,7 @@ WSL-guarded like the other golden unix tasks.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import textwrap
 from pathlib import Path
@@ -65,7 +66,8 @@ def make_shim_task(
     d = tmp_path / "t"
     d.mkdir()
     lo, hi = period_ms
-    expect_lines = [f"  - {p!r}" for p in expect]
+    # json.dumps, not repr(): backslashes must survive the YAML roundtrip
+    expect_lines = [f"  - {json.dumps(p)}" for p in expect]
     lines = [
         "name: synth-shim",
         "description: fake",

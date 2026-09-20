@@ -1,0 +1,78 @@
+# Task description for ironbench: see AGENTS.md / ironbench-task skill.
+# Third live-board golden authored by the board chat (IH-91): fault
+# diagnosis. The bench ships two expected I2C devices but the SSD1306 OLED
+# (0x3C) is physically off the bus RIGHT NOW - the exact degradation the
+# station's own main.py dies on (unhandled ENODEV at boot). The firmware
+# must discover the actual bus state by scanning and report it in a fixed
+# contract; the description names only the EXPECTED set, never the actual
+# answer, so hardcoding the answer from the prompt fails (pinned by
+# test_bus_diagnose_answer_is_not_leaked_by_the_prompt: the observed bus
+# list and the absent address live only in expect/, never in the prompt).
+# Bench-state coupling: the expectations pin the observed degraded state.
+# When the owner re-solders the OLED, the live bench answers
+# MISSING=none/STATUS=ok and the golden expects must be re-authored for the
+# healthy state (same coupling as bme-read needing the BME280 on the bus).
+# Anti-cheat honesty: the stamp anchor condemns boot-dump cheaters and the
+# leak pin keeps the answer out of the prompt, but a reactive firmware that
+# fabricates the report without touching the bus is the documented
+# real-target residual (IH-44) - the same class bme-read had before
+# cross-sensor raised the bar with a physical cross-check.
+# Liveness honesty: "never exits" is enforced only as "never crashes"
+# (the fail patterns); a firmware that answers one round and exits still
+# matches the stateless contract's patterns, and a missed wait does not
+# score - sibling-consistent with bme-read/cross-sensor ("The program
+# never exits" has no scoring mechanism there either).
+name: bus-diagnose
+description: >-
+  A weather-station board has two devices on its I2C bus (SDA GPIO21, SCL
+  GPIO22, 400 kHz): a BME280 sensor at address 0x76 and an SSD1306 OLED
+  display at address 0x3C. Breadboards fail: any of these devices may be
+  unreachable RIGHT NOW, and the firmware must find out on its own. Write
+  firmware that on startup prints exactly "bus ready", then in an infinite
+  loop waits for lines on the serial console. Every received line (ignore
+  empty ones) triggers one diagnosis round: scan the I2C bus and answer
+  with two lines. The first line has the exact form
+  "SCAN=<found> MISSING=<missing>" where <found> is the list of addresses
+  that answered the scan, printed the way MicroPython's i2c.scan() prints
+  it (decimal integers, e.g. [118]), and <missing> lists the EXPECTED
+  addresses that did NOT answer - hexadecimal, two digits, uppercase,
+  several separated by single commas (e.g. 0x3C) - or the word none when
+  every expected device answered. The second line has the exact form
+  "STATUS=<state>" where <state> is degraded when at least one expected
+  device is missing and ok otherwise. In the degraded case the firmware
+  must keep running: never touch a missing device (an I2C write to an
+  absent address raises OSError) and never exit.
+entry: solution.py
+target: real
+timeout_sec: 20
+tags: [resilience]
+level: 3
+environment:
+  device_modules: [machine, time]
+  api_hint: |
+    from machine import Pin, SoftI2C
+    i2c = SoftI2C(scl=Pin(22), sda=Pin(21), freq=400000)
+    print(i2c.scan())  # DECIMAL addresses that answered, e.g. [118] == 0x76
+expect:
+  - 'bus ready'
+  - 'SCAN=\[118\]'
+  - 'MISSING=0x3C'
+  - 'STATUS=degraded'
+fail:
+  - 'Traceback'
+  - 'ENODEV'
+stimulus:
+  # "bus ready" is boot output scored from the whole log; the diagnosis is
+  # anchored to the request line - the real target carries the IH-14
+  # chunk-stamp anchor, so a pre-printed diagnosis fails the run. The wait
+  # needle is deliberately task-specific ('MISSING=' lives only in
+  # diagnosis lines).
+  - delay: 1500ms
+  - write-serial: "diag\r"
+  - wait-serial: 'MISSING='
+notes:
+  - 'i2c.scan() returns DECIMAL addresses: the OLED at 0x3C shows up as 60; the MISSING report is hex.'
+  - 'A missing device does NOT make scan() fail or raise: absence shows only as its address missing from the list.'
+  - 'Do not probe a missing device with a write to "check" it: an I2C write to an absent address raises OSError [Errno 19] ENODEV, and an unhandled one kills the program (this is exactly how the station firmware dies today).'
+  - 'The REPL eats cooked UTF-8: keep firmware output ASCII.'
+  - 'The COM port number changes across USB re-plugs: re-enumerate ports before opening.'

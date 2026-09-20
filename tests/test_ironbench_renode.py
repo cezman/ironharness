@@ -132,9 +132,11 @@ renode:
   firmware: fake.elf
 expect:
 """
-    text += "".join(f"  - {p!r}\n" for p in expect)
+    # json.dumps, not repr(): the line is a YAML double-quoted scalar and
+    # repr's backslash doubling would turn regex \d into a literal \\d
+    text += "".join(f"  - {json.dumps(p)}\n" for p in expect)
     if fail:
-        text += "fail:\n" + "".join(f"  - {p!r}\n" for p in fail)
+        text += "fail:\n" + "".join(f"  - {json.dumps(p)}\n" for p in fail)
     if stimulus:
         text += "stimulus:\n" + "\n".join(f"  - {s}" for s in stimulus) + "\n"
     (d / "task.yaml").write_text(textwrap.dedent(text), encoding="utf-8")
