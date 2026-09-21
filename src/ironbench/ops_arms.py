@@ -140,21 +140,68 @@ BARE_SYSTEM_PROMPT = (
 
 MCP_SYSTEM_PROMPT = (
     "You operate a live embedded board through hardware tools. You work in "
-    "iterations: reply with exactly ONE JSON object "
-    '{"tool": "<name>", "arguments": {...}} to call a tool; you will see its '
-    'result as feedback. When your evidence shows the task is done, reply '
-    'with the single JSON object {"claim": "SUCCESS"}; if the task cannot be '
-    'done, {"claim": "FAIL"}. Never claim success without evidence from the '
-    "board."
+    "iterations: call exactly one tool per turn; you will see its result as "
+    "feedback. When your evidence shows the task is done, call the claim tool "
+    "with verdict SUCCESS; if the task cannot be done, call it with verdict "
+    "FAIL. Never claim success without evidence from the board."
 )
 
+CLAIM_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "claim",
+        "description": "End the attempt with your verdict about the task.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "verdict": {"type": "string", "enum": ["SUCCESS", "FAIL"]},
+                "inventory": {
+                    "type": "object",
+                    "description": "Optional: reported inventory data (task-specific).",
+                },
+            },
+            "required": ["verdict"],
+        },
+    },
+}
 
-def tool_catalog(tools: list[dict], allowed_families: tuple[str, ...]) -> str:
-    """Renders the server's tool list filtered to the task's allowed tool
-    families - the MCP arm's prompt-side surface."""
+
+def native_tools(catalog: list[dict]) -> list[dict]:
+    """MCP tool descriptors in OpenAI function-tool form plus the claim tool."""
+    out = []
+    for tool in catalog:
+        out.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("inputSchema")
+                    or {"type": "object", "properties": {}},
+                },
+            }
+        )
+    return out + [CLAIM_TOOL]
+
+
+def parse_tool_arguments(raw: Any) -> dict:
+    """OpenAI tool arguments arrive as a JSON string (or a dict)."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            value = json.loads(raw)
+            return value if isinstance(value, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def tool_catalog(catalog: list[dict], allowed_families: tuple[str, ...]) -> str:
+    """Human-readable tool list (text-protocol fallback rendering)."""
     prefixes = tuple(f + "_" for f in allowed_families)
     lines = []
-    for tool in tools:
+    for tool in catalog:
         name = tool.get("name", "")
         if not name.startswith(prefixes):
             continue
@@ -283,7 +330,13 @@ class BareArm:
 
 
 class McpArm:
-    """The tools arm: one JSON tool call per turn against a real MCP server."""
+    """The tools arm: a real MCP server behind the model's native tool
+    calling. Tools go to the API in OpenAI form (describing them in the
+    prompt text makes gpt-oss end its turn inside the reasoning channel -
+    observed live on LM Studio); each returned tool call is executed over
+    the wire and its result goes back as a role=tool message. A text-JSON
+    protocol remains as the fallback for models without native tool
+    parsing."""
 
     def __init__(
         self,
@@ -308,48 +361,84 @@ class McpArm:
         result = ArmResult(turns=[], claimed=None, claim_iteration=None)
         client: McpWireClient = self._client_factory()
         try:
-            catalog = tool_catalog(client.list_tools(), self._families)
+            catalog = [
+                t for t in client.list_tools()
+                if t.get("name", "").startswith(tuple(f + "_" for f in self._families))
+            ]
+            tools = native_tools(catalog)
             messages: list[dict] = [
                 {"role": "system", "content": MCP_SYSTEM_PROMPT},
-                {"role": "user", "content": f"{task_prompt}\n\nAvailable tools:\n{catalog}"},
+                {"role": "user", "content": task_prompt},
             ]
             for iteration in range(1, max_iterations + 1):
                 if time.monotonic() >= deadline:
                     result.timed_out = True
                     break
-                reply: ChatReply = chat(self._cfg, messages)
+                reply: ChatReply = chat(self._cfg, messages, tools=tools)
                 result.tokens_in += reply.prompt_tokens
                 result.tokens_out += reply.completion_tokens
-                payload = extract_last_json(reply.content)
+                msg = reply.message or {}
+                calls = msg.get("tool_calls") or []
+                if calls:
+                    messages.append(
+                        {"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
+                    )
+                    end = False
+                    for tc in calls:
+                        fn = tc.get("function") or {}
+                        name = str(fn.get("name", ""))
+                        arguments = parse_tool_arguments(fn.get("arguments"))
+                        if name == "claim":
+                            verdict = str(arguments.get("verdict", "")).upper()
+                            result.turns.append(Turn(iteration, "claim", json.dumps(arguments)))
+                            if verdict in ("SUCCESS", "FAIL"):
+                                result.claimed = verdict
+                                result.claim_iteration = iteration
+                            end = True
+                            continue
+                        call = client.call_tool(name, arguments)
+                        observation = (
+                            f"TOOL {name} -> {'OK' if call['ok'] else 'ERROR'}\n{_cap(call['text'])}"
+                        )
+                        result.turns.append(
+                            Turn(
+                                iteration, "tool", json.dumps({"tool": name, "arguments": arguments}),
+                                observation, ok=call["ok"],
+                            )
+                        )
+                        messages.append(
+                            {"role": "tool", "tool_call_id": tc.get("id") or "", "content": _cap(call["text"])}
+                        )
+                    if end:
+                        break
+                    continue
+                # text-JSON fallback (no native tool calls in the reply)
+                text = reply.content
+                payload = extract_last_json(text)
                 if payload is None:
                     result.turns.append(
-                        Turn(
-                            iteration,
-                            "invalid",
-                            reply.content,
-                            "Reply with ONE JSON object: a tool call or a claim.",
-                        )
+                        Turn(iteration, "invalid", text, "Call a tool, or call claim with your verdict.")
                     )
-                    messages.append({"role": "assistant", "content": reply.content})
+                    messages.append({"role": "assistant", "content": text})
                     messages.append(
                         {
                             "role": "user",
-                            "content": "Unparsable reply. One JSON object: "
-                            '{"tool": ..., "arguments": {...}} or {"claim": "SUCCESS"/"FAIL"}.',
+                            "content": "Reply by calling a tool, or call the claim tool "
+                            "with verdict SUCCESS/FAIL.",
                         }
                     )
                     continue
                 if "claim" in payload:
-                    claim = str(payload["claim"]).upper()
-                    if claim in ("SUCCESS", "FAIL"):
-                        result.turns.append(Turn(iteration, "claim", reply.content.strip()))
-                        result.claimed = claim
+                    verdict = str(payload.get("claim", "")).upper()
+                    result.turns.append(Turn(iteration, "claim", json.dumps(payload)))
+                    if verdict in ("SUCCESS", "FAIL"):
+                        result.claimed = verdict
                         result.claim_iteration = iteration
-                        break
+                    break
                 name, arguments = payload.get("tool"), payload.get("arguments") or {}
                 if not isinstance(name, str):
-                    result.turns.append(Turn(iteration, "invalid", reply.content, "Missing tool name."))
-                    messages.append({"role": "assistant", "content": reply.content})
+                    result.turns.append(Turn(iteration, "invalid", text, "Missing tool name."))
+                    messages.append({"role": "assistant", "content": text})
                     messages.append({"role": "user", "content": "Provide a tool name."})
                     continue
                 call = client.call_tool(name, arguments)
@@ -357,10 +446,13 @@ class McpArm:
                     f"TOOL {name} -> {'OK' if call['ok'] else 'ERROR'}\n{_cap(call['text'])}"
                 )
                 result.turns.append(
-                    Turn(iteration, "tool", json.dumps(payload), observation, ok=call["ok"])
+                    Turn(iteration, "tool", json.dumps({"tool": name, "arguments": arguments}),
+                         observation, ok=call["ok"])
                 )
-                messages.append({"role": "assistant", "content": reply.content})
-                messages.append({"role": "user", "content": f"Tool result:\n{observation}\n\nContinue, or claim."})
+                messages.append({"role": "assistant", "content": text})
+                messages.append(
+                    {"role": "user", "content": f"Tool result:\n{observation}\n\nContinue, or claim."}
+                )
             return result
         finally:
             client.close()

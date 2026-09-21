@@ -156,28 +156,32 @@ class ChatReply:
 
     The firmware loop ignores the usage (its metrics count time and
     iterations); the ops A/B pays for tokens in its metrics, so the raw
-    payload is kept instead of being discarded.
+    payload is kept instead of being discarded. `message` is the raw
+    assistant message (native tool_calls included) for the arms that
+    drive the model through the OpenAI tool-calling loop.
     """
 
     content: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    message: dict = dataclasses.field(default_factory=dict)
 
 
-def chat_completion(cfg: SolveConfig, messages: list[dict]) -> ChatReply:
+def chat_completion(cfg: SolveConfig, messages: list[dict], tools: list[dict] | None = None) -> ChatReply:
     """A single /chat/completions call without an SDK (urllib suffices for a
-    local server)."""
+    local server). `tools` enables the native tool-calling loop."""
     validate_endpoint(cfg.base_url, allow_local=cfg.allow_local)
     url = cfg.base_url.rstrip("/") + "/chat/completions"
-    body = json.dumps(
-        {
-            "model": cfg.model,
-            "messages": messages,
-            "temperature": cfg.temperature,
-            "max_tokens": cfg.max_tokens,
-            "stream": False,
-        }
-    ).encode("utf-8")
+    payload_body: dict = {
+        "model": cfg.model,
+        "messages": messages,
+        "temperature": cfg.temperature,
+        "max_tokens": cfg.max_tokens,
+        "stream": False,
+    }
+    if tools:
+        payload_body["tools"] = tools
+    body = json.dumps(payload_body).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=body,
@@ -202,6 +206,7 @@ def chat_completion(cfg: SolveConfig, messages: list[dict]) -> ChatReply:
         content=content,
         prompt_tokens=int(usage.get("prompt_tokens") or 0),
         completion_tokens=int(usage.get("completion_tokens") or 0),
+        message=message,
     )
 
 

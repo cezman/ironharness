@@ -12,9 +12,10 @@ from ironbench.ops_arms import (
     BareArm,
     McpArm,
     extract_last_json,
+    native_tools,
     parse_claim,
+    parse_tool_arguments,
     scan_bare_accidents,
-    tool_catalog,
 )
 
 CFG = SolveConfig(base_url="http://localhost:1234/v1", api_key="x", model="test-model")
@@ -23,8 +24,8 @@ CFG = SolveConfig(base_url="http://localhost:1234/v1", api_key="x", model="test-
 def scripted_llm(replies):
     calls = []
 
-    def llm(cfg, messages):
-        calls.append([dict(m) for m in messages])
+    def llm(cfg, messages, tools=None):
+        calls.append({"messages": [dict(m) for m in messages], "tools": tools})
         return replies.pop(0)
 
     llm.calls = calls
@@ -173,37 +174,58 @@ TOOLS = [
 ]
 
 
-def test_tool_catalog_filters_by_families():
-    catalog = tool_catalog(TOOLS, ("serial", "file"))
-    assert "file_write" in catalog and "serial_open" in catalog
-    assert "modbus_open" not in catalog
+def _native_call(name: str, arguments: dict, call_id: str = "c1") -> dict:
+    return {"id": call_id, "function": {"name": name, "arguments": json.dumps(arguments)}}
 
 
-def test_mcp_arm_calls_tools_then_claims():
+def test_native_tools_adds_claim_and_keeps_schemas():
+    tools = native_tools(TOOLS)
+    names = [t["function"]["name"] for t in tools]
+    assert names == ["file_write", "serial_open", "modbus_open", "claim"]
+    assert tools[0]["function"]["parameters"] == TOOLS[0]["inputSchema"]
+    assert tools[-1]["function"]["parameters"]["properties"]["verdict"]["enum"] == ["SUCCESS", "FAIL"]
+
+
+def test_parse_tool_arguments_accepts_str_and_dict():
+    assert parse_tool_arguments('{"port": "COM9"}') == {"port": "COM9"}
+    assert parse_tool_arguments({"port": "COM9"}) == {"port": "COM9"}
+    assert parse_tool_arguments("") == {}
+    assert parse_tool_arguments("not json") == {}
+
+
+def test_mcp_arm_filters_families_and_calls_tools_natively():
     replies = [
-        ChatReply(content='{"tool": "serial_open", "arguments": {"port": "COM9"}}'),
-        ChatReply(content='Sure: {"tool": "file_write", "arguments": {"path": "a", "content": "x"}}'),
-        ChatReply(content='{"claim": "SUCCESS"}'),
+        ChatReply(
+            content="",
+            message={"tool_calls": [_native_call("serial_open", {"port": "COM9"})]},
+            prompt_tokens=10,
+            completion_tokens=4,
+        ),
+        ChatReply(
+            content="",
+            message={"tool_calls": [_native_call("claim", {"verdict": "SUCCESS"}, "c2")]},
+        ),
     ]
     client = FakeMcpClient(TOOLS)
     arm = McpArm(CFG, client_factory=lambda: client, allowed_families=("serial", "file"))
+    llm = scripted_llm(replies)
     result = arm.run(
         task_prompt="t", max_iterations=5, deadline=time.monotonic() + 60,
-        llm=scripted_llm(replies),
+        llm=llm,
     )
     assert result.claimed == "SUCCESS"
-    assert client.calls == [
-        ("serial_open", {"port": "COM9"}),
-        ("file_write", {"path": "a", "content": "x"}),
-    ]
+    assert client.calls == [("serial_open", {"port": "COM9"})]
     assert client.closed is True
-    assert result.turns[1].observation.startswith("TOOL file_write -> OK")
+    # the claim tool never reaches the MCP server
+    assert all(name != "claim" for name, _ in client.calls)
+    # the tools went to the API, not into the prompt text
+    assert all(c["tools"] for c in llm.calls)
 
 
 def test_mcp_arm_tool_error_is_an_observation_not_a_crash():
     replies = [
-        ChatReply(content='{"tool": "serial_open", "arguments": {}}'),
-        ChatReply(content='{"claim": "FAIL"}'),
+        ChatReply(content="", message={"tool_calls": [_native_call("serial_open", {})]}),
+        ChatReply(content="", message={"tool_calls": [_native_call("claim", {"verdict": "FAIL"}, "c2")]}),
     ]
     client = FakeMcpClient(TOOLS, results={"serial_open": {"ok": False, "text": "port busy"}})
     arm = McpArm(CFG, client_factory=lambda: client, allowed_families=("serial",))
@@ -216,6 +238,22 @@ def test_mcp_arm_tool_error_is_an_observation_not_a_crash():
     assert result.claimed == "FAIL"
 
 
+def test_mcp_arm_text_fallback_still_works():
+    # models without native tool parsing reply with the text-JSON protocol
+    replies = [
+        ChatReply(content='{"tool": "serial_open", "arguments": {"port": "COM9"}}'),
+        ChatReply(content='{"claim": "FAIL"}'),
+    ]
+    client = FakeMcpClient(TOOLS)
+    arm = McpArm(CFG, client_factory=lambda: client, allowed_families=("serial",))
+    result = arm.run(
+        task_prompt="t", max_iterations=5, deadline=time.monotonic() + 60,
+        llm=scripted_llm(replies),
+    )
+    assert client.calls == [("serial_open", {"port": "COM9"})]
+    assert result.claimed == "FAIL"
+
+
 def test_mcp_arm_garbage_reply_gets_feedback():
     replies = [ChatReply(content="Let me look around first."), ChatReply(content='{"claim": "FAIL"}')]
     client = FakeMcpClient(TOOLS)
@@ -225,7 +263,7 @@ def test_mcp_arm_garbage_reply_gets_feedback():
         llm=scripted_llm(replies),
     )
     assert result.turns[0].kind == "invalid"
-    assert "JSON" in result.turns[0].observation
+    assert "tool" in result.turns[0].observation
 
 
 def test_mcp_arm_transcript_records_everything():

@@ -273,7 +273,7 @@ def test_attempt_end_to_end_solved(tmp_path):
         ]
     )
 
-    def llm(cfg, messages):
+    def llm(cfg, messages, tools=None):
         return next(calls)
 
     def client_factory():
@@ -306,7 +306,7 @@ def test_attempt_silent_failure_claim_refuted_by_judge(tmp_path):
     task = make_task(tmp_path)
     board = FakeBoard()
 
-    def llm(cfg, messages):
+    def llm(cfg, messages, tools=None):
         return ChatReply(content='{"claim": "SUCCESS"}')
 
     result = run_ops_attempt(
@@ -333,7 +333,7 @@ def test_attempt_infra_when_llm_is_down(tmp_path):
     task = make_task(tmp_path)
     board = FakeBoard()
 
-    def llm(cfg, messages):
+    def llm(cfg, messages, tools=None):
         raise urllib.error.URLError("connection refused")
 
     result = run_ops_attempt(
