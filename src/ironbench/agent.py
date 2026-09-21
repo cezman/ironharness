@@ -80,6 +80,14 @@ class SolveConfig:
     # "thinking" forever and hog the server queue
     max_tokens: int = 8192
 
+    def __post_init__(self) -> None:
+        # IH-112: 0 (or negative) used to be accepted silently - the loop never
+        # ran and every attempt burned as "iteration limit (0) exhausted",
+        # poisoning pass@k with fake errors. __post_init__ revalidates on
+        # dataclasses.replace too, so a CLI/env override cannot slip past.
+        if not 1 <= self.max_iterations <= 1000:
+            raise ValueError(f"max_iterations must be within 1..1000, got {self.max_iterations}")
+
 
 def _env_map() -> dict[str, str]:
     env_file = find_env_file()

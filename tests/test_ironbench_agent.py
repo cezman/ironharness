@@ -557,6 +557,35 @@ def test_solve_attempt_http_404_aborts_loudly(tmp_path):
         solve_attempt(task, cfg, out_dir=tmp_path, llm=boom, runner=fake_runner(True))
 
 
+def test_iterations_config_is_bounded(tmp_path, monkeypatch):
+    # IH-112: --iterations 0 / LLM_MAX_ITERATIONS=0 used to be accepted
+    # silently - the loop never ran and every attempt was burned as
+    # "iteration limit (0) exhausted", poisoning pass@k with fake errors.
+    # The bound is enforced by the config itself (dataclasses.replace
+    # revalidates), the env path included.
+    with pytest.raises(ValueError, match="max_iterations must be within 1..1000"):
+        SolveConfig(base_url="http://x", api_key="k", model="m", max_iterations=0)
+    with pytest.raises(ValueError, match="max_iterations must be within 1..1000"):
+        SolveConfig(base_url="http://x", api_key="k", model="m", max_iterations=-3)
+    with pytest.raises(ValueError, match="max_iterations must be within 1..1000"):
+        SolveConfig(base_url="http://x", api_key="k", model="m", max_iterations=1001)
+    monkeypatch.setenv("LLM_MAX_ITERATIONS", "0")
+    with pytest.raises(ValueError, match="max_iterations must be within 1..1000"):
+        resolve_llm_config()
+    monkeypatch.setenv("LLM_MAX_ITERATIONS", "1")
+    assert resolve_llm_config().max_iterations == 1
+
+
+def test_cli_solve_rejects_zero_iterations(tmp_path, capsys):
+    # IH-112: the CLI refuses before any config/task work - same refusal
+    # style as --attempts
+    import ironbench.cli as cli_module
+
+    rc = cli_module.main(["solve", "--task", "blink", "--iterations", "0"])
+    assert rc == 2
+    assert "must be within 1..1000" in capsys.readouterr().out
+
+
 def test_solve_attempt_retries_transient_llm_errors(tmp_path, monkeypatch):
     # a transient failure is retried instead of burning the attempt
     monkeypatch.setattr("ironbench.agent._LLM_RETRY_SLEEP", 0.0)
