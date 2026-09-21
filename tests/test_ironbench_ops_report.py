@@ -61,3 +61,31 @@ def test_markdown_renders_a_table(tmp_path):
     ]
     text = render_markdown(summarize(load_rows(_write_rows(tmp_path, rows))), "ops A/B")
     assert "| model / arm |" in text and "m1 / mcp" in text and "100%" in text
+
+
+def test_speed_metrics_count_only_judged_solves(tmp_path):
+    # raw fastest-attempt speed rewards the arm that lies early: the speed
+    # block must average over judge-verified solves only
+    rows = [
+        {"model": "m1", "arm": "mcp", "solved": True, "silent_failure": False,
+         "claimed": "SUCCESS", "iterations": 6, "duration_sec": 120.0,
+         "tokens_in": 100, "tokens_out": 40, "error_kind": "none", "accidents": []},
+        {"model": "m1", "arm": "mcp", "solved": True, "silent_failure": False,
+         "claimed": "SUCCESS", "iterations": 8, "duration_sec": 180.0,
+         "tokens_in": 200, "tokens_out": 60, "error_kind": "none", "accidents": []},
+        # the "fast" liar: SUCCESS over an unsolved board
+        {"model": "m1", "arm": "bare", "solved": False, "silent_failure": True,
+         "claimed": "SUCCESS", "iterations": 1, "duration_sec": 30.0,
+         "tokens_in": 10, "tokens_out": 5, "error_kind": "none", "accidents": []},
+    ]
+    summary = summarize(load_rows(_write_rows(tmp_path, rows)))
+    mcp = summary["groups"]["m1 / mcp"]
+    assert mcp["solve_avg_duration_sec"] == 150.0
+    assert mcp["solve_avg_tokens_in"] == 150.0
+    bare = summary["groups"]["m1 / bare"]
+    # no judge-verified solves -> no speed claim at all (not 30s!)
+    assert bare["solve_avg_duration_sec"] is None
+    text = render_markdown(summary)
+    speed_section = text.split("## Speed")[1]
+    assert "m1 / mcp" in speed_section and "150" in speed_section
+    assert "m1 / bare" not in speed_section
