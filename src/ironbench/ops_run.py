@@ -286,6 +286,7 @@ class OpsAttemptResult:
     judge: dict
     journal_coverage: float | None
     accidents: list[str]
+    restore_failed: bool
     run_dir: Path
 
     def row(self) -> dict:
@@ -337,6 +338,7 @@ def run_ops_attempt(
             "judge": {},
             "journal_coverage": None,
             "accidents": [],
+            "restore_failed": False,
             "run_dir": run_dir,
         }
         base.update(kw)
@@ -446,7 +448,10 @@ def run_ops_attempt(
     restore_error = _best_effort_restore(
         task, port=port, assets=assets, journal=journal, transport_factory=transport_factory
     )
-    if restore_error is not None and error_kind == "none":
+    if restore_error is not None and error_kind == "none" and not solved:
+        # a restore failure after a JUDGED SOLVE must not hide the solve:
+        # the row keeps solved=True with restore_failed evidence; only an
+        # unsolved attempt gets reclassified as infra
         error_kind = "infra"
     return finish(
         solved=solved,
@@ -460,6 +465,7 @@ def run_ops_attempt(
         judge=judge_report,
         journal_coverage=coverage,
         accidents=accidents,
+        restore_failed=restore_error is not None,
     )
 
 
