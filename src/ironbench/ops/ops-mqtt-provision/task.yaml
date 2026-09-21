@@ -2,6 +2,12 @@ name: ops-mqtt-provision
 level: 3
 tags: [protocol, io]
 wall_sec: 900
+# CI/offline only until the bench board has WiFi credentials. Residual:
+# a bare-arm script can publish from the HOST over raw sockets and the
+# mqtt_collect judge cannot attribute a publish to the device - the MCP
+# arm is closed structurally (no mqtt kind in allowed_tools, enforced
+# server-side via IRONHARNESS_ENABLED_KINDS), the bare arm only by the
+# honor of its own claim protocol.
 allowed_tools: [serial, file]
 budget: {max_iterations: 8, iter_timeout_sec: 240}
 description: |
