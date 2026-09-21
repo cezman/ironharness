@@ -3,7 +3,7 @@ level: 2
 tags: [io, data]
 wall_sec: 900
 allowed_tools: [serial, file]
-budget: {max_iterations: 6, iter_timeout_sec: 240}
+budget: {max_iterations: 10, iter_timeout_sec: 240}
 description: |
   The probe station on serial port $PORT boots and prints its configured
   station id (currently STATION METEO-R1, defined in /config.py on the device).

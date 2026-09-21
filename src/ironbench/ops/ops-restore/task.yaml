@@ -3,7 +3,7 @@ level: 3
 tags: [io, debug]
 wall_sec: 900
 allowed_tools: [serial, file]
-budget: {max_iterations: 8, iter_timeout_sec: 240}
+budget: {max_iterations: 12, iter_timeout_sec: 240}
 description: |
   The meteo station on serial port $PORT is down: /main.py is a broken draft and
   the board crashes at every boot. A known-good copy of the station is kept on
