@@ -163,11 +163,28 @@ def load_task(task_dir: Path) -> Task:
                 f"{task_file}: unknown stimulus step {sorted(unknown)} "
                 f"(allowed: {sorted(STIMULUS_STEP_KEYS)})"
             )
+        if "write-serial" in step:
+            data = step["write-serial"]
+            # IH-111 class: a null value would be coerced by the runners to the
+            # literal "None" written to the firmware; "" is a silently
+            # meaningless step (delay exists for sync)
+            if not isinstance(data, str) or not data:
+                raise ValueError(
+                    f"{task_file}: write-serial must be a non-empty string, got {data!r}"
+                )
         if "mqtt-publish" in step:
             pub = step["mqtt-publish"]
             if not isinstance(pub, dict) or not pub.get("topic") or "payload" not in pub:
                 raise ValueError(
                     f"{task_file}: mqtt-publish requires topic and payload"
+                )
+            if not isinstance(pub["topic"], str) or not pub["topic"].strip():
+                # IH-111 class: a non-string topic would coerce silently
+                raise ValueError(f"{task_file}: mqtt-publish topic must be a non-empty string")
+            if not isinstance(pub["payload"], str):
+                # IH-111 class: a null payload would be published as the literal "None"
+                raise ValueError(
+                    f"{task_file}: mqtt-publish payload must be a string (an empty one is legal)"
                 )
             if set(pub) - {"topic", "payload", "retain", "qos"}:
                 raise ValueError(
@@ -179,6 +196,9 @@ def load_task(task_dir: Path) -> Task:
             col = step["mqtt-collect"]
             if not isinstance(col, dict) or not col.get("topic") or "count" not in col:
                 raise ValueError(f"{task_file}: mqtt-collect requires topic and count")
+            if not isinstance(col["topic"], str) or not col["topic"].strip():
+                # IH-111 class: a non-string topic would coerce silently
+                raise ValueError(f"{task_file}: mqtt-collect topic must be a non-empty string")
             if set(col) - {"topic", "count", "timeout_sec"}:
                 raise ValueError(
                     f"{task_file}: unknown mqtt-collect keys {sorted(set(col) - {'topic', 'count', 'timeout_sec'})}"

@@ -335,6 +335,35 @@ def test_wait_serial_answer_must_be_a_nonempty_string(tmp_path):
             load_task(write_task(tmp_path, content, dirname=f"t-{label}"))
 
 
+def test_stimulus_string_values_are_typechecked(tmp_path):
+    # IH-111 class neighbors: the runners coerce stimulus values with str(),
+    # so a null/non-string value becomes a silently wrong payload or a literal
+    # "None" written to the firmware - rejected at load time.
+    cases = [
+        ("  - write-serial: \"\"\n", "write-serial must be a non-empty string"),
+        ("  - write-serial:\n", "write-serial must be a non-empty string"),
+        ("  - mqtt-publish: {topic: 4096, payload: 'x'}\n", "mqtt-publish topic"),
+        ("  - mqtt-publish: {topic: 't', payload: null}\n", "mqtt-publish payload"),
+        ("  - mqtt-collect: {topic: 4096, count: 1}\n", "mqtt-collect topic"),
+    ]
+    for i, (suffix, needle) in enumerate(cases):
+        content = "name: t\ndescription: fake\nexpect:\n  - 'x'\nstimulus:\n" + suffix
+        with pytest.raises(ValueError, match=needle):
+            load_task(write_task(tmp_path, content, dirname=f"t-case-{i}"))
+
+
+def test_empty_mqtt_payload_is_legal(tmp_path):
+    # an empty payload is legal MQTT semantics - only the null/typo case is
+    # rejected; an explicitly empty string must keep loading
+    content = (
+        "name: t\ndescription: fake\ntarget: unix\nexpect:\n  - 'x'\n"
+        "mqtt: {client_id: 'bench'}\n"
+        "stimulus:\n  - mqtt-publish: {topic: 't', payload: \"\"}\n"
+    )
+    task = load_task(write_task(tmp_path, content))
+    assert task.stimulus[0]["mqtt-publish"]["payload"] == ""
+
+
 def test_timeout_sec_is_bounded(tmp_path):
     """IH-46: numeric caps on operator-authored fields - a billion-second
     timeout would make the wall deadline meaningless."""
