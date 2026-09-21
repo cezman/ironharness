@@ -375,6 +375,7 @@ def test_set_control_step_is_validated(tmp_path):
         "  - set-control: {part-id: btn1}\n",  # missing control and value
         "  - set-control: {control: pressed, value: 1}\n",  # missing part-id
         "  - set-control: {part-id: btn1, control: pressed}\n",  # missing value
+        "  - set-control: {part-id: btn1, control: pressed, value: null}\n",  # null value
     ]
     for i, suffix in enumerate(cases):
         with pytest.raises(ValueError, match="set-control"):

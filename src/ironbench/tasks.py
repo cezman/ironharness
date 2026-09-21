@@ -241,11 +241,11 @@ def load_task(task_dir: Path) -> Task:
                 or not ctrl.get("part-id", "").strip()
                 or not isinstance(ctrl.get("control"), str)
                 or not ctrl.get("control", "").strip()
-                or "value" not in ctrl
+                or not isinstance(ctrl.get("value"), (str, int, float, bool))
             ):
                 raise ValueError(
                     f"{task_file}: set-control requires a mapping with non-empty string "
-                    f"'part-id' and 'control' and a 'value', got {ctrl!r}"
+                    f"'part-id' and 'control' and a scalar 'value', got {ctrl!r}"
                 )
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
