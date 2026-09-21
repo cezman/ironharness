@@ -1,0 +1,85 @@
+name: publish-mcp-registry
+
+# Publishes the server card to registry.modelcontextprotocol.io (OIDC, no secrets).
+# Runs on the same v* tags as `publish`, but waits until the matching release is
+# visible on PyPI: the registry verifies the uploaded package (README mcp-name),
+# so publishing before PyPI has the version is guaranteed to fail.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  # On a tag push github.ref_name is the short tag (v0.9.0). GitHub Actions does
+  # not run bash-style expansion inside env:, so this must be a ${{ }} expression;
+  # every step below derives the bare version from it the same way.
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  registry:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC - proves io.github.cezman ownership, no stored token
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify version agreement (tag == pyproject == server.json)
+        run: |
+          TAG="${TAG#v}"
+          PYPROJECT="$(grep -m1 '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')"
+          DRIFT="$(python3 - "$TAG" "$PYPROJECT" <<'EOF'
+          import json, sys
+          tag, pyproject = sys.argv[1], sys.argv[2]
+          with open("server.json", encoding="utf-8") as f:
+              s = json.load(f)
+          versions = {
+              "pyproject.toml": pyproject,
+              "server.json": s.get("version"),
+              "server.json package": (s.get("packages") or [{}])[0].get("version"),
+          }
+          bad = {k: v for k, v in versions.items() if v != tag}
+          if bad:
+              print(f"drift vs tag {tag}: {bad} (all must equal the tag)")
+              sys.exit(1)
+          print(f"all versions agree on {tag}")
+          EOF
+          )"
+          echo "$DRIFT"
+          [ "$DRIFT" = "all versions agree on $TAG" ] || exit 1
+
+      - name: Verify README carries the PyPI ownership token
+        run: |
+          grep -q 'mcp-name: io.github.cezman/ironharness' README.md \
+            || { echo "::error::README.md is missing the 'mcp-name: io.github.cezman/ironharness' line - the registry will reject the package"; exit 1; }
+
+      - name: Install mcp-publisher (pinned, checksum-verified) and validate the card
+        # Fail fast on a broken card BEFORE spending the 15-minute PyPI wait.
+        env:
+          MCP_PUBLISHER_VERSION: "1.8.1"
+        run: |
+          curl -fsSLO "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSLO "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/registry_${MCP_PUBLISHER_VERSION}_checksums.txt"
+          grep 'mcp-publisher_linux_amd64\.tar\.gz$' "registry_${MCP_PUBLISHER_VERSION}_checksums.txt" | sha256sum -c -
+          tar xzf mcp-publisher_linux_amd64.tar.gz mcp-publisher
+          ./mcp-publisher validate
+
+      - name: Wait until the release is visible on PyPI
+        run: |
+          TAG="${TAG#v}"
+          for i in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/ironharness/${TAG}/json")"
+            if [ "$code" = "200" ]; then echo "ironharness ${TAG} is live on PyPI"; exit 0; fi
+            echo "attempt ${i}/60: PyPI has no ${TAG} yet (HTTP ${code}), retry in 15 s"
+            sleep 15
+          done
+          echo "::error::ironharness ${TAG} did not appear on PyPI within 15 minutes; registry publish aborted"
+          exit 1
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server to MCP Registry
+        run: ./mcp-publisher publish
