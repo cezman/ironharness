@@ -92,6 +92,53 @@ def _cmd_ops_ab(args) -> int:
     return exit_code
 
 
+def _cmd_ops_faults(args) -> int:
+    from ironbench.ops_faults import FAULTS, FAULTS_BY_ID, detection_rate, run_fault_scenario
+    from ironbench.ops_tasks import load_ops_task
+
+    tasks_root = Path(__file__).resolve().parent / "ops"
+    task_yaml = tasks_root / args.task / "task.yaml"
+    if not task_yaml.is_file():
+        print(f"ops task not found: {args.task} (under {tasks_root})")
+        return 2
+    task = load_ops_task(task_yaml)
+    faults = list(FAULTS) if not args.fault else [FAULTS_BY_ID[f] for f in args.fault]
+    arms = ["bare", "mcp"] if args.arm == "both" else [args.arm]
+    matrix = [(f, a) for a in arms for f in faults]
+    if args.dry_run:
+        for f, a in matrix:
+            print(f"  {args.task} {a} x fault {f.id}")
+        return 0
+
+    cfg = resolve_llm_config()
+    models = args.model or [cfg.model]
+    campaign = args.campaign or time.strftime("%Y-%m-%d-%H%M%S", time.gmtime())
+    campaign_dir = args.out / "ops" / f"faults-{campaign}"
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    rows_path = campaign_dir / "rows.jsonl"
+    rows: list[dict] = []
+    for model in models:
+        model_cfg = dataclasses.replace(cfg, model=model)
+        for arm in arms:
+            for fault in faults:
+                print(f"[ops-faults] {task.name} {arm}/{model} x {fault.id}...", flush=True)
+                row = run_fault_scenario(
+                    fault,
+                    task,
+                    arm=arm,
+                    llm_cfg=model_cfg,
+                )
+                row["model"] = model
+                rows.append(row)
+                with rows_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(row, default=str) + "\n")
+                print(f"  {row['outcome']} iter={row['iterations']} claim={row['claimed']}")
+    rate = detection_rate(rows)
+    print(f"detection rate: {rate:.0%}" if rate is not None else "detection rate: n/a")
+    print(f"rows: {rows_path}")
+    return 0
+
+
 def _fmt_result(res) -> str:
     if res.passed:
         return f"PASS {res.task} ({res.duration_sec}s)"
@@ -214,10 +261,25 @@ def main(argv=None) -> int:
     )
     ops.add_argument("--campaign", default=None, help="campaign name (default: UTC stamp)")
 
+    flt = sub.add_parser(
+        "ops-faults",
+        parents=[common],
+        help="fault-injection suite: offline seeded incidents x ops task (IH-106)",
+    )
+    flt.add_argument("--task", required=True, help="ops task name")
+    flt.add_argument("--arm", choices=["bare", "mcp", "both"], default="both")
+    flt.add_argument("--model", action="append", default=[], help="LLM model id (repeatable)")
+    flt.add_argument("--fault", action="append", default=[], help="fault id (repeatable; default all)")
+    flt.add_argument("--campaign", default=None, help="campaign name (default: UTC stamp)")
+    flt.add_argument("--dry-run", action="store_true", help="print the matrix and exit")
+
     args = parser.parse_args(argv)
 
     if args.command == "ops-ab":
         return _cmd_ops_ab(args)
+
+    if args.command == "ops-faults":
+        return _cmd_ops_faults(args)
 
     tasks = load_tasks(args.tasks_dir)
 
