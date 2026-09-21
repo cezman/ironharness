@@ -40,7 +40,7 @@ LLM_RETRIES = 3
 LLM_RETRY_BACKOFF_SEC = 10.0
 
 
-def chat_with_retry(cfg: SolveConfig, messages: list[dict]) -> ChatReply:
+def chat_with_retry(cfg: SolveConfig, messages: list[dict], tools: list[dict] | None = None) -> ChatReply:
     """chat_completion with short retries: the local server hiccups
     (a JIT-loading model answers 400/5xx, the daemon restarts) must cost a
     retry, not the whole attempt. Deterministic 400s (prompt overflow) just
@@ -48,7 +48,7 @@ def chat_with_retry(cfg: SolveConfig, messages: list[dict]) -> ChatReply:
     last: Exception | None = None
     for i in range(LLM_RETRIES):
         try:
-            return chat_completion(cfg, messages)
+            return chat_completion(cfg, messages, tools)
         except OSError as e:  # URLError/HTTPError/timeout are OSError
             last = e
             if i + 1 < LLM_RETRIES:
