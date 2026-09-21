@@ -576,6 +576,31 @@ def test_iterations_config_is_bounded(tmp_path, monkeypatch):
     assert resolve_llm_config().max_iterations == 1
 
 
+def test_solve_config_numeric_fields_are_bounded(monkeypatch):
+    # IH-115: the neighbor fields of max_iterations accepted silent garbage -
+    # a negative temperature, a zero timeout (fires in urllib per request)
+    # and a zero max_tokens (error at the API) all surfaced late, per attempt,
+    # instead of at config time. The env path must be covered too.
+    ok = {"base_url": "http://x", "api_key": "k", "model": "m"}
+    with pytest.raises(ValueError, match="temperature"):
+        SolveConfig(**ok, temperature=-0.5)
+    with pytest.raises(ValueError, match="temperature"):
+        SolveConfig(**ok, temperature=2.5)
+    with pytest.raises(ValueError, match="timeout_sec"):
+        SolveConfig(**ok, timeout_sec=0)
+    with pytest.raises(ValueError, match="timeout_sec"):
+        SolveConfig(**ok, timeout_sec=3601)
+    with pytest.raises(ValueError, match="max_tokens"):
+        SolveConfig(**ok, max_tokens=0)
+    with pytest.raises(ValueError, match="max_tokens"):
+        SolveConfig(**ok, max_tokens=2**20 + 1)
+    monkeypatch.setenv("LLM_TIMEOUT", "0")
+    with pytest.raises(ValueError, match="timeout_sec"):
+        resolve_llm_config()
+    # legal edges keep loading
+    assert SolveConfig(**ok, temperature=0, timeout_sec=1, max_tokens=1)
+
+
 def test_cli_solve_rejects_zero_iterations(tmp_path, capsys):
     # IH-112: the CLI refuses before any config/task work - same refusal
     # style as --attempts
