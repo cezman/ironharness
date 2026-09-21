@@ -364,6 +364,35 @@ def test_empty_mqtt_payload_is_legal(tmp_path):
     assert task.stimulus[0]["mqtt-publish"]["payload"] == ""
 
 
+def test_set_control_step_is_validated(tmp_path):
+    # IH-116: the set-control step is pasted verbatim into the wokwi scenario -
+    # a malformed value (null, a bare string, missing keys) used to burn a paid
+    # simulation on a step wokwi-cli cannot execute. Rejected at load time.
+    base = "name: t\ndescription: fake\nexpect:\n  - 'x'\nstimulus:\n"
+    cases = [
+        "  - set-control:\n",  # null
+        "  - set-control: button1\n",  # a bare string, not a mapping
+        "  - set-control: {part-id: btn1}\n",  # missing control and value
+        "  - set-control: {control: pressed, value: 1}\n",  # missing part-id
+        "  - set-control: {part-id: btn1, control: pressed}\n",  # missing value
+    ]
+    for i, suffix in enumerate(cases):
+        with pytest.raises(ValueError, match="set-control"):
+            load_task(write_task(tmp_path, base + suffix, dirname=f"t-sc-{i}"))
+    good = base + "  - set-control: {part-id: btn1, control: pressed, value: 1}\n"
+    assert load_task(write_task(tmp_path, good, dirname="t-sc-good")).stimulus[0][
+        "set-control"
+    ] == {"part-id": "btn1", "control": "pressed", "value": 1}
+
+
+def test_entry_must_be_a_nonempty_string(tmp_path):
+    # IH-116: a null entry used to coerce to the literal "None" and fail
+    # downstream with a confusing missing-file error instead of a load error
+    content = "name: t\ndescription: fake\nentry:\nexpect:\n  - 'x'\n"
+    with pytest.raises(ValueError, match="entry must be a non-empty string"):
+        load_task(write_task(tmp_path, content))
+
+
 def test_timeout_sec_is_bounded(tmp_path):
     """IH-46: numeric caps on operator-authored fields - a billion-second
     timeout would make the wall deadline meaningless."""

@@ -230,6 +230,23 @@ def load_task(task_dir: Path) -> Task:
                 raise ValueError(
                     f"{task_file}: wait-serial must be a non-empty string answer, got {answer!r}"
                 )
+        if "set-control" in step:
+            ctrl = step["set-control"]
+            # IH-116: the step is pasted verbatim into the wokwi scenario - a
+            # malformed value used to burn a paid simulation on a step
+            # wokwi-cli cannot execute. Reject at load time.
+            if (
+                not isinstance(ctrl, dict)
+                or not isinstance(ctrl.get("part-id"), str)
+                or not ctrl.get("part-id", "").strip()
+                or not isinstance(ctrl.get("control"), str)
+                or not ctrl.get("control", "").strip()
+                or "value" not in ctrl
+            ):
+                raise ValueError(
+                    f"{task_file}: set-control requires a mapping with non-empty string "
+                    f"'part-id' and 'control' and a 'value', got {ctrl!r}"
+                )
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
         raise ValueError(f"{task_file}: unknown target {target!r} (allowed: {TASK_TARGETS})")
@@ -530,12 +547,17 @@ def load_task(task_dir: Path) -> Task:
             "patterns, unix events, or plant requirements) - any output would pass"
         )
 
+    entry = raw.get("entry", "main.py")
+    # IH-116: a null entry used to coerce to the literal "None" and fail
+    # downstream with a confusing missing-file error instead of a load error
+    if not isinstance(entry, str) or not entry.strip():
+        raise ValueError(f"{task_file}: entry must be a non-empty string, got {entry!r}")
     return Task(
         name=name,
         description=str(raw.get("description", "")),
         directory=task_dir,
         scenario=scenario,
-        entry=str(raw.get("entry", "main.py")),
+        entry=entry,
         timeout_sec=timeout_sec,
         expect=tuple(expect),
         fail=tuple(fail),
