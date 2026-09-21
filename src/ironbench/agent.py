@@ -189,9 +189,17 @@ def chat_completion(cfg: SolveConfig, messages: list[dict]) -> ChatReply:
     )
     with _OPENER.open(req, timeout=cfg.timeout_sec) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
+    message = payload["choices"][0]["message"]
+    content = message.get("content") or ""
+    if not content:
+        # local reasoning models on LM Studio sometimes emit the whole answer
+        # into the reasoning channel and leave content empty (gpt-oss-20b,
+        # observed live on longer prompts) - the reply text is the reasoning
+        # channel then; without the fallback every iteration looks empty
+        content = message.get("reasoning") or message.get("reasoning_content") or ""
     usage = payload.get("usage") or {}
     return ChatReply(
-        content=payload["choices"][0]["message"]["content"] or "",
+        content=content,
         prompt_tokens=int(usage.get("prompt_tokens") or 0),
         completion_tokens=int(usage.get("completion_tokens") or 0),
     )
