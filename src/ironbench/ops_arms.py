@@ -414,6 +414,12 @@ class McpArm:
                     continue
                 # text-JSON fallback (no native tool calls in the reply)
                 text = reply.content
+                claim = parse_claim(text)
+                if claim:
+                    result.turns.append(Turn(iteration, "claim", text.strip()))
+                    result.claimed = claim
+                    result.claim_iteration = iteration
+                    break
                 payload = extract_last_json(text)
                 if payload is None:
                     result.turns.append(
