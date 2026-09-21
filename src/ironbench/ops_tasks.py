@@ -93,6 +93,8 @@ class OpsTask:
     assets: tuple[OpsAsset, ...] = ()
     setup: tuple[OpsStep, ...] = ()
     restore: tuple[OpsStep, ...] = ()
+    # directory the YAML was loaded from; asset paths resolve against it
+    source_dir: Path | None = None
 
     def asset(self, name: str) -> OpsAsset:
         for asset in self.assets:
@@ -340,6 +342,7 @@ def load_ops_task(path: Path) -> OpsTask:
         assets=assets,
         setup=setup,
         restore=restore,
+        source_dir=path.parent,
     )
 
 
