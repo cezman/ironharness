@@ -25,6 +25,73 @@ DEFAULT_TASKS_DIR = Path(__file__).resolve().parent / "tasks"
 SOLVE_DIR_NAME = "solve"
 
 
+def _cmd_ops_ab(args) -> int:
+    from ironbench.ops_run import run_ops_attempt
+    from ironbench.ops_tasks import load_ops_tasks
+
+    if not args.allow_real:
+        print(
+            "refused: ops tasks erase flash and overwrite board files; "
+            "pass --allow-real to confirm"
+        )
+        return 2
+    if args.attempts < 1:
+        print("--attempts must be >= 1")
+        return 2
+    tasks = {t.name: t for t in load_ops_tasks()}
+    if args.task == "all":
+        selected = list(tasks.values())
+    elif args.task in tasks:
+        selected = [tasks[args.task]]
+    else:
+        print(f"ops task not found: {args.task} (available: {', '.join(sorted(tasks))})")
+        return 2
+    cfg = resolve_llm_config()
+    models = args.model or [cfg.model]
+    arms = ["bare", "mcp"] if args.arm == "both" else [args.arm]
+    campaign = args.campaign or time.strftime("%Y-%m-%d-%H%M%S", time.gmtime())
+    campaign_dir = args.out / "ops" / f"{campaign}-{cfg.base_url.split('//')[-1].split(':')[0]}"
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    rows_path = campaign_dir / "rows.jsonl"
+    journal = JsonlJournal(campaign_dir / "journal.jsonl", actor="ops-ab")
+    exit_code = 0
+    for model in models:
+        model_cfg = dataclasses.replace(cfg, model=model)
+        for task in selected:
+            for arm in arms:
+                for attempt in range(1, args.attempts + 1):
+                    print(f"[ops-ab] {task.name} {arm}/{model} attempt {attempt}...", flush=True)
+                    try:
+                        result = run_ops_attempt(
+                            task,
+                            arm=arm,
+                            model=model,
+                            attempt=attempt,
+                            port=args.port,
+                            out_dir=campaign_dir,
+                            llm_cfg=model_cfg,
+                            allow_flash=True,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - one dead attempt must not kill the campaign
+                        print(f"  crashed: {type(exc).__name__}: {exc}")
+                        journal("attempt_crashed", {"error": str(exc)})
+                        exit_code = 1
+                        continue
+                    journal("ops_attempt_result", result.row())
+                    with rows_path.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(result.row(), default=str) + "\n")
+                    verdict = "PASS" if result.solved else "FAIL"
+                    print(
+                        f"  {verdict} iter={result.iterations} claim={result.claimed} "
+                        f"silent={result.silent_failure} tokens={result.tokens_in}/"
+                        f"{result.tokens_out} ({result.duration_sec}s)"
+                    )
+                    if not result.solved:
+                        exit_code = exit_code or 1
+    print(f"rows: {rows_path}")
+    return exit_code
+
+
 def _fmt_result(res) -> str:
     if res.passed:
         return f"PASS {res.task} ({res.duration_sec}s)"
@@ -130,7 +197,28 @@ def main(argv=None) -> int:
         help="output HTML (default next to the journal: <journal>.view.html)",
     )
 
+    ops = sub.add_parser(
+        "ops-ab",
+        parents=[common],
+        help="ops A/B: agent-operated board tasks, MCP tools vs bare scripts (IH-104/105)",
+    )
+    ops.add_argument("--task", required=True, help="ops task name or 'all'")
+    ops.add_argument("--arm", choices=["bare", "mcp", "both"], default="both")
+    ops.add_argument("--model", action="append", default=[], help="LLM model id (repeatable)")
+    ops.add_argument("--attempts", type=int, default=2, help="attempts per task/arm/model")
+    ops.add_argument("--port", required=True, help="serial port of the bench board")
+    ops.add_argument(
+        "--allow-real",
+        action="store_true",
+        help="confirm destructive board operations (flash erase / file wipes)",
+    )
+    ops.add_argument("--campaign", default=None, help="campaign name (default: UTC stamp)")
+
     args = parser.parse_args(argv)
+
+    if args.command == "ops-ab":
+        return _cmd_ops_ab(args)
+
     tasks = load_tasks(args.tasks_dir)
 
     if args.command == "list":

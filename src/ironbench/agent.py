@@ -158,19 +158,38 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def chat(cfg: SolveConfig, messages: list[dict]) -> str:
-    """A single /chat/completions call without an SDK (urllib suffices for a local server)."""
+@dataclasses.dataclass(frozen=True)
+class ChatReply:
+    """Content of a completion plus the server-reported token usage.
+
+    The firmware loop ignores the usage (its metrics count time and
+    iterations); the ops A/B pays for tokens in its metrics, so the raw
+    payload is kept instead of being discarded. `message` is the raw
+    assistant message (native tool_calls included) for the arms that
+    drive the model through the OpenAI tool-calling loop.
+    """
+
+    content: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    message: dict = dataclasses.field(default_factory=dict)
+
+
+def chat_completion(cfg: SolveConfig, messages: list[dict], tools: list[dict] | None = None) -> ChatReply:
+    """A single /chat/completions call without an SDK (urllib suffices for a
+    local server). `tools` enables the native tool-calling loop."""
     validate_endpoint(cfg.base_url, allow_local=cfg.allow_local)
     url = cfg.base_url.rstrip("/") + "/chat/completions"
-    body = json.dumps(
-        {
-            "model": cfg.model,
-            "messages": messages,
-            "temperature": cfg.temperature,
-            "max_tokens": cfg.max_tokens,
-            "stream": False,
-        }
-    ).encode("utf-8")
+    payload_body: dict = {
+        "model": cfg.model,
+        "messages": messages,
+        "temperature": cfg.temperature,
+        "max_tokens": cfg.max_tokens,
+        "stream": False,
+    }
+    if tools:
+        payload_body["tools"] = tools
+    body = json.dumps(payload_body).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=body,
@@ -182,7 +201,26 @@ def chat(cfg: SolveConfig, messages: list[dict]) -> str:
     )
     with _OPENER.open(req, timeout=cfg.timeout_sec) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
-    return payload["choices"][0]["message"]["content"] or ""
+    message = payload["choices"][0]["message"]
+    content = message.get("content") or ""
+    if not content:
+        # local reasoning models on LM Studio sometimes emit the whole answer
+        # into the reasoning channel and leave content empty (gpt-oss-20b,
+        # observed live on longer prompts) - the reply text is the reasoning
+        # channel then; without the fallback every iteration looks empty
+        content = message.get("reasoning") or message.get("reasoning_content") or ""
+    usage = payload.get("usage") or {}
+    return ChatReply(
+        content=content,
+        prompt_tokens=int(usage.get("prompt_tokens") or 0),
+        completion_tokens=int(usage.get("completion_tokens") or 0),
+        message=message,
+    )
+
+
+def chat(cfg: SolveConfig, messages: list[dict]) -> str:
+    """The completion content only; see chat_completion for usage stats."""
+    return chat_completion(cfg, messages).content
 
 
 def extract_code(response: str) -> str | None:

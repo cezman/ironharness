@@ -68,7 +68,9 @@ def serial_factory(port: str) -> TransportFactory:
     """A factory of fresh connections to the board (one per check)."""
 
     def factory() -> SerialTransport:
-        return SerialTransport(port, timeout=0.5)
+        t = SerialTransport(port, timeout=0.5)
+        t.open()
+        return t
 
     return factory
 
