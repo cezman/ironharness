@@ -314,6 +314,18 @@ class Session:
                 # IH-37: a write to an unknown/closed transport journals too
                 self.journal("write_failed", {"conn": name, "error": str(e)})
                 raise
+            if name in self._transfers:
+                # IH-110: bytes injected into a raw-REPL exchange corrupt the
+                # staged file on the board while the put still reports success -
+                # the same symmetric gate the reads and reader_start carry
+                self.journal(
+                    "write_refused",
+                    {"conn": name, "reason": "serial transfer in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial transfer is in progress on {name!r} - serial_write "
+                    "would corrupt the staged exchange"
+                )
         try:
             if reader is not None:
                 # CH340: serialize against the background read (racing them on a
@@ -347,6 +359,16 @@ class Session:
                     f"transport {name!r} has a background reader - use serial_tail/"
                     "serial_read_until (a direct read would race the reader for bytes)"
                 )
+            if name in self._transfers:
+                # IH-110: a direct read steals the exchange's answer bytes
+                self.journal(
+                    "read_refused",
+                    {"conn": name, "reason": "serial transfer in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial transfer is in progress on {name!r} - serial_read "
+                    "would steal the exchange's answer bytes"
+                )
             try:
                 t = self._get(name)
             except KeyError as e:
@@ -374,6 +396,16 @@ class Session:
                     f"transport {name!r} has a background reader - use serial_tail/"
                     "serial_read_until (a direct read would race the reader for bytes)"
                 )
+            if name in self._transfers:
+                # IH-110: a direct read steals the exchange's answer bytes
+                self.journal(
+                    "read_line_refused",
+                    {"conn": name, "reason": "serial transfer in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial transfer is in progress on {name!r} - serial_read_line "
+                    "would steal the exchange's answer bytes"
+                )
             try:
                 t = self._get(name)
             except KeyError as e:
@@ -385,6 +417,8 @@ class Session:
         """Resets the board with an RTS pulse (ESP32: RTS->EN, DTR stays low
         = normal boot) - a clean state between solve attempts or after a hung
         REPL. open() never resets (the idle-lines fix); reset is explicit.
+        IH-110: deliberately NOT gated against an in-flight transfer - reset
+        is the recovery escape hatch for a wedged exchange.
         Under a reader's I/O lock: line control is I/O on the same single
         line (CH340). The settle wait holds the lock too - writes and drains
         are blocked while the board boots; boot output accumulates in the

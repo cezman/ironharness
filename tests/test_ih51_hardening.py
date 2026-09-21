@@ -79,6 +79,50 @@ def test_get_refused_during_transfer_is_journaled(tmp_path, monkeypatch):
         s.close()
 
 
+def test_direct_io_refused_during_transfer_is_journaled(tmp_path, monkeypatch):
+    """IH-110: a write interleaved into a raw-REPL transfer corrupts the staged
+    file on the board while the put still reports success; a direct read steals
+    the exchange's answer bytes. serial_write/serial_read/serial_read_line must
+    refuse (and journal) while a transfer is in flight, like reader_start and
+    the second transfer already do."""
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sb", actor="test")
+    try:
+        s.serial_open("loop", "loop://")
+        (tmp_path / "sb" / "src.txt").write_bytes(b"x")
+        release = threading.Event()
+        started = threading.Event()
+
+        def slow_put(t, data, target_path):
+            started.set()
+            release.wait(timeout=10)
+            return len(data)
+
+        from io_core import mprepl
+
+        monkeypatch.setattr(mprepl, "put_file", slow_put)
+        th = threading.Thread(
+            target=lambda: s.serial_put("loop", "src.txt", "dst.txt"), daemon=True
+        )
+        th.start()
+        assert started.wait(timeout=5), "the transfer never started"
+        with pytest.raises(RuntimeError, match="transfer"):
+            s.serial_write("loop", "68656c6c6f")
+        with pytest.raises(RuntimeError, match="transfer"):
+            s.serial_read("loop")
+        with pytest.raises(RuntimeError, match="transfer"):
+            s.serial_read_line("loop")
+        ks = {e["kind"] for e in read_events(tmp_path / "j.jsonl")}
+        for kind in ("write_refused", "read_refused", "read_line_refused"):
+            assert kind in ks, f"the {kind} refusal passed unjournaled"
+        release.set()
+        th.join(timeout=10)
+        # the gate must dissolve with the finished transfer, not wedge the name:
+        # a normal write goes through right after the exchange ends
+        assert s.serial_write("loop", "68656c6c6f") == 5
+    finally:
+        s.close()
+
+
 def test_mprepl_stream_buffer_is_bounded():
     """IH-52: _Stream._buf accumulated until the terminator or the deadline -
     a garbage flood (no '>') grew it unboundedly. Past the cap the stream
