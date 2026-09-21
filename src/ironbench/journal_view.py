@@ -177,27 +177,31 @@ def load_events_lenient(path: Path) -> tuple[list[dict], int]:
     Unparseable lines are counted, not dropped silently. A missing journal
     raises FileNotFoundError (a typo must not look like an empty journal).
     Returns (events, skipped)."""
-    from io_core.journal import chain_files
+    from io_core.journal import chain_files, reader_sidecar_lock
 
     files = chain_files(path)
     if not files:
         raise FileNotFoundError(f"journal not found: {path}")
     events: list[dict] = []
     skipped = 0
-    for part_path in files:
-        text = part_path.read_text(encoding="utf-8", errors="replace")
-        for line in text.splitlines():
-            if not line.strip():
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                skipped += 1
-                continue
-            if not isinstance(rec, dict):
-                skipped += 1
-                continue
-            events.append(rec)
+    # IH-114 class neighbor: `ironbench view` on a LIVE journal must take the
+    # same sidecar lock as the writer - a bare read_text handle made the
+    # writer's rotation fail with WinError 32 on Windows (event lost)
+    with reader_sidecar_lock(Path(path)):
+        for part_path in files:
+            text = part_path.read_text(encoding="utf-8", errors="replace")
+            for line in text.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    skipped += 1
+                    continue
+                if not isinstance(rec, dict):
+                    skipped += 1
+                    continue
+                events.append(rec)
     return events, skipped
 
 
