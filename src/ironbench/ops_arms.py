@@ -36,6 +36,24 @@ from ironbench.agent import ChatReply, SolveConfig, chat_completion, extract_cod
 from ironbench.mcp_wire import McpWireClient
 
 OBSERVATION_CAP = 4 * 1024
+LLM_RETRIES = 3
+LLM_RETRY_BACKOFF_SEC = 10.0
+
+
+def chat_with_retry(cfg: SolveConfig, messages: list[dict]) -> ChatReply:
+    """chat_completion with short retries: the local server hiccups
+    (a JIT-loading model answers 400/5xx, the daemon restarts) must cost a
+    retry, not the whole attempt. Deterministic 400s (prompt overflow) just
+    pay the backoff before the attempt is classified infra."""
+    last: Exception | None = None
+    for i in range(LLM_RETRIES):
+        try:
+            return chat_completion(cfg, messages)
+        except OSError as e:  # URLError/HTTPError/timeout are OSError
+            last = e
+            if i + 1 < LLM_RETRIES:
+                time.sleep(LLM_RETRY_BACKOFF_SEC)
+    raise last  # type: ignore[misc]
 CLAIM_RE = re.compile(r"^CLAIM:\s*(SUCCESS|FAIL)\s*$", re.MULTILINE)
 # state-changing tool families the coverage metric counts as operations
 JOURNALED_TOOL_RE = re.compile(r"^(serial_|esp_|file_|mqtt_)")
@@ -184,7 +202,7 @@ class BareArm:
         deadline: float,
         llm: Any = None,
     ) -> ArmResult:
-        chat = llm or chat_completion
+        chat = llm or chat_with_retry
         result = ArmResult(turns=[], claimed=None, claim_iteration=None)
         messages: list[dict] = [
             {"role": "system", "content": BARE_SYSTEM_PROMPT},
@@ -286,7 +304,7 @@ class McpArm:
         deadline: float,
         llm: Any = None,
     ) -> ArmResult:
-        chat = llm or chat_completion
+        chat = llm or chat_with_retry
         result = ArmResult(turns=[], claimed=None, claim_iteration=None)
         client: McpWireClient = self._client_factory()
         try:
