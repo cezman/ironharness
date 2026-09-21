@@ -382,6 +382,51 @@ def test_cli_ops_ab_refuses_without_allow_real(tmp_path, capsys):
     assert "allow-real" in capsys.readouterr().out
 
 
+def test_restore_failure_does_not_hide_a_judged_solve(tmp_path):
+    # a solve confirmed by the judge must survive a failing restore step:
+    # the row keeps solved=True (restore_failed evidence) and stays judged
+    task = make_task(tmp_path)
+    broken_restore = OpsTask(
+        **{
+            **{f: getattr(task, f) for f in task.__dataclass_fields__},
+            "restore": (OpsStep("deploy_file", {"asset": "absent", "target": "/x.py"}),),
+        }
+    )
+    board = FakeBoard()
+    sandbox = tmp_path / "sb9"
+    sandbox.mkdir()
+    (sandbox / "golden.py").write_bytes(GOLDEN)
+
+    calls = iter(
+        [
+            ChatReply(content='{"tool": "file_write", "arguments": {"path": "g.py", "content": '
+                             + json.dumps(GOLDEN.decode()) + "}}"),
+            ChatReply(content='{"tool": "serial_put", "arguments": {"name": "b", "source": "g.py", "target": "/main.py"}}'),
+            ChatReply(content='{"claim": "SUCCESS"}'),
+        ]
+    )
+
+    def llm(cfg, messages, tools=None):
+        return next(calls)
+
+    result = run_ops_attempt(
+        broken_restore,
+        arm="mcp",
+        model="test-model",
+        attempt=1,
+        port="COM9",
+        out_dir=tmp_path / "out",
+        llm_cfg=CFG,
+        llm=llm,
+        transport_factory=lambda: board,
+        mcp_client_factory=lambda: FakeMcpClient(board, sandbox),
+        preflight=False,
+    )
+    assert result.solved is True
+    assert result.restore_failed is True
+    assert result.error_kind == "none"
+
+
 def test_mcp_server_gate_matches_the_task_tool_families(tmp_path):
     # B2 mechanism: the arm's server is spawned with ENABLED_KINDS equal to
     # the task's allowed families, so a tool call outside them fails at the
