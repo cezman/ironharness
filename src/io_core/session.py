@@ -779,14 +779,13 @@ class Session:
 
     # --- esp (flashing via esptool; needs the [flash] extra) ---
 
-    def esp_image_info(self, firmware_path: str, chip: str = "esp32") -> dict[str, Any]:
-        self._check_open()
-        self._check_kind("esp")
-        # IH-77 (review): without this check the tool parsed ANY host path -
-        # existence/size/segments of files the sandbox must not expose. The
-        # image lives inside the sandbox unless the operator lifts it with
-        # the real-flash opt-in (the esp_denied journal entry precedes the
-        # raise, like every gate).
+    def _esp_sandbox_path(self, op: str, firmware_path: str) -> Path:
+        """IH-77 (review): esp tools must not touch ANY host path - existence,
+        size or content of files the sandbox must not expose. The path resolves
+        inside the sandbox unless the operator lifts it with the real-flash
+        opt-in (the esp_denied journal entry precedes the raise, like every
+        gate). Shared by esp_image_info and esp_flash (IH-113: a destructive
+        flash must not be gated looser than the offline parser)."""
         root = Path(self.sandbox.root).resolve()
         path = Path(firmware_path)
         path = path.resolve() if path.is_absolute() else (root / path).resolve()
@@ -798,17 +797,23 @@ class Session:
             self.journal(
                 "esp_denied",
                 {
-                    "op": "image_info",
+                    "op": op,
                     "path": str(path),
                     "error": "path is outside the sandbox "
                     "(set IRONHARNESS_ALLOW_REAL_FLASH=1 to lift)",
                 },
             )
             raise PolicyViolation(
-                "esp_image_info reads only files inside the sandbox: "
+                f"esp_{op} touches only files inside the sandbox: "
                 f"{str(path)!r} is outside "
                 "(set IRONHARNESS_ALLOW_REAL_FLASH=1 to lift)"
             )
+        return path
+
+    def esp_image_info(self, firmware_path: str, chip: str = "esp32") -> dict[str, Any]:
+        self._check_open()
+        self._check_kind("esp")
+        path = self._esp_sandbox_path("image_info", firmware_path)
         from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
 
         return EspFlasher(chip=chip, on_event=self.journal).image_info(str(path))
@@ -818,9 +823,12 @@ class Session:
     ) -> str:
         self._check_open()
         self._check_kind("esp")
+        # IH-113: the destructive operation must not be gated looser than the
+        # offline parser - the staged image resolves inside the sandbox too
+        path = self._esp_sandbox_path("flash", firmware_path)
         from io_core.esp_flash import EspFlasher  # lazy: esptool is an optional dependency
 
-        return EspFlasher(on_event=self.journal).flash(port, firmware_path, addr=addr, baud=baud)
+        return EspFlasher(on_event=self.journal).flash(port, str(path), addr=addr, baud=baud)
 
     def esp_erase(self, port: str, *, baud: int = 921600) -> str:
         self._check_open()

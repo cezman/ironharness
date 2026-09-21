@@ -668,6 +668,49 @@ def test_esp_image_info_gate_lifted_by_real_flash_env(tmp_path, monkeypatch):
         s.close()
 
 
+def test_esp_flash_firmware_path_is_gated_to_sandbox(tmp_path, monkeypatch):
+    # IH-113: the destructive flash must not be gated looser than the offline
+    # parser - a host path outside the sandbox is refused (journaled) unless
+    # the operator lifts it with the real-flash opt-in
+    monkeypatch.delenv("IRONHARNESS_ALLOW_REAL_FLASH", raising=False)
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        (tmp_path / "outside.bin").write_bytes(b"\x00")
+        with pytest.raises(PolicyViolation):
+            s.esp_flash("COM7", str(tmp_path / "outside.bin"))
+        denials = [
+            e
+            for e in read_events(tmp_path / "j.jsonl")
+            if e["kind"] == "esp_denied" and e["op"] == "flash"
+        ]
+        assert denials, "the flash path refusal passed unjournaled"
+    finally:
+        s.close()
+
+
+def test_esp_flash_sandbox_gate_lifted_by_real_flash_env(tmp_path, monkeypatch):
+    # the counter-negative: with the opt-in the gate passes the resolved host
+    # path through; the flasher itself is stubbed - the gate is the subject
+    from io_core import esp_flash
+
+    monkeypatch.setenv("IRONHARNESS_ALLOW_REAL_FLASH", "1")
+    seen = {}
+
+    def fake_flash(self, port, firmware_path, *, addr=0x1000, baud=921600):
+        seen["path"] = firmware_path
+        return "ok"
+
+    monkeypatch.setattr(esp_flash.EspFlasher, "flash", fake_flash)
+    s = Session(tmp_path / "j.jsonl", tmp_path / "sandbox", actor="test")
+    try:
+        outside = tmp_path / "outside.bin"
+        outside.write_bytes(b"\x00")
+        assert s.esp_flash("COM7", str(outside)) == "ok"
+        assert seen["path"] == str(outside)
+    finally:
+        s.close()
+
+
 # --- audit D (2026-09-20): the surface tools get executed tests ---
 
 

@@ -21,9 +21,13 @@ IRONHARNESS_ALLOW_REAL_FLASH=1 environment variable (opt-in). The gate is
 checked before anything else touches the dependency chain, and its denial is
 an event in the journal (esp_denied) before the PermissionError - an
 unauthorized flashing attempt must leave a trace ("no log = didn't happen"
-applies to refusals too). image_info() is offline at this layer; on the
-Session/MCP surface it shares the real-flash opt-in when the path leaves
-the sandbox (IH-77). esptool itself is an optional dependency: install the
+applies to refusals too). The port argument passes the same local-only
+whitelist as the serial transports (IH-50/IH-113): esptool's serial_for_url
+would accept socket:// and open a network connection - that refusal is NOT
+liftable by the opt-in. .bin paths are NOT restricted to the file sandbox AT
+THIS LAYER (images live outside its root); the Session/MCP surface gates
+them (IH-77): esp_image_info and esp_flash resolve inside the sandbox unless
+real-flash is opted in. esptool itself is an optional dependency: install the
 `flash` extra (pip install 'ironharness[flash]').
 """
 
@@ -33,6 +37,8 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+from io_core.serial_transport import _port_allowed
 
 try:  # esptool is an optional dependency — see the [flash] extra
     from esptool.cmds import (
@@ -89,6 +95,22 @@ class EspFlasher:
             self._emit("esp_denied", {"op": op, "port": port, "error": error})
             raise PermissionError(error)
 
+    def _require_local_port(self, op: str, port: str) -> None:
+        """IH-113: esptool opens the port with pyserial's serial_for_url, which
+        happily accepts network URLs — socket://host:port is an outbound TCP
+        connection, rfc2217:// is remote serial. The agent-facing serial open
+        is whitelisted to local ports (IH-50), so the esp surface must not be
+        a bypass. Unlike the real-flash opt-in this is NOT liftable by
+        IRONHARNESS_ALLOW_REAL_FLASH: locality is policy, hardware consent is
+        a separate decision. Journaled before raising, like every gate."""
+        if not _port_allowed(port):
+            error = (
+                f"only local ports (COM*, /dev/*, loop://, pty://) can be flashed — "
+                f"{port!r} is a non-local serial URL"
+            )
+            self._emit("esp_denied", {"op": op, "port": port, "error": error})
+            raise ValueError(error)
+
     # --- offline: image inspection, no board needed ---
 
     def image_info(self, firmware_path: str | Path) -> dict[str, Any]:
@@ -142,9 +164,11 @@ class EspFlasher:
         addr: int = DEFAULT_BOOTLOADER_OFFSET,
         baud: int = 921600,
     ) -> str:
-        # the gate is the very first thing: even a probe with a bogus path is
-        # an unauthorized flash attempt and must leave a trace
+        # the gates are the very first thing: even a probe with a bogus path
+        # or a remote port is an unauthorized flash attempt and must leave a
+        # trace
         self._require_real_flash_allowed("flash", port)
+        self._require_local_port("flash", port)
         path = Path(firmware_path)
         if not path.is_file():
             error = f"image not found: {path}"
@@ -183,6 +207,7 @@ class EspFlasher:
 
     def erase(self, port: str, *, baud: int = 921600) -> str:
         self._require_real_flash_allowed("erase", port)
+        self._require_local_port("erase", port)
         try:
             _require_esptool()
             with connect_esp(port=port, chip=self._chip) as esp:
