@@ -3,7 +3,7 @@ level: 2
 tags: [io, data]
 wall_sec: 900
 allowed_tools: [serial]
-budget: {max_iterations: 12, iter_timeout_sec: 180}
+budget: {max_iterations: 16, iter_timeout_sec: 180}
 description: |
   Take an inventory of the sensor bus of the board on serial port $PORT and
   report it. Find out which devices are actually present on the I2C bus and
