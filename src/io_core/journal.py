@@ -20,10 +20,13 @@ journal_key_conflict, а не молча ломают реплеер/вьюер 
 
 from __future__ import annotations
 
+import contextlib
 import json
+import re
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Self
 
@@ -182,13 +185,38 @@ class JsonlJournal:
         self.close()
 
 
+@contextlib.contextmanager
+def _reader_sidecar_lock(path: Path) -> Iterator[None]:
+    """IH-114: читатель берёт тот же sidecar-лок, под которым писатель
+    ротирует журнал. Лок берётся только если писатель его уже создал
+    (JsonlJournal создаёт sidecar в конструкторе, до первого события):
+    нет файла — не было и писателя, конкурировать не с кем, и чтение
+    read-only томов/чужих файлов не создаёт мусора. Части ротации (.N)
+    охраняются sidecar живого файла — от него и выводится имя."""
+    base = re.sub(r"\.\d+$", "", path.name)
+    lock_path = path.with_name(base + ".lock")
+    if not lock_path.exists():
+        yield
+        return
+    fh = _acquire_lock_file(lock_path)
+    try:
+        yield
+    finally:
+        _release_lock_file(fh)
+
+
 def read_events(path: str | Path) -> list[Event]:
     """Читает JSONL-журнал в список событий. Битая строка (не JSON, не объект)
-    — JournalCorrupt с именем файла, а не KeyError где-то в потребителе."""
+    — JournalCorrupt с именем файла, а не KeyError где-то в потребителе.
+
+    IH-114: чтение идёт под тем же sidecar-локом, что и запись с ротацией, —
+    иначе на Windows replace() ротации падает об открытый хэндл читателя
+    (WinError 32, событие теряется), а на POSIX читатель молча уезжает вслед
+    за переименованным файлом."""
     from io_core.errors import JournalCorrupt
 
     events: list[Event] = []
-    with Path(path).open(encoding="utf-8") as fh:
+    with _reader_sidecar_lock(Path(path)), Path(path).open(encoding="utf-8") as fh:
         for n, line in enumerate(fh, start=1):
             if not line.strip():
                 continue
@@ -224,20 +252,24 @@ def read_events_chain(path: str | Path) -> list[Event]:
     """IH-63: читает живой журнал и все ротированные части (`.1`, `.2`, ...)
     в хронологическом порядке: части — по убыванию индекса (`.2` старше
     `.1`), живой файл — последним. Битые строки внутри части —
-    JournalCorrupt с именем части."""
+    JournalCorrupt с именем части. IH-114: вся цепочка читается под одним
+    sidecar-локом живого файла — ротация не может пройти посреди чтения."""
     from io_core.errors import JournalCorrupt
 
     events: list[Event] = []
-    for part_path in chain_files(path):
-        with part_path.open(encoding="utf-8") as fh:
-            for n, line in enumerate(fh, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    rec = json.loads(line)
-                except ValueError as e:
-                    raise JournalCorrupt(f"{part_path}:{n}: line is not valid JSON: {e}") from None
-                if not isinstance(rec, dict):
-                    raise JournalCorrupt(f"{part_path}:{n}: line is not a JSON object")
-                events.append(rec)
+    with _reader_sidecar_lock(Path(path)):
+        for part_path in chain_files(path):
+            with part_path.open(encoding="utf-8") as fh:
+                for n, line in enumerate(fh, start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except ValueError as e:
+                        raise JournalCorrupt(
+                            f"{part_path}:{n}: line is not valid JSON: {e}"
+                        ) from None
+                    if not isinstance(rec, dict):
+                        raise JournalCorrupt(f"{part_path}:{n}: line is not a JSON object")
+                    events.append(rec)
     return events

@@ -113,3 +113,116 @@ def test_replay_session_legacy_journal_without_conn(tmp_path):
     with rs[""] as rp:
         rp.write(b"ping")
         assert rp.read(4) == b"ping"
+
+
+# --- IH-114: readers take the writer's sidecar lock ---
+
+
+def test_read_events_takes_the_sidecar_lock(tmp_path):
+    """IH-114: a reader that ignores the sidecar lock races the writer's
+    rotation - on Windows replace() hits the reader's open handle (WinError 32,
+    the event is lost), on POSIX the reader silently follows the rename.
+    read_events must hold the same lock the writer rotates under."""
+    import threading
+
+    import io_core.journal as journal_mod
+
+    jpath = tmp_path / "j.jsonl"
+    jpath.write_text('{"ts": 1, "seq": 1, "actor": "a", "kind": "k"}\n', encoding="utf-8")
+    lock_path = jpath.with_name("j.jsonl.lock")
+    lock_path.touch()  # a writer exists -> its sidecar is there (created in the ctor)
+    held = journal_mod._acquire_lock_file(lock_path)
+    done = threading.Event()
+
+    def read():
+        journal_mod.read_events(jpath)
+        done.set()
+
+    th = threading.Thread(target=read, daemon=True)
+    th.start()
+    assert not done.wait(0.3), "read_events ignored the sidecar lock (IH-114)"
+    journal_mod._release_lock_file(held)
+    assert done.wait(5), "the reader never finished after the lock was released"
+
+
+def test_read_events_chain_takes_the_sidecar_lock(tmp_path):
+    import threading
+
+    import io_core.journal as journal_mod
+
+    jpath = tmp_path / "j.jsonl"
+    (tmp_path / "j.jsonl.1").write_text(
+        '{"ts": 1, "seq": 1, "actor": "a", "kind": "k1"}\n', encoding="utf-8"
+    )
+    jpath.write_text('{"ts": 2, "seq": 2, "actor": "a", "kind": "k2"}\n', encoding="utf-8")
+    lock_path = jpath.with_name("j.jsonl.lock")
+    lock_path.touch()
+    held = journal_mod._acquire_lock_file(lock_path)
+    done = threading.Event()
+
+    def read():
+        journal_mod.read_events_chain(jpath)
+        done.set()
+
+    th = threading.Thread(target=read, daemon=True)
+    th.start()
+    assert not done.wait(0.3), "read_events_chain ignored the sidecar lock (IH-114)"
+    journal_mod._release_lock_file(held)
+    assert done.wait(5), "the reader never finished after the lock was released"
+
+
+def test_write_survives_a_live_reader_across_rotations(tmp_path):
+    """IH-114 functional: a live reader hammering the journal while the writer
+    rotates must not lose events (Windows: WinError 32 out of __call__)."""
+    import threading
+
+    import io_core.journal as journal_mod
+
+    jpath = tmp_path / "j.jsonl"
+    # max_files=50: nothing is pruned by design - the assertion counts every
+    # event, not just the surviving tail of the rotation window
+    j = journal_mod.JsonlJournal(jpath, actor="t", max_bytes=300, max_files=50)
+    failures: list[OSError] = []
+    stop = threading.Event()
+
+    def reader():
+        while not stop.is_set():
+            try:
+                journal_mod.read_events_chain(jpath)
+            except OSError as e:  # the old-code failure mode on Windows
+                failures.append(e)
+
+    th = threading.Thread(target=reader, daemon=True)
+    th.start()
+    try:
+        for i in range(40):
+            j("e", {"i": i, "pad": "x" * 80})  # crosses max_bytes several times
+    finally:
+        stop.set()
+        th.join(5)
+    assert not failures, f"the writer failed under a live reader: {failures[:1]}"
+    assert sum(1 for e in journal_mod.read_events_chain(jpath) if e["kind"] == "e") == 40
+
+
+def test_rotation_waits_for_a_slow_reader_then_lands(tmp_path):
+    """IH-114 no-wedge pin: a reader holding the sidecar lock delays the
+    write, and the event still lands in the chain once the reader lets go."""
+    import threading
+    import time
+
+    import io_core.journal as journal_mod
+
+    jpath = tmp_path / "j.jsonl"
+    j = journal_mod.JsonlJournal(jpath, actor="t", max_bytes=200)
+    j("e", {"n": 0, "pad": "x" * 150})  # right below the limit
+    held = journal_mod._acquire_lock_file(jpath.with_name("j.jsonl.lock"))
+
+    def release():
+        time.sleep(0.15)
+        journal_mod._release_lock_file(held)
+
+    th = threading.Thread(target=release)
+    th.start()
+    j("e", {"n": 1, "pad": "x" * 150})  # crosses max_bytes -> rotates under the held lock
+    th.join(5)
+    assert [e["n"] for e in journal_mod.read_events_chain(jpath)] == [0, 1]
