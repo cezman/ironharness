@@ -380,3 +380,27 @@ def test_cli_ops_ab_refuses_without_allow_real(tmp_path, capsys):
     )
     assert rc == 2
     assert "allow-real" in capsys.readouterr().out
+
+
+def test_mcp_server_gate_matches_the_task_tool_families(tmp_path):
+    # B2 mechanism: the arm's server is spawned with ENABLED_KINDS equal to
+    # the task's allowed families, so a tool call outside them fails at the
+    # SERVER (PolicyViolation -> tool error to the agent), not just in the
+    # prompt catalog. Pinned against a real io_core.mcp_server process.
+    from ironbench.mcp_wire import spawn_mcp_client
+
+    client = spawn_mcp_client(
+        {
+            "IRONHARNESS_HOME": str(tmp_path / "home"),
+            "IRONHARNESS_SANDBOX": str(tmp_path / "home" / "sandbox"),
+            "IRONHARNESS_ENABLED_KINDS": "file,serial",
+        }
+    )
+    try:
+        names = {t["name"] for t in client.list_tools()}
+        assert "mqtt_publish" in names  # the server still LISTS it
+        call = client.call_tool("mqtt_open", {"name": "cheat", "host": "127.0.0.1", "port": 1})
+        assert call["ok"] is False
+        assert "disabled" in call["text"]
+    finally:
+        client.close()
