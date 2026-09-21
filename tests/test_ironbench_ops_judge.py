@@ -485,3 +485,39 @@ def test_judge_needs_exactly_one_transport_source():
         OpsJudge()
     with pytest.raises(ValueError):
         OpsJudge(port="COM1", transport_factory=FakeBootBoard)
+
+
+def test_serial_factory_opens_the_transport_before_use(monkeypatch):
+    # live lesson (2026-09-21): the factory handed the judge an UNOPENED
+    # transport - fakes without an open() requirement hid it, the real board
+    # answered TransportClosedError. The open() call is the contract.
+    from ironbench import ops_judge
+
+    created = []
+
+    class SpyTransport:
+        def __init__(self, port, timeout=0.5):
+            created.append(self)
+            self.open_called = False
+            self.close_called = False
+
+        def open(self):
+            self.open_called = True
+
+        def close(self):
+            self.close_called = True
+
+        def reset(self, *, pulse_sec=0.1, settle_sec=2.0):
+            assert self.open_called, "transport must be open before reset"
+
+        def read(self, size=256):
+            return b""
+
+        @property
+        def in_waiting(self):
+            return 0
+
+    monkeypatch.setattr(ops_judge, "SerialTransport", SpyTransport)
+    factory = ops_judge.serial_factory("COM9")
+    board = factory()
+    assert created and board.open_called is True
