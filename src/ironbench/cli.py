@@ -199,6 +199,11 @@ def main(argv=None) -> int:
             return 2
         cfg = resolve_llm_config()
         if args.iterations is not None:
+            if not 1 <= args.iterations <= 1000:
+                # IH-112: refuse in the CLI's own style; SolveConfig would raise
+                # anyway (its __post_init__ revalidates every replace)
+                print("--iterations must be within 1..1000")
+                return 2
             cfg = dataclasses.replace(cfg, max_iterations=args.iterations)
         solve_dir = args.out / SOLVE_DIR_NAME
         results = agent_solve_results(
