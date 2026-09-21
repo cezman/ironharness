@@ -372,6 +372,10 @@ def run_ops_attempt(
             env = {
                 "IRONHARNESS_HOME": str(run_dir / "mcp-home"),
                 "IRONHARNESS_SANDBOX": str(sandbox),
+                # the server-side tool surface equals the prompt-side catalog:
+                # a hallucinated call outside the task's families must fail at
+                # the server gate, not only be missing from the prompt text
+                "IRONHARNESS_ENABLED_KINDS": ",".join(sorted(task.allowed_tools)),
             }
             if allow_flash:
                 env["IRONHARNESS_ALLOW_REAL_FLASH"] = "1"
