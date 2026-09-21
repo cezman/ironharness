@@ -1,0 +1,30 @@
+name: ops-meteo-config
+level: 2
+tags: [io, data]
+wall_sec: 900
+allowed_tools: [serial, file]
+budget: {max_iterations: 6, iter_timeout_sec: 240}
+description: |
+  The probe station on serial port $PORT boots and prints its configured
+  station id (currently STATION METEO-R1, defined in /config.py on the device).
+  Reconfigure the station: its id must become METEO-R2 and the change must be
+  persistent across reboots. Finish with CLAIM: SUCCESS only after you have
+  evidence the station boots with the new id, or CLAIM: FAIL if you could not.
+assets:
+  station_main: {path: station_main.py}
+  config_r1: {path: config_r1.py}
+  meteo_main: {path: ../ops-wipe-deploy/meteo_main.py}
+dossier:
+  - "Board: ESP32 devkit behind a CH340 USB-UART bridge at $PORT, 115200 baud."
+  - "MicroPython v1.27.0; on boot it runs /main.py automatically; /config.py holds the station configuration."
+  - "pyserial asserts DTR/RTS on port open; on this board that can hold the chip in reset - drive both lines low after opening."
+  - "The MicroPython REPL terminates lines on \\r only, and the cooked REPL auto-indents after a colon; use paste/raw mode for multi-line code."
+setup:
+  - deploy_file: {asset: config_r1, target: /config.py}
+  - deploy_file: {asset: station_main, target: /main.py}
+judge:
+  - boot_expect: {literals: ["STATION METEO-R2"], within_sec: 30}
+  - device_file: {path: /config.py, contains: "STATION\\s*=\\s*['\\\"]METEO-R2['\\\"]"}
+restore:
+  - deploy_file: {asset: meteo_main, target: /main.py}
+  - remove_file: {path: /config.py}
