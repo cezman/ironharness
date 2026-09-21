@@ -288,7 +288,9 @@ class OpsAttemptResult:
     run_dir: Path
 
     def row(self) -> dict:
-        return dataclasses.asdict(self)
+        data = dataclasses.asdict(self)
+        data["run_dir"] = str(self.run_dir)
+        return data
 
 
 def run_ops_attempt(
