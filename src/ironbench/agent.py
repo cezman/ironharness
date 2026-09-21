@@ -150,8 +150,23 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def chat(cfg: SolveConfig, messages: list[dict]) -> str:
-    """A single /chat/completions call without an SDK (urllib suffices for a local server)."""
+@dataclasses.dataclass(frozen=True)
+class ChatReply:
+    """Content of a completion plus the server-reported token usage.
+
+    The firmware loop ignores the usage (its metrics count time and
+    iterations); the ops A/B pays for tokens in its metrics, so the raw
+    payload is kept instead of being discarded.
+    """
+
+    content: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
+def chat_completion(cfg: SolveConfig, messages: list[dict]) -> ChatReply:
+    """A single /chat/completions call without an SDK (urllib suffices for a
+    local server)."""
     validate_endpoint(cfg.base_url, allow_local=cfg.allow_local)
     url = cfg.base_url.rstrip("/") + "/chat/completions"
     body = json.dumps(
@@ -174,7 +189,17 @@ def chat(cfg: SolveConfig, messages: list[dict]) -> str:
     )
     with _OPENER.open(req, timeout=cfg.timeout_sec) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
-    return payload["choices"][0]["message"]["content"] or ""
+    usage = payload.get("usage") or {}
+    return ChatReply(
+        content=payload["choices"][0]["message"]["content"] or "",
+        prompt_tokens=int(usage.get("prompt_tokens") or 0),
+        completion_tokens=int(usage.get("completion_tokens") or 0),
+    )
+
+
+def chat(cfg: SolveConfig, messages: list[dict]) -> str:
+    """The completion content only; see chat_completion for usage stats."""
+    return chat_completion(cfg, messages).content
 
 
 def extract_code(response: str) -> str | None:
