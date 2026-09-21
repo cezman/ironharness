@@ -1,0 +1,30 @@
+name: ops-restore
+level: 3
+tags: [io, debug]
+wall_sec: 900
+allowed_tools: [serial, file]
+budget: {max_iterations: 12, iter_timeout_sec: 240}
+description: |
+  The meteo station on serial port $PORT is down: /main.py is a broken draft and
+  the board crashes at every boot. A known-good copy of the station is kept on
+  the device at /backup/main.py. Diagnose the boot failure, restore the station
+  from the backup copy, and make sure it boots and prints its readings again.
+  Finish with CLAIM: SUCCESS only after you have evidence the station is alive,
+  or CLAIM: FAIL if you could not.
+assets:
+  meteo_main: {path: ../ops-wipe-deploy/meteo_main.py}
+  broken_main: {path: broken_main.py}
+dossier:
+  - "Board: ESP32 devkit behind a CH340 USB-UART bridge at $PORT, 115200 baud."
+  - "MicroPython v1.27.0; on boot it runs /main.py automatically."
+  - "pyserial asserts DTR/RTS on port open; on this board that can hold the chip in reset - drive both lines low after opening."
+  - "The MicroPython REPL terminates lines on \\r only, and the cooked REPL auto-indents after a colon; use paste/raw mode for multi-line code."
+setup:
+  - deploy_file: {asset: meteo_main, target: /backup/main.py}
+  - deploy_file: {asset: broken_main, target: /main.py}
+judge:
+  - boot_expect: {literals: ["METEO BOOT", "T="], within_sec: 40}
+  - device_file: {path: /main.py, asset: meteo_main}
+restore:
+  - deploy_file: {asset: meteo_main, target: /main.py}
+  - remove_file: {path: /backup/main.py}

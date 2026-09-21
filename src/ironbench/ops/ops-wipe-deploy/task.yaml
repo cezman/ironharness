@@ -1,0 +1,34 @@
+name: ops-wipe-deploy
+level: 4
+tags: [io, resilience]
+wall_sec: 1500
+allowed_tools: [serial, file, esp]
+budget: {max_iterations: 8, iter_timeout_sec: 300}
+description: |
+  The board on serial port $PORT is FULLY BLANK: its flash was erased, there is
+  no firmware and no files. Bring the meteo station back to life:
+  1. flash the MicroPython firmware image (url and sha256 below) to the board;
+  2. deploy the station source (path below) as /main.py on the board;
+  3. make sure the station boots and starts printing its readings.
+  Finish with CLAIM: SUCCESS only after you have evidence the station is alive,
+  or CLAIM: FAIL if you could not.
+assets:
+  firmware:
+    url: https://micropython.org/resources/firmware/ESP32_GENERIC-20251209-v1.27.0.bin
+    sha256: aa4be80ec695911ba0f13f7558e559ce540f90efbf40c23b853ca49162136b9f
+  meteo_main: {path: meteo_main.py}
+dossier:
+  - "Board: ESP32 devkit behind a CH340 USB-UART bridge at $PORT, 115200 baud."
+  - "When firmware is present it is MicroPython v1.27.0 (ESP32_GENERIC build)."
+  - "pyserial asserts DTR/RTS on port open; on this board that can hold the chip in reset - drive both lines low after opening."
+  - "The MicroPython REPL terminates lines on \\r only, and the cooked REPL auto-indents after a colon; use paste/raw mode for multi-line code."
+  - "Firmware image for esptool: write at offset 0x1000. A local cached copy is at: $ASSET_firmware"
+  - "Station source to deploy as /main.py: $ASSET_meteo_main"
+setup:
+  - wipe_flash: {}
+judge:
+  - boot_expect: {literals: ["METEO BOOT", "T="], within_sec: 40}
+  - device_file: {path: /main.py, asset: meteo_main}
+restore:
+  - flash_asset: {asset: firmware}
+  - deploy_file: {asset: meteo_main, target: /main.py}

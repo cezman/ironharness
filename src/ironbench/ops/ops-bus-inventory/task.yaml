@@ -1,0 +1,25 @@
+name: ops-bus-inventory
+level: 2
+tags: [io, data]
+wall_sec: 900
+allowed_tools: [serial]
+budget: {max_iterations: 16, iter_timeout_sec: 180}
+description: |
+  Take an inventory of the sensor bus of the board on serial port $PORT and
+  report it. Find out which devices are actually present on the I2C bus and
+  what OneWire devices are attached. Report the result as a single line in
+  your final answer, exactly in this JSON format:
+  INVENTORY: {"i2c": [<decimal addresses>], "onewire_family": <first ROM family byte or null if none>}
+  Addresses are the decimal values as MicroPython's I2C.scan() reports them.
+  Finish with CLAIM: SUCCESS when the inventory line reflects the real bus, or
+  CLAIM: FAIL if you could not probe it.
+dossier:
+  - "Board: ESP32 devkit behind a CH340 USB-UART bridge at $PORT, 115200 baud."
+  - "MicroPython v1.27.0; the board boots into an application loop - interrupt it (Ctrl+C = byte 0x03) to reach the REPL."
+  - "The I2C bus uses SoftI2C on pins scl=22, sda=21; the OneWire bus is on pin 4."
+  - "pyserial asserts DTR/RTS on port open; on this board that can hold the chip in reset - drive both lines low after opening."
+  - "The MicroPython REPL terminates lines on \\r only; single-line statements are safest in the cooked REPL."
+  - "The reader-based tools (serial_read_until, serial_tail) require a background reader started with serial_reader_start on the connection first; serial_read works without one but returns only bytes that arrived before the call."
+judge:
+  - inventory_match: {i2c: true, onewire: true}
+restore: []

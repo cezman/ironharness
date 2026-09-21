@@ -1,0 +1,4 @@
+# Ops golden device assets are byte-compared against the live board
+# (ops_judge device_file) and deployed as-is: line-ending conversion would
+# corrupt the golden. Force LF regardless of core.autocrlf.
+src/ironbench/ops/** eol=lf

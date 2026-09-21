@@ -1,0 +1,1 @@
+STATION = 'METEO-R1'

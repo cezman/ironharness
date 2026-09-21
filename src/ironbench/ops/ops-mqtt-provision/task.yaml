@@ -1,0 +1,29 @@
+name: ops-mqtt-provision
+level: 3
+tags: [protocol, io]
+wall_sec: 900
+# CI/offline only until the bench board has WiFi credentials. Residual:
+# a bare-arm script can publish from the HOST over raw sockets and the
+# mqtt_collect judge cannot attribute a publish to the device - the MCP
+# arm is closed structurally (no mqtt kind in allowed_tools, enforced
+# server-side via IRONHARNESS_ENABLED_KINDS), the bare arm only by the
+# honor of its own claim protocol.
+allowed_tools: [serial, file]
+budget: {max_iterations: 8, iter_timeout_sec: 240}
+description: |
+  Provision the device on serial port $PORT to publish its readings to the MQTT
+  broker reachable at the address given in the environment (OPS_AB_MQTT_HOST /
+  OPS_AB_MQTT_PORT). The DEVICE itself must publish a reading payload containing
+  "T=" to the topic bench/meteo/data - publishing from the host does not count
+  and neither arm has host-side MQTT tools. Finish with CLAIM: SUCCESS only
+  after you have evidence a publish arrived at the broker, or CLAIM: FAIL if
+  you could not.
+dossier:
+  - "Board: ESP32 devkit behind a CH340 USB-UART bridge at $PORT, 115200 baud."
+  - "MicroPython v1.27.0; on boot it runs /main.py automatically."
+  - "pyserial asserts DTR/RTS on port open; on this board that can hold the chip in reset - drive both lines low after opening."
+  - "The MicroPython REPL terminates lines on \\r only, and the cooked REPL auto-indents after a colon; use paste/raw mode for multi-line code."
+  - "Broker coordinates come from the environment: OPS_AB_MQTT_HOST and OPS_AB_MQTT_PORT."
+judge:
+  - mqtt_collect: {topic: "bench/meteo/data", expect_regex: "T=", within_sec: 90}
+restore: []
