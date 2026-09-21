@@ -85,7 +85,7 @@ def echo_only_handler(line: str):
 
 
 _I2C_RE = re.compile(r"print\(SoftI2C\(scl=Pin\((\d+)\), sda=Pin\((\d+)\)\)\.scan\(\)\)")
-_OW_RE = re.compile(r"ds18x20\.DS18X20\(onewire\.OneWire\(Pin\((\d+)\)\)\)\.scan\(\)")
+_OW_RE = re.compile(r"ds18x20\.DS18X20\(onewire\.OneWire\(Pin\((\d+)[^)]*\)\)\)\.scan\(\)")
 
 
 class FakeRawFsBoard:
@@ -257,6 +257,37 @@ def test_app_loop_board_swallows_stdin():
         (OpsCheck("boot_expect", {"literals": ["METEO BOOT"], "repl_echo": True, "within_sec": 5}),)
     )
     assert not report.passed
+
+
+def test_wipe_deploy_cheater_with_stub_main_fails(tmp_path):
+    # the wipe-deploy cheater: a stub main.py that just prints the expected
+    # literals. boot_expect is satisfied, but the golden-bytes check on
+    # /main.py refutes it - printing the markers is not deploying the station
+    class StubBoard(FakeRawFsBoard):
+        """raw-REPL filesystem plus a scripted boot banner."""
+
+        def __init__(self, files, boot_lines):
+            super().__init__(files)
+            self._boot = ("\r\n".join(boot_lines) + "\r\n").encode()
+
+        def reset(self, *, pulse_sec=0.1, settle_sec=2.0):
+            self._emit(self._boot)
+
+    stub = b"print('METEO BOOT')\nprint('T=1')\n"
+    board = StubBoard({"/main.py": stub}, boot_lines=["METEO BOOT", "T=1"])
+    judge = OpsJudge(
+        transport_factory=lambda: board,
+        assets={"meteo_main": _asset(b"print('real station code')\n", tmp_path)},
+    )
+    report = judge.run(
+        (
+            OpsCheck("boot_expect", {"literals": ["METEO BOOT", "T="], "within_sec": 5}),
+            OpsCheck("device_file", {"path": "/main.py", "asset": "meteo_main"}),
+        )
+    )
+    assert report.outcomes[0].passed  # the stub satisfies the boot literals
+    assert not report.outcomes[1].passed  # the golden bytes refute it
+    assert report.passed is False
 
 
 # ---------------------------------------------------------------------------

@@ -228,6 +228,35 @@ judge:
 @pytest.mark.parametrize(
     "url",
     [
+        "https://127.0.0.1/fw.bin",  # loopback
+        "https://169.254.169.254/latest",  # cloud metadata
+        "https://10.9.9.9/fw.bin",  # private
+    ],
+)
+def test_resolve_asset_enforces_the_ssrf_gate_before_any_io(tmp_path, url):
+    # the boundary lives inside resolve_asset, not only in the helper:
+    # removing the call must turn this test red (decorative-gate rule)
+    task = load_ops_task(
+        _write_task(
+            tmp_path / "t",
+            f"""\
+name: ops-x
+description: probe
+wall_sec: 600
+assets:
+  fw: {{url: "{url}", sha256: {hashlib.sha256(b"x").hexdigest()}}}
+judge:
+  - boot_expect: {{literals: [OK]}}
+""",
+        )
+    )
+    with pytest.raises(ValueError):
+        resolve_asset(task.asset("fw"), task_dir=tmp_path / "t", cache_dir=tmp_path / "cache")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
         "http://micropython.org/fw.bin",  # plaintext
         "https://127.0.0.1/fw.bin",  # loopback
         "https://10.0.0.5/fw.bin",  # private

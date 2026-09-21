@@ -109,8 +109,10 @@ class OpsJudge:
 
     # -- transport plumbing -------------------------------------------------
 
-    def _collect(self, seconds: float) -> str:
-        """Drains the fresh connection for `seconds`, returning the text."""
+    def _collect(self, seconds: float, *, stop_at: tuple[str, ...] = ()) -> str:
+        """Drains the fresh connection for up to `seconds`, returning the
+        text. `stop_at` literals end the drain early (boot checks do not
+        need to out-wait a board that already said everything)."""
         t = self._factory()
         try:
             t.reset()
@@ -128,12 +130,14 @@ class OpsJudge:
                     if len(text) >= _CHECK_TEXT_CAP:
                         text = text[:_CHECK_TEXT_CAP]
                         deadline = 0.0  # cap hit: stop ingesting, judge what we have
+                    elif stop_at and all(lit in text for lit in stop_at):
+                        break
                 time.sleep(0.05)
             return text
         finally:
             t.close()
 
-    def _probe(self, command: str, *, seconds: float = 30.0) -> str:
+    def _probe(self, command: str) -> str:
         """One raw-REPL round trip on a fresh connection (MpRepl handles the
         mode dance from any board state)."""
         t = self._factory()
@@ -149,7 +153,7 @@ class OpsJudge:
     def _check_boot_expect(self, params: dict[str, object]) -> CheckOutcome:
         within = float(params.get("within_sec", 30))
         literals = [str(x) for x in params.get("literals", [])]
-        text = self._collect(within)
+        text = self._collect(within, stop_at=tuple(literals))
         missing = [lit for lit in literals if lit not in text]
         if missing:
             return CheckOutcome("boot_expect", False, f"boot output misses {missing!r}")
@@ -214,9 +218,12 @@ class OpsJudge:
             f"from machine import SoftI2C, Pin; print(SoftI2C(scl=Pin({scl}), sda=Pin({sda})).scan())"
         )
         i2c = self._parse_brackets(i2c_out)
+        # the OneWire pin mirrors the station's own wiring (open-drain with
+        # pull-up): a default-configured pin does not scan real DS devices
         onewire_out = self._probe(
             "import onewire, ds18x20; from machine import Pin; "
-            f"print([list(r) for r in ds18x20.DS18X20(onewire.OneWire(Pin({ow_pin}))).scan()])"
+            f"print([list(r) for r in ds18x20.DS18X20(onewire.OneWire("
+            f"Pin({ow_pin}, Pin.OPEN_DRAIN, pull=Pin.PULL_UP))).scan()])"
         )
         return i2c, self._parse_brackets(onewire_out)
 

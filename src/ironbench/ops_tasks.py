@@ -161,6 +161,8 @@ def _parse_steps(where: str, raw: object) -> tuple[OpsStep, ...]:
         for key in ("asset", "path"):
             if key in params and not isinstance(params[key], str):
                 raise ValueError(f"{where}[{i}].{kind}: {key} must be a string")
+        if kind == "remove_file" and not str(params.get("path", "")).startswith("/"):
+            raise ValueError(f"{where}[{i}].remove_file: path must be an absolute device path")
         steps.append(OpsStep(kind=kind, params=dict(params)))
     return tuple(steps)
 

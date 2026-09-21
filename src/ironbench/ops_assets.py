@@ -28,6 +28,9 @@ from pathlib import Path
 from ironbench.ops_tasks import OpsAsset, OpsTask
 
 DOWNLOAD_TIMEOUT_SEC = 300
+# a hostile origin must not grow the process memory past this before the
+# pin check - the same cap class as the judge's serial text cap
+MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 _ALWAYS_BLOCKED_IPS = frozenset({ipaddress.ip_address("169.254.169.254")})
 
 
@@ -89,12 +92,16 @@ def resolve_asset(asset: OpsAsset, *, task_dir: Path, cache_dir: Path) -> Path:
             )
         return target
     cache_dir.mkdir(parents=True, exist_ok=True)
-    partial = target.with_suffix(".part")
+    # unique per target: two assets downloading concurrently must not share
+    # one partial file
+    partial = cache_dir / (target.name + ".part")
     if asset.url.startswith("file://"):
         data = Path(urllib.request.url2pathname(urllib.parse.urlsplit(asset.url).path)).read_bytes()
     else:
         with _OPENER.open(asset.url, timeout=DOWNLOAD_TIMEOUT_SEC) as resp:
-            data = resp.read()
+            data = resp.read(MAX_DOWNLOAD_BYTES + 1)
+        if len(data) > MAX_DOWNLOAD_BYTES:
+            raise ValueError(f"asset {asset.name!r}: download exceeds {MAX_DOWNLOAD_BYTES} bytes")
     actual = _sha256(data)
     if actual != asset.sha256:
         raise ValueError(
