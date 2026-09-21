@@ -78,19 +78,26 @@ def ops_preflight(
     """Refuses to start an attempt against a port that shows no boot
     evidence. Returns the observed boot tail for the campaign log."""
     factory = transport_factory or serial_factory(port)
-    t = factory()
     try:
-        t.reset()
-        deadline = time.monotonic() + seconds
-        text = ""
-        while time.monotonic() < deadline:
-            in_waiting = getattr(t, "in_waiting", 0)
-            data = t.read(int(in_waiting) if in_waiting else 256)
-            if data:
-                text += data.decode("utf-8", "replace")
-            time.sleep(0.05)
-    finally:
-        t.close()
+        t = factory()
+        try:
+            t.reset()
+            deadline = time.monotonic() + seconds
+            text = ""
+            while time.monotonic() < deadline:
+                in_waiting = getattr(t, "in_waiting", 0)
+                data = t.read(int(in_waiting) if in_waiting else 256)
+                if data:
+                    text += data.decode("utf-8", "replace")
+                time.sleep(0.05)
+        finally:
+            t.close()
+    except (OSError, RuntimeError) as e:
+        # TransportClosedError is a RuntimeError: a dead/unopenable port is
+        # infra, classified the same as "no boot evidence"
+        raise ConnectionError(
+            f"preflight transport failure on {port}: {type(e).__name__}: {e}"
+        ) from e
     if not BOOT_EVIDENCE_RE.search(text):
         raise ConnectionError(
             f"port {port} shows no boot evidence in {seconds}s - refusing to "
