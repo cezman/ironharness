@@ -186,13 +186,15 @@ class JsonlJournal:
 
 
 @contextlib.contextmanager
-def _reader_sidecar_lock(path: Path) -> Iterator[None]:
+def reader_sidecar_lock(path: Path) -> Iterator[None]:
     """IH-114: читатель берёт тот же sidecar-лок, под которым писатель
     ротирует журнал. Лок берётся только если писатель его уже создал
     (JsonlJournal создаёт sidecar в конструкторе, до первого события):
     нет файла — не было и писателя, конкурировать не с кем, и чтение
     read-only томов/чужих файлов не создаёт мусора. Части ротации (.N)
-    охраняются sidecar живого файла — от него и выводится имя."""
+    охраняются sidecar живого файла — от него и выводится имя. Публичный:
+    потребители журнала вне io_core (ironbench journal_view) обязаны
+    читать цепочку под ним же."""
     base = re.sub(r"\.\d+$", "", path.name)
     lock_path = path.with_name(base + ".lock")
     if not lock_path.exists():
@@ -216,7 +218,7 @@ def read_events(path: str | Path) -> list[Event]:
     from io_core.errors import JournalCorrupt
 
     events: list[Event] = []
-    with _reader_sidecar_lock(Path(path)), Path(path).open(encoding="utf-8") as fh:
+    with reader_sidecar_lock(Path(path)), Path(path).open(encoding="utf-8") as fh:
         for n, line in enumerate(fh, start=1):
             if not line.strip():
                 continue
@@ -257,7 +259,7 @@ def read_events_chain(path: str | Path) -> list[Event]:
     from io_core.errors import JournalCorrupt
 
     events: list[Event] = []
-    with _reader_sidecar_lock(Path(path)):
+    with reader_sidecar_lock(Path(path)):
         for part_path in chain_files(path):
             with part_path.open(encoding="utf-8") as fh:
                 for n, line in enumerate(fh, start=1):
