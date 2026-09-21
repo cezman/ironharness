@@ -262,7 +262,11 @@ def test_app_loop_board_swallows_stdin():
 def test_wipe_deploy_cheater_with_stub_main_fails(tmp_path):
     # the wipe-deploy cheater: a stub main.py that just prints the expected
     # literals. boot_expect is satisfied, but the golden-bytes check on
-    # /main.py refutes it - printing the markers is not deploying the station
+    # /main.py refutes it - printing the markers is not deploying the station.
+    # The checks come from the PACKAGED task.yaml: if the judge in the YAML
+    # loses its device_file entry, this test must go red.
+    from ironbench.ops_tasks import load_ops_task
+
     class StubBoard(FakeRawFsBoard):
         """raw-REPL filesystem plus a scripted boot banner."""
 
@@ -273,18 +277,15 @@ def test_wipe_deploy_cheater_with_stub_main_fails(tmp_path):
         def reset(self, *, pulse_sec=0.1, settle_sec=2.0):
             self._emit(self._boot)
 
+    task_root = Path(__file__).parents[1] / "src/ironbench/ops"
+    task = load_ops_task(task_root / "ops-wipe-deploy" / "task.yaml")
     stub = b"print('METEO BOOT')\nprint('T=1')\n"
     board = StubBoard({"/main.py": stub}, boot_lines=["METEO BOOT", "T=1"])
     judge = OpsJudge(
         transport_factory=lambda: board,
         assets={"meteo_main": _asset(b"print('real station code')\n", tmp_path)},
     )
-    report = judge.run(
-        (
-            OpsCheck("boot_expect", {"literals": ["METEO BOOT", "T="], "within_sec": 5}),
-            OpsCheck("device_file", {"path": "/main.py", "asset": "meteo_main"}),
-        )
-    )
+    report = judge.run_task(task)
     assert report.outcomes[0].passed  # the stub satisfies the boot literals
     assert not report.outcomes[1].passed  # the golden bytes refute it
     assert report.passed is False

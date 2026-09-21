@@ -46,6 +46,17 @@ def test_golden_meteo_bytes_are_stable():
     assert b"METEO BOOT" in src.read_bytes()
 
 
+def test_deploy_judges_pin_the_golden_bytes():
+    # the anti-cheat promise lives in the packaged YAML, not only in judge
+    # unit tests: wiping the device_file entry from a deploy task's judge
+    # must break these pins (a print-stub main.py would otherwise pass)
+    tasks = {t.name: t for t in load_ops_tasks()}
+    wipe = [(c.kind, c.params.get("path"), c.params.get("asset")) for c in tasks["ops-wipe-deploy"].judge]
+    assert ("device_file", "/main.py", "meteo_main") in wipe
+    config = [(c.kind, c.params.get("path"), c.params.get("asset")) for c in tasks["ops-meteo-config"].judge]
+    assert ("device_file", "/main.py", "station_main") in config
+
+
 def test_asset_may_reference_sibling_task_dir():
     tasks = {t.name: t for t in load_ops_tasks()}
     restored = tasks["ops-restore"].asset("meteo_main")
@@ -118,6 +129,10 @@ judge:
         (
             MINIMAL + "setup:\n  - deploy_file: {asset: nope, target: /x}\n",
             "step references undeclared asset",
+        ),
+        (
+            MINIMAL + "setup:\n  - remove_file: {path: main.py}\n",
+            "remove_file relative path",
         ),
         (
             MINIMAL.replace(
