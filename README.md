@@ -9,6 +9,8 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Benchmark reports](https://img.shields.io/badge/benchmark%20reports-gh--pages-2ea44f)](https://cezman.github.io/ironharness/)
 
+<!-- mcp-name: io.github.cezman/ironharness -->
+
 > we harness LLM agents to hardware.
 
 An agent harness for I/O and firmware. Two modules:
