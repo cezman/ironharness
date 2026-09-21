@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 import time
 import uuid
@@ -310,6 +311,11 @@ def run_ops_attempt(
 ) -> OpsAttemptResult:
     if arm not in ("bare", "mcp"):
         raise ValueError(f"unknown arm {arm!r}")
+    if allow_flash:
+        # the setup/restore steps flash and erase in THIS process (EspFlasher
+        # reads the gate from the environment), same opt-in as the MCP arm's
+        # server env gets below
+        os.environ["IRONHARNESS_ALLOW_REAL_FLASH"] = "1"
     task_dir = task.source_dir or Path(".")
     started = time.monotonic()
 
