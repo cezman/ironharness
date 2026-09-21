@@ -184,7 +184,7 @@ def test_real_target_missed_expect_fails(tmp_path):
 
 
 def test_real_target_unsupported_steps_are_honest_fails(tmp_path):
-    task = make_real_task(tmp_path, stimulus=("set-control: ds18b20",))
+    task = make_real_task(tmp_path, stimulus=({"set-control": {"part-id": "dht1", "control": "temperature", "value": 25}},))
     res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeBoard())
     assert not res.passed
     assert "set-control" in (res.error or "")

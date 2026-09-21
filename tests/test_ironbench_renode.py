@@ -349,7 +349,7 @@ def test_renode_hang_repl_deadline(tmp_path, monkeypatch):
 
 
 def test_renode_set_control_rejected_upfront(tmp_path):
-    task = make_renode_task(tmp_path, stimulus=['set-control: "button0: true"'])
+    task = make_renode_task(tmp_path, stimulus=[{'set-control': {'part-id': 'btn1', 'control': 'pressed', 'value': 1}}])
     res = run_fake_renode(tmp_path, task, "ok")
     assert not res.passed
     assert "set-control" in (res.error or "")
