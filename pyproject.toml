@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Tsyren Balmaev (cezman)" }]
-keywords = ["mcp", "agents", "hardware", "serial", "modbus", "mqtt", "esp32", "firmware", "benchmark"]
+keywords = ["mcp", "agents", "hardware", "serial", "modbus", "mqtt", "esp32", "firmware"]
 classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",

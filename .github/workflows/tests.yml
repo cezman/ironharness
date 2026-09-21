@@ -22,6 +22,10 @@ jobs:
         run: uv run ruff check .
       - name: Tests
         run: uv run pytest -q
+      - name: Benchmark runs as a module (README quickstart contract)
+        # the wheel has no ironbench command; from a source clone the bench is
+        # invoked as `python -m ironbench.cli` - pin that exact form in CI
+        run: uv run python -m ironbench.cli list
 
   min-deps:
     # IH-41: the declared floors are TESTED, not just tolerated - an env that
@@ -70,8 +74,11 @@ jobs:
           assert "ironharness-mcp" in text, "MCP entry point missing"
           assert "ironbench" not in text, "ironbench console script must not ship in the wheel"
           sdist = tarfile.open(glob.glob("dist/ironharness-*.tar.gz")[0])
-          assert any("src/ironbench" in n for n in sdist.getnames()), \
-              "sdist must keep the benchmark sources (bench ships from source)"
+          sdist_names = sdist.getnames()
+          for key in ("__init__.py", "cli.py", "tasks.py", "agent.py", "report.py",
+                      "runner.py", "runner_unix.py", "runner_wokwi.py", "runner_real.py"):
+              assert any(n.endswith(f"/src/ironbench/{key}") for n in sdist_names), \
+                  f"sdist must keep src/ironbench/{key} (bench ships from source)"
           print("wheel core-only, sdist complete: ok")
           PY
       - name: Wheel installs without extras (base deps only)
@@ -80,7 +87,7 @@ jobs:
           uv pip install --python .venv-smoke dist/ironharness-*.whl
           .venv-smoke/bin/python -c "import io_core; print('io_core', io_core.__version__, 'imports ok')"
           # negative path: no bench in the wheel - the ironbench command must not exist
-          ! test -x .venv-smoke/bin/ironbench
+          test ! -x .venv-smoke/bin/ironbench
       - name: MCP stdio smoke (initialize ping over the installed wheel)
         # IH-30: the entry point must boot and speak the protocol, not just import
         run: |
