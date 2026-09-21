@@ -32,6 +32,9 @@ Modbus-устройства, платы класса ESP32 — и для все�
 отказы исключаются из оценок, а не раздувают их; вместе с каждым поколением лидерборда
 публикуются сырые данные по попыткам, чтобы цифры можно было перепроверить.
 
+PyPI-пакет содержит только слой **io-core** (MCP-сервер). Бенчмарк запускается из
+клона исходников: `git clone` → `uv sync` → `uv run python -m ironbench.cli ...`.
+
 ## Быстрый старт
 
 ```bash
@@ -91,12 +94,12 @@ ironharness даёт «руки»: транспорты, песочницу, ж�
 ## ironbench — бенчмарк firmware-агентов
 
 ```bash
-uv run ironbench list                              # каталог золотых задач
-uv run ironbench run --task uart-echo              # один эталонный прогон (wokwi-задачам нужен WOKWI_CLI_TOKEN)
-uv run ironbench run --all --allow-real            # все задачи одним проходом; без --allow-real
-                                                   #   отказ — стейджинг сносит main.py на живой плате
-uv run ironbench solve --task blink --attempts 3   # LLM-агент решает задачу
-uv run ironbench report                            # pass@k: report.json + report.html
+uv run python -m ironbench.cli list                              # каталог золотых задач
+uv run python -m ironbench.cli run --task uart-echo              # один эталонный прогон (wokwi-задачам нужен WOKWI_CLI_TOKEN)
+uv run python -m ironbench.cli run --all --allow-real            # все задачи одним проходом; без --allow-real
+                                                                 #   отказ — стейджинг сносит main.py на живой плате
+uv run python -m ironbench.cli solve --task blink --attempts 3   # LLM-агент решает задачу
+uv run python -m ironbench.cli report                            # pass@k: report.json + report.html
 ```
 
 Задачи — ESP32/MicroPython в Wokwi (headless `wokwi-cli`), Renode, MicroPython unix-port
@@ -107,7 +110,7 @@ system-id) и **живая плата** (`--target real`: MicroPython REPL по 
 на этом контрасте `real` и построен; `bme-read` (датчик BME280 по I2C) оценивается только
 на живой плате. Задача может нести экспертные `notes:` со стенда — они попадают в промпт
 solve-агента, а факт «с notes / без» фиксируется в results.jsonl. У каждой задачи класс
-(io/data/protocol/fsm/control/resilience/debug) и уровень 1–5; `ironbench report`
+(io/data/protocol/fsm/control/resilience/debug) и уровень 1–5; `python -m ironbench.cli report`
 показывает профиль модели по классам, а не одно число. LLM-конфиг — переменные окружения:
 `LLM_BASE_URL` (по умолчанию локальный LM Studio), `LLM_MODEL`, `LLM_API_KEY`,
 `LLM_TIMEOUT`.

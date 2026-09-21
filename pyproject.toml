@@ -1,13 +1,13 @@
 [project]
 name = "ironharness"
 version = "0.9.0"
-description = "io-core — a safe I/O layer for LLM agents (MCP server); ironbench — a benchmark for firmware agents"
+description = "io-core — a safe I/O layer for LLM agents (MCP server: serial, Modbus TCP, MQTT, file sandbox, ESP32 flash tools)"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Tsyren Balmaev (cezman)" }]
-keywords = ["mcp", "agents", "hardware", "serial", "modbus", "mqtt", "esp32", "firmware", "benchmark"]
+keywords = ["mcp", "agents", "hardware", "serial", "modbus", "mqtt", "esp32", "firmware"]
 classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -42,7 +42,9 @@ dev = [
 ]
 
 [project.scripts]
-ironbench = "ironbench.cli:main"
+# the ironbench CLI deliberately has no console script here: the wheel ships
+# the io-core layer only; run the benchmark from a source clone via
+# `uv run python -m ironbench.cli`
 ironharness-mcp = "io_core.mcp_server:main"
 
 [build-system]
@@ -50,7 +52,12 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/io_core", "src/ironbench"]
+# core-only wheel: the benchmark (ironbench) ships from source (GitHub/sdist),
+# not from PyPI. dev-mode-dirs keeps BOTH modules importable in editable
+# installs (uv sync / local dev and CI test jobs), so the repo workflow is
+# unchanged; only the built wheel is core-only.
+packages = ["src/io_core"]
+dev-mode-dirs = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
