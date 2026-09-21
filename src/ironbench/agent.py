@@ -81,12 +81,19 @@ class SolveConfig:
     max_tokens: int = 8192
 
     def __post_init__(self) -> None:
-        # IH-112: 0 (or negative) used to be accepted silently - the loop never
-        # ran and every attempt burned as "iteration limit (0) exhausted",
-        # poisoning pass@k with fake errors. __post_init__ revalidates on
-        # dataclasses.replace too, so a CLI/env override cannot slip past.
+        # IH-112 + IH-115: numeric fields are bounded here, not at the call
+        # sites - __post_init__ revalidates on dataclasses.replace too, so a
+        # CLI/env override cannot slip past. Unbounded garbage used to surface
+        # late and loud per attempt (a zero timeout in urllib, a zero
+        # max_tokens at the API) or silently (a negative temperature).
         if not 1 <= self.max_iterations <= 1000:
             raise ValueError(f"max_iterations must be within 1..1000, got {self.max_iterations}")
+        if not 0 <= self.temperature <= 2:
+            raise ValueError(f"temperature must be within 0..2, got {self.temperature}")
+        if not 1 <= self.timeout_sec <= 3600:
+            raise ValueError(f"timeout_sec must be within 1..3600, got {self.timeout_sec}")
+        if not 1 <= self.max_tokens <= 1_048_576:
+            raise ValueError(f"max_tokens must be within 1..1048576, got {self.max_tokens}")
 
 
 def _env_map() -> dict[str, str]:
