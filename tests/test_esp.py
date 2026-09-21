@@ -113,9 +113,9 @@ def test_flash_canonical_sequence(tmp_path, monkeypatch):
     fake.install(monkeypatch)
     jpath = tmp_path / "j.jsonl"
     with JsonlJournal(jpath, actor="test") as jr:
-        result = EspFlasher(on_event=jr).flash("COM7", FIRMWARE)
+        result = EspFlasher(on_event=jr).flash("loop://", FIRMWARE)
     assert "flashed" in result
-    assert fake.calls[0] == ("connect", {"port": "COM7", "chip": "esp32"})
+    assert fake.calls[0] == ("connect", {"port": "loop://", "chip": "esp32"})
     assert "run_stub" in fake.steps()
     assert ("write_flash", {"addr_data": [(0x1000, str(FIRMWARE))]}) in fake.calls
     assert fake.esp.bauds == [921600]  # повышение baud только после run_stub
@@ -129,7 +129,7 @@ def test_flash_write_failure_journals_and_closes_port(tmp_path, monkeypatch):
     fake.install(monkeypatch)
     jpath = tmp_path / "j.jsonl"
     with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ConnectionError, match="failed to flash"):
-        EspFlasher(on_event=jr).flash("COM7", FIRMWARE)
+        EspFlasher(on_event=jr).flash("loop://", FIRMWARE)
     assert fake.esp._port.closed  # неудача операции не оставляет порт открытым
     events = read_events(jpath)
     assert [e["kind"] for e in events] == ["esp_flash_failed"]
@@ -141,7 +141,7 @@ def test_flash_connect_failure(monkeypatch):
     fake.fail_at = "connect"
     fake.install(monkeypatch)
     with pytest.raises(ConnectionError, match="failed to flash"):
-        EspFlasher().flash("COM9", FIRMWARE)
+        EspFlasher().flash("loop://", FIRMWARE)
 
 
 def test_erase_canonical_sequence(tmp_path, monkeypatch):
@@ -149,7 +149,7 @@ def test_erase_canonical_sequence(tmp_path, monkeypatch):
     fake.install(monkeypatch)
     jpath = tmp_path / "j.jsonl"
     with JsonlJournal(jpath, actor="test") as jr:
-        result = EspFlasher(on_event=jr).erase("/dev/ttyUSB0")
+        result = EspFlasher(on_event=jr).erase("loop://")
     assert "erased" in result
     assert fake.steps() == ["connect", "run_stub", "attach_flash", "erase_flash"]
     assert fake.esp._port.closed
@@ -162,7 +162,7 @@ def test_erase_connect_failure(tmp_path, monkeypatch):
     fake.install(monkeypatch)
     jpath = tmp_path / "j.jsonl"
     with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ConnectionError, match="failed to erase"):
-        EspFlasher(on_event=jr).erase("COM9")
+        EspFlasher(on_event=jr).erase("loop://")
     assert [e["kind"] for e in read_events(jpath)] == ["esp_erase_failed"]
 
 
@@ -173,7 +173,7 @@ def test_flash_missing_firmware_raises(monkeypatch):
     monkeypatch.setattr(esp_mod, "connect_esp", no_connect)
     monkeypatch.setenv("IRONHARNESS_ALLOW_REAL_FLASH", "1")  # gate passes: the missing image is tested here
     with pytest.raises(FileNotFoundError):
-        EspFlasher().flash("COM7", "nope.bin")
+        EspFlasher().flash("loop://", "nope.bin")
 
 
 def test_session_esp_ops(tmp_path, monkeypatch):
@@ -183,7 +183,7 @@ def test_session_esp_ops(tmp_path, monkeypatch):
     jpath = tmp_path / "session.jsonl"
     s = Session(jpath, tmp_path / "sandbox", actor="test")
     s.esp_image_info(str(FIRMWARE), chip="esp32")
-    s.esp_flash("COM7", str(FIRMWARE))
+    s.esp_flash("loop://", str(FIRMWARE))
     s.close()
     kinds = [json.loads(line)["kind"] for line in jpath.read_text(encoding="utf-8").splitlines()]
     assert kinds == ["esp_image_info", "esp_flash"]

@@ -96,13 +96,41 @@ def test_gate_precedes_the_esptool_check(tmp_path, image, monkeypatch):
 
 def test_flag_set_passes_the_gate(monkeypatch, tmp_path, image):
     # the counter-negative: with the flag the gate lets the request through
-    # (here it stops at the missing optional dependency, which is expected)
+    # (here it stops at the missing optional dependency, which is expected).
+    # loop:// is a local port on every OS - COM7 is legal only on win32
+    # (IH-113 whitelist), and the test must not depend on the runner platform.
     monkeypatch.setenv(esp_mod.ALLOW_REAL_FLASH_ENV, "1")
     monkeypatch.setattr(esp_mod, "_ESPTOOL_AVAILABLE", False)
     with pytest.raises(ImportError, match="flash.*extra"):
-        EspFlasher().flash("COM7", image)
+        EspFlasher().flash("loop://", image)
     with pytest.raises(ImportError, match="flash.*extra"):
-        EspFlasher().erase("COM7")
+        EspFlasher().erase("loop://")
+
+
+def test_flash_and_erase_refuse_nonlocal_ports(tmp_path, image, monkeypatch, bomb_connect):
+    # IH-113: esptool opens the port with serial_for_url, which accepts network
+    # URLs - socket:// must not become an outbound TCP connection, rfc2217://
+    # not a remote serial session. Same whitelist as the serial transports
+    # (IH-50), and NOT liftable by the real-flash opt-in: locality is policy.
+    monkeypatch.setenv(esp_mod.ALLOW_REAL_FLASH_ENV, "1")
+    jpath = tmp_path / "j.jsonl"
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ValueError, match="non-local"):
+        EspFlasher(on_event=jr).flash("socket://10.0.0.1:3232", image)
+    with JsonlJournal(jpath, actor="test") as jr, pytest.raises(ValueError, match="non-local"):
+        EspFlasher(on_event=jr).erase("rfc2217://10.0.0.1:7000")
+    assert bomb_connect == []  # esptool was never reached
+    events = read_events(jpath)
+    assert [e["kind"] for e in events] == ["esp_denied", "esp_denied"]
+    assert events[0]["port"] == "socket://10.0.0.1:3232"
+    assert events[1]["op"] == "erase"
+
+
+def test_whitelist_denial_precedes_the_esptool_check(tmp_path, image, monkeypatch):
+    # the locality verdict must not depend on the optional dependency either
+    monkeypatch.setenv(esp_mod.ALLOW_REAL_FLASH_ENV, "1")
+    monkeypatch.setattr(esp_mod, "_ESPTOOL_AVAILABLE", False)
+    with pytest.raises(ValueError, match="non-local"):
+        EspFlasher().flash("socket://10.0.0.1:3232", image)
 
 
 def test_flash_denied_with_missing_image(tmp_path, bomb_connect):
@@ -121,7 +149,9 @@ def test_flash_missing_image_with_open_gate_is_journaled(tmp_path, monkeypatch):
     monkeypatch.setenv(esp_mod.ALLOW_REAL_FLASH_ENV, "1")
     jpath = tmp_path / "j.jsonl"
     with JsonlJournal(jpath, actor="test") as jr, pytest.raises(FileNotFoundError):
-        EspFlasher(on_event=jr).flash("COM7", tmp_path / "nope.bin")
+        # loop://: a local port on every OS (the win32-only COM7 would hit the
+        # IH-113 whitelist on linux before the path check)
+        EspFlasher(on_event=jr).flash("loop://", tmp_path / "nope.bin")
     events = read_events(jpath)
     assert [e["kind"] for e in events] == ["esp_flash_failed"]
     assert "nope.bin" in events[0]["path"]

@@ -305,9 +305,11 @@ def test_esp_flash_erase_import_error_journaled(tmp_path, monkeypatch):
     fw = tmp_path / "fw.bin"
     fw.write_bytes(b"\x00" * 16)
     f = esp_flash.EspFlasher(on_event=j)
+    # loop:// is a whitelisted local port on every OS (IH-113); the port
+    # whitelist is exercised separately in tests/test_esp_gate.py
     with pytest.raises(ImportError):
-        f.flash("COMX", fw)
+        f.flash("loop://", fw)
     with pytest.raises(ImportError):
-        f.erase("COMX")
+        f.erase("loop://")
     ks = [k for k, _ in j.events]
     assert "esp_flash_failed" in ks and "esp_erase_failed" in ks, ks
