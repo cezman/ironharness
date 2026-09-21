@@ -1,0 +1,2 @@
+{"task": "noisy-frames", "attempt": 1, "solved": true, "iterations": 2, "model": "openai/gpt-oss-20b", "duration_sec": 38.11, "error": null, "error_kind": "none", "notes": false}
+{"task": "noisy-frames", "attempt": 2, "solved": true, "iterations": 1, "model": "openai/gpt-oss-20b", "duration_sec": 16.17, "error": null, "error_kind": "none", "notes": false}

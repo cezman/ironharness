@@ -1,0 +1,2 @@
+{"task": "watchdog", "attempt": 1, "solved": true, "iterations": 1, "model": "qwen/qwen3-30b-a3b", "duration_sec": 189.21, "error": null, "error_kind": "none", "notes": false}
+{"task": "watchdog", "attempt": 2, "solved": true, "iterations": 1, "model": "qwen/qwen3-30b-a3b", "duration_sec": 206.44, "error": null, "error_kind": "none", "notes": false}

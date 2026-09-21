@@ -1,0 +1,2 @@
+{"task": "noisy-frames", "attempt": 1, "solved": true, "iterations": 4, "model": "qwen/qwen3-30b-a3b", "duration_sec": 549.62, "error": null, "error_kind": "none", "notes": false}
+{"task": "noisy-frames", "attempt": 2, "solved": true, "iterations": 4, "model": "qwen/qwen3-30b-a3b", "duration_sec": 853.87, "error": null, "error_kind": "none", "notes": false}

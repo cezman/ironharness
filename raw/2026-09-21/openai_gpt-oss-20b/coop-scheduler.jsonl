@@ -1,0 +1,2 @@
+{"task": "coop-scheduler", "attempt": 1, "solved": true, "iterations": 1, "model": "openai/gpt-oss-20b", "duration_sec": 30.7, "error": null, "error_kind": "none", "notes": false}
+{"task": "coop-scheduler", "attempt": 2, "solved": true, "iterations": 1, "model": "openai/gpt-oss-20b", "duration_sec": 34.18, "error": null, "error_kind": "none", "notes": false}

@@ -1,0 +1,2 @@
+{"task": "protocol", "attempt": 1, "solved": true, "iterations": 4, "model": "openai/gpt-oss-20b", "duration_sec": 66.49, "error": null, "error_kind": "none", "notes": false}
+{"task": "protocol", "attempt": 2, "solved": true, "iterations": 3, "model": "openai/gpt-oss-20b", "duration_sec": 52.68, "error": null, "error_kind": "none", "notes": false}

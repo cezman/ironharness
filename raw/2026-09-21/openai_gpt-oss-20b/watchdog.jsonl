@@ -1,0 +1,2 @@
+{"task": "watchdog", "attempt": 1, "solved": true, "iterations": 1, "model": "openai/gpt-oss-20b", "duration_sec": 23.86, "error": null, "error_kind": "none", "notes": false}
+{"task": "watchdog", "attempt": 2, "solved": true, "iterations": 1, "model": "openai/gpt-oss-20b", "duration_sec": 13.71, "error": null, "error_kind": "none", "notes": false}

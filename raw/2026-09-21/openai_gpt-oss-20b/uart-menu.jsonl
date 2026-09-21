@@ -1,0 +1,2 @@
+{"task": "uart-menu", "attempt": 1, "solved": true, "iterations": 1, "model": "openai/gpt-oss-20b", "duration_sec": 16.07, "error": null, "error_kind": "none", "notes": true}
+{"task": "uart-menu", "attempt": 2, "solved": true, "iterations": 1, "model": "openai/gpt-oss-20b", "duration_sec": 15.11, "error": null, "error_kind": "none", "notes": true}

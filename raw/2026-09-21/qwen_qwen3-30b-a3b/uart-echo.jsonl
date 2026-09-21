@@ -1,0 +1,2 @@
+{"task": "uart-echo", "attempt": 1, "solved": true, "iterations": 1, "model": "qwen/qwen3-30b-a3b", "duration_sec": 63.36, "error": null, "error_kind": "none", "notes": true}
+{"task": "uart-echo", "attempt": 2, "solved": true, "iterations": 1, "model": "qwen/qwen3-30b-a3b", "duration_sec": 64.79, "error": null, "error_kind": "none", "notes": true}
