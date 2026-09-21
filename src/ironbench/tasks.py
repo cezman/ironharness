@@ -201,6 +201,15 @@ def load_task(task_dir: Path) -> Task:
                 raise ValueError(
                     f"{task_file}: mqtt-collect.timeout_sec must be a finite number in 1..600, got {ts!r}"
                 )
+        if "wait-serial" in step:
+            answer = step["wait-serial"]
+            # IH-111: an empty/whitespace answer degrades to an always-matching
+            # needle, a null value would be coerced by the runner to the literal
+            # "None" - reject at load time, for every target
+            if not isinstance(answer, str) or not answer.strip():
+                raise ValueError(
+                    f"{task_file}: wait-serial must be a non-empty string answer, got {answer!r}"
+                )
     target = str(raw.get("target", "wokwi"))
     if target not in TASK_TARGETS:
         raise ValueError(f"{task_file}: unknown target {target!r} (allowed: {TASK_TARGETS})")

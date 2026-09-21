@@ -318,6 +318,23 @@ def test_wait_serial_requires_preceding_trigger(tmp_path):
         load_task(d)
 
 
+def test_wait_serial_answer_must_be_a_nonempty_string(tmp_path):
+    # IH-111: an empty/whitespace answer degrades to an always-matching needle
+    # (unix runner) or a meaningless scenario wait; a YAML null value would be
+    # coerced by the runner to the literal "None". Rejected at load time, for
+    # every target.
+    base = "name: t\ndescription: fake\nexpect:\n  - 'x'\nstimulus:\n"
+    for suffix, label in (
+        ("  - wait-serial: \"\"\n", "empty"),
+        ("  - wait-serial: \"   \"\n", "whitespace"),
+        ("  - wait-serial:\n", "null"),
+        ("  - wait-serial: 4096\n", "non-string"),
+    ):
+        content = base + "  - write-serial: \"hi\\n\"\n" + suffix
+        with pytest.raises(ValueError, match="wait-serial must be a non-empty string"):
+            load_task(write_task(tmp_path, content, dirname=f"t-{label}"))
+
+
 def test_timeout_sec_is_bounded(tmp_path):
     """IH-46: numeric caps on operator-authored fields - a billion-second
     timeout would make the wall deadline meaningless."""
