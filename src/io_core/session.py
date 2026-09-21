@@ -417,6 +417,8 @@ class Session:
         """Resets the board with an RTS pulse (ESP32: RTS->EN, DTR stays low
         = normal boot) - a clean state between solve attempts or after a hung
         REPL. open() never resets (the idle-lines fix); reset is explicit.
+        IH-110: deliberately NOT gated against an in-flight transfer - reset
+        is the recovery escape hatch for a wedged exchange.
         Under a reader's I/O lock: line control is I/O on the same single
         line (CH340). The settle wait holds the lock too - writes and drains
         are blocked while the board boots; boot output accumulates in the

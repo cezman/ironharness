@@ -116,6 +116,9 @@ def test_direct_io_refused_during_transfer_is_journaled(tmp_path, monkeypatch):
             assert kind in ks, f"the {kind} refusal passed unjournaled"
         release.set()
         th.join(timeout=10)
+        # the gate must dissolve with the finished transfer, not wedge the name:
+        # a normal write goes through right after the exchange ends
+        assert s.serial_write("loop", "68656c6c6f") == 5
     finally:
         s.close()
 
