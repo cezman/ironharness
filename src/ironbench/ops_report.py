@@ -40,8 +40,10 @@ def _bucket(rows: list[dict], key_fields: tuple[str, ...]) -> dict[tuple, list[d
 
 def summarize(rows: list[dict]) -> dict:
     """Aggregate attempt rows into per-arm/model metrics."""
-    judged = [r for r in rows if r.get("error_kind") != "infra"]
-    infra = [r for r in rows if r.get("error_kind") == "infra"]
+    # a judge-confirmed solve is never infra, even when a later restore step
+    # failed (older rows encoded that as error_kind=infra)
+    judged = [r for r in rows if r.get("error_kind") != "infra" or r.get("solved")]
+    infra = [r for r in rows if r.get("error_kind") == "infra" and not r.get("solved")]
     groups = {}
     for key, bucket in _bucket(judged, ("model", "arm")).items():
         model, arm = key
