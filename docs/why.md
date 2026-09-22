@@ -22,7 +22,7 @@ shell loop. Typical failures:
 - "it worked" is unverifiable — the return code said 0.
 
 ironharness sits between the agent and the device and adds the missing
-constraints: an MCP server (32 tools) where every operation is journaled to
+constraints: an MCP server (33 tools) where every operation is journaled to
 JSONL, transports are deadline- and quota-bounded, destructive actions sit
 behind explicit opt-in gates, and domain errors come back as readable text
 with a suggested next step instead of a stack trace.
@@ -104,7 +104,7 @@ board; [board.jpg](board.jpg) is the bench.
 | `policy.py` | operator-controlled allowlists: `IRONHARNESS_ALLOWED_HOSTS`, `IRONHARNESS_ENABLED_KINDS`; every denial is journaled. |
 | `faults.py` | `FaultyTransport` — scripted disconnects, delays, bit corruption, byte loss over any transport. |
 | `errors.py` | domain error types; the agent receives them as readable text with the next step — a timeout says to close and reopen the port, a refused open points at the port whitelist. |
-| `mcp_server.py` | the 32 tools over stdio. |
+| `mcp_server.py` | the 33 tools over stdio. |
 
 The safety model in five lines:
 
@@ -131,6 +131,7 @@ optionally expert notes.
 |---|---|---|
 | Several USB-UART adapters, port numbers drift across re-plugs | `serial_list` → match VID:PID; `serial_wait` blocks until your board appears; open via `by-serial:<sn>` | MCP tools |
 | Device prints between tool calls and the output is lost | background reader: `serial_reader_start`, then `serial_tail` / `serial_read_until` | MCP tools |
+| Watch what a board prints, bounded (boot log, chatter, silence) | `serial_monitor`: max_bytes/max_seconds caps, quiet window, stop pattern, sandbox dump | MCP tools |
 | Board wedged, want a clean attempt | `serial_reset` (RTS pulse) | MCP tools |
 | Put a file on the board / rescue its `main.py` | `serial_put` / `serial_get` (raw REPL; back up before overwriting) | MCP tools |
 | Flash or erase an ESP32 | `esp_image_info` (offline parse) → `esp_flash` / `esp_erase`, refused without `IRONHARNESS_ALLOW_REAL_FLASH=1` | MCP tools + `ironharness[flash]` |

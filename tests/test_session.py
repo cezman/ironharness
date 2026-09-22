@@ -722,6 +722,7 @@ def test_status_empty_session_structure(session):
         "transports": {},
         "readers": {},
         "transfers": [],
+        "monitors": [],  # IH-83: running serial_monitor windows
         "sandbox": str(session.sandbox.root),
     }
 

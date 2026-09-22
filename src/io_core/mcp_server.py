@@ -205,8 +205,9 @@ def serial_list() -> list[dict]:
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True))
 def session_status() -> dict:
     """Session introspection: open transports (name, kind, port), background
-    readers (buffered bytes, alive), in-flight transfers, sandbox root.
-    Call after context loss to self-recover instead of guessing."""
+    readers (buffered bytes, alive), in-flight transfers, running serial
+    monitors, sandbox root. Call after context loss to self-recover instead
+    of guessing."""
     return get_session().status()
 
 
@@ -315,6 +316,32 @@ def serial_read_until(name: str, pattern: str, timeout: float = 10.0) -> dict:
     "text", "alive", "error"}. found=false on timeout (text = whatever is
     unconsumed)."""
     return get_session().serial_read_until(name, pattern, timeout)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
+def serial_monitor(
+    name: str,
+    max_bytes: int = 65536,
+    max_seconds: float = 10.0,
+    quiet_seconds: float | None = None,
+    stop_pattern: str | None = None,
+    dump_path: str | None = None,
+) -> dict:
+    """Captures the port's output for a bounded window - "watch what the
+    board actually says". Reads until the FIRST stop condition: max_bytes
+    captured, max_seconds elapsed, quiet_seconds without new data, or
+    stop_pattern seen. Returns {"bytes", "stop_reason", "truncated",
+    "duration_sec", "data_hex", "text", "dump"?}. Byte-capped (a flood or a
+    line without \\n cannot hang it); while it runs, other I/O on the
+    connection is refused. dump_path (sandbox-relative) saves the capture."""
+    return get_session().serial_monitor(
+        name,
+        max_bytes=max_bytes,
+        max_seconds=max_seconds,
+        quiet_seconds=quiet_seconds,
+        stop_pattern=stop_pattern,
+        dump_path=dump_path,
+    )
 
 
 # --- modbus ---
