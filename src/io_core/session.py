@@ -626,10 +626,11 @@ class Session:
         "watch what the board actually says" tool (the esp-idf#18757 answer
         to dumping a serial port). Reads until the FIRST stop condition:
         max_bytes captured, max_seconds elapsed, quiet_seconds without new
-        data, or stop_pattern seen in the stream. Every chunk read is
-        journaled like any read (conn-attributed); one serial_monitor event
-        carries the summary - captured bytes live in the optional sandbox
-        dump, never in the journal.
+        data, or stop_pattern seen in the stream. The chunk reads are
+        journaled like any read (conn-attributed, data_hex included - the
+        journal keeps the full audit trail); the serial_monitor summary
+        event itself carries only the stats, and the optional sandbox dump
+        is the agent-facing copy of the capture.
 
         The monitor owns the read side for its whole window: serial_write/
         serial_read/serial_read_line/serial_put/serial_get/serial_reader_start
@@ -638,7 +639,10 @@ class Session:
         is refused under an attached reader or an in-flight transfer.
         serial_reset stays deliberately ungated (the recovery hatch, the
         IH-110 precedent) - boot output after a reset is just more capture.
-        A transport closed mid-window ends the monitor with the real error.
+        A transport closed mid-window ends the monitor with the real error
+        (journaled as monitor_failed, the name released); a full session
+        close is the one race where the monitor_failed event itself can be
+        lost - the journal is closing under it.
 
         A failed dump does not eat the capture: the summary still returns
         with "dump_error" and the failure is journaled (monitor_dump_failed).
@@ -669,6 +673,13 @@ class Session:
                 {"conn": name, "reason": "stop_pattern is empty"},
             )
             raise ValueError("serial_monitor stop_pattern must not be empty")
+        if dump_path is not None and not dump_path:
+            # IH-116 class: "" would silently mean "no dump" with no trace
+            self.journal(
+                "monitor_refused",
+                {"conn": name, "reason": "dump_path is empty"},
+            )
+            raise ValueError("serial_monitor dump_path must not be empty")
         self._check_open()
         self._check_kind("serial")
         with self._lock:

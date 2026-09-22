@@ -13,6 +13,7 @@ import time
 import pytest
 
 from io_core import mprepl
+from io_core.errors import TransportClosedError
 from io_core.journal import read_events
 from io_core.session import Session
 
@@ -163,6 +164,7 @@ def test_seconds_cap_beats_endless_flood(tmp_path):
         {"quiet_seconds": 0},
         {"quiet_seconds": -1},
         {"stop_pattern": ""},  # IH-116 class: "" matches instantly, a lie
+        {"dump_path": ""},  # IH-116 class: "" silently means "no dump"
     ],
 )
 def test_argument_bounds_refused_and_journaled(tmp_path, kwargs):
@@ -280,6 +282,56 @@ def test_unknown_conn_journals_failure(tmp_path):
     assert len(failures) == 1
 
 
+def test_serial_close_during_window_ends_monitor_honestly(tmp_path):
+    """The docstring promise: a transport closed mid-window ends the monitor
+    with the real error - journaled as monitor_failed, the name released
+    (a stuck name would refuse every later write on the conn)."""
+    s = _open_session(tmp_path)
+    try:
+        done = threading.Event()
+
+        def run():
+            try:
+                s.serial_monitor("c", max_seconds=30)
+            except (TransportClosedError, OSError):
+                pass  # the transport is dead - the monitor surfaced it instead of hanging
+            done.set()
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        time.sleep(0.3)  # the monitor is inside its read window now
+        s.serial_close("c")
+        assert done.wait(timeout=10), "closing the transport must end the monitor"
+        assert s.status()["monitors"] == []
+        failures = _events(tmp_path, "monitor_failed")
+        assert len(failures) == 1
+        th.join(timeout=10)
+    finally:
+        s.close()
+
+
+def test_reset_stays_ungated_during_window(tmp_path):
+    """serial_reset is the recovery hatch (the IH-110 precedent): it must
+    pass while a monitor runs - boot output after a reset is just more
+    capture. A future 'helpful' gate here would kill that escape hatch."""
+    s = _open_session(tmp_path)
+    try:
+        done = threading.Event()
+
+        def run():
+            s.serial_monitor("c", max_seconds=10, quiet_seconds=1.0)
+            done.set()
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        time.sleep(0.3)  # the monitor is inside its read window now
+        s.serial_reset("c", pulse_sec=0.05, settle_sec=0.2)  # must not raise
+        assert done.wait(timeout=15)
+        th.join(timeout=10)
+    finally:
+        s.close()
+
+
 # --- dump, journal, reuse ---
 
 
@@ -336,7 +388,9 @@ def test_summary_is_journaled_with_conn_attribution(tmp_path):
     assert e["conn"] == "c"
     assert e["bytes"] > 0
     assert e["stop_reason"] == "quiet"
-    assert "data" not in e, "captured bytes live in the dump, not the journal"
+    # the summary event carries only stats: the per-chunk reads keep the
+    # data_hex audit trail, the dump is the agent-facing copy
+    assert "data" not in e and "data_hex" not in e
     # the drained chunks are journaled as reads with the conn name, like any read
     read_events_c = [x for x in read_events(tmp_path / "j.jsonl") if x["kind"] == "read"]
     assert read_events_c, "monitor chunk reads must be journaled"
