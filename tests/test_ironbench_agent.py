@@ -527,17 +527,24 @@ def test_serial_feedback_without_traceback_has_no_diagnosis(tmp_path):
 # --- IH-82: transient LLM errors retry, auth/config errors abort loudly ---
 
 
-def test_solve_attempt_llm_auth_error_aborts_loudly(tmp_path):
-    # IH-82: an auth/config error cannot be retried - the campaign aborts
-    # loudly instead of burning hollow attempts into pass@k
+def test_non_http_llm_errors_exhaust_retries_honestly(tmp_path, monkeypatch):
+    # IH-117 supersedes the IH-82 wordy-abort pin: auth/config abort is reserved
+    # for authoritative signals (HTTP status via e.code). A non-HTTP exception
+    # whose text merely looks like auth wording is a transient - the campaign
+    # burns its bounded retries and records an honest attempt error instead of
+    # aborting on string fortune.
+    monkeypatch.setattr("ironbench.agent._LLM_RETRY_SLEEP", 0.0)
     task = make_task()
     cfg = SolveConfig(base_url="http://x", api_key="bad", model="m")
+    calls = {"n": 0}
 
     def llm(cfg, msgs):
+        calls["n"] += 1
         raise OSError("401 Unauthorized: invalid api key")
 
-    with pytest.raises(SystemExit):
-        solve_attempt(task, cfg, out_dir=tmp_path, llm=llm, runner=fake_runner(True))
+    res = solve_attempt(task, cfg, out_dir=tmp_path, llm=llm, runner=fake_runner(True))
+    assert res.solved is False and calls["n"] == 3
+    assert "LLM error" in (res.error or "")
 
 
 def test_solve_attempt_http_404_aborts_loudly(tmp_path):
@@ -649,17 +656,24 @@ def test_solve_attempt_port_digits_in_oserror_do_not_abort(tmp_path, monkeypatch
     assert res.solved and calls["n"] == 2
 
 
-def test_solve_attempt_wordy_auth_marker_still_aborts(tmp_path):
-    # IH-109 companion: without the digit tags the loud abort must survive on
-    # wordy config markers alone (no status code anywhere in the message)
+def test_wordy_path_error_is_transient_not_an_abort(tmp_path, monkeypatch):
+    # IH-117: the wordy scan ("unauthorized", "api key") over str(exception)
+    # aborted a healthy campaign on a FileNotFoundError whose path merely
+    # contained "api keys". The loud abort is reserved for authoritative
+    # signals (HTTP status via e.code); a wordy path is a transient.
+    monkeypatch.setattr("ironbench.agent._LLM_RETRY_SLEEP", 0.0)
     task = make_task()
-    cfg = SolveConfig(base_url="http://x", api_key="bad", model="m")
+    cfg = SolveConfig(base_url="http://x", api_key="k", model="m")
+    calls = {"n": 0}
 
     def llm(cfg, msgs):
-        raise ValueError("server rejected the api key")
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise FileNotFoundError("/home/user/api keys/config: no such file")
+        return GOOD_RESPONSE
 
-    with pytest.raises(SystemExit):
-        solve_attempt(task, cfg, out_dir=tmp_path, llm=llm, runner=fake_runner(True))
+    res = solve_attempt(task, cfg, out_dir=tmp_path, llm=llm, runner=fake_runner(True))
+    assert res.solved and calls["n"] == 2
 
 
 def test_solve_attempt_forwards_allow_real_only_to_real(tmp_path):
