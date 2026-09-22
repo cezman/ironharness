@@ -30,6 +30,11 @@ try:
     __version__ = version("ironharness")  # единый источник версии — метаданные пакета
 except PackageNotFoundError:  # запущен из исходников без установки
     __version__ = "0.3.0"
+else:
+    # IH-118: битые метаданные (dist-info без RECORD) на Python 3.14 отдают
+    # None вместо PackageNotFoundError — фоллбэк обязан сработать и на него
+    if not __version__:
+        __version__ = "0.3.0"
 
 __all__ = [
     "AccessPolicy",
