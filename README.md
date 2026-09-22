@@ -27,6 +27,10 @@ An agent harness for I/O and firmware. Two modules:
 instruments, Modbus devices, ESP32-class boards — and anyone measuring what LLM
 agents can actually do on firmware, on a simulator and on a live board.
 
+**New here?** Start with [Why ironharness?](docs/why.md) (also in
+[Russian](docs/why.ru.md)) — the problem in one page, a ten-minute hands-on
+tour that needs no hardware, and a situation → tool recipe table.
+
 **What is measured and why the numbers can be trusted.** A task counts as solved
 only when a *runner* verifies the firmware's observable behavior (serial protocol,
 pin timing, sensor values) — not when strings look right. Scoring sits on
