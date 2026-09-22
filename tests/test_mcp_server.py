@@ -50,7 +50,7 @@ def test_tools_are_registered():
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}
     assert {"echo", "serial_open", "serial_write", "serial_read", "serial_close",
-            "session_status",
+            "session_status", "serial_monitor",
             "modbus_open", "modbus_read", "modbus_write", "modbus_close",
             "mqtt_open", "mqtt_publish", "mqtt_subscribe", "mqtt_read", "mqtt_close",
             "esp_image_info", "esp_flash", "esp_erase",
@@ -59,6 +59,18 @@ def test_tools_are_registered():
 
 def test_echo(mcp_env):
     assert echo("ping") == "ping"
+
+
+def test_serial_monitor_tool(mcp_env):
+    # tool-level pass: the session method behind the MCP surface (loop://)
+    from io_core.mcp_server import get_session, serial_monitor
+
+    get_session().serial_open("c", "loop://", timeout=0.1)
+    get_session()._serial_base["c"].write(b"BOOT OK\n")
+    r = serial_monitor("c", max_seconds=5, quiet_seconds=0.2, dump_path="cap.bin")
+    assert r["stop_reason"] == "quiet"
+    assert "BOOT OK" in r["text"]
+    assert r["dump"] == "cap.bin"
 
 
 def test_file_tools_roundtrip(mcp_env):

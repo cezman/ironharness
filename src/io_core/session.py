@@ -17,7 +17,7 @@ from typing import Any
 import serial.tools.list_ports
 
 from io_core import mprepl
-from io_core.errors import PolicyViolation, TransportClosedError
+from io_core.errors import PolicyViolation, QuotaExceeded, SandboxViolation, TransportClosedError
 from io_core.file_sandbox import FileSandbox
 from io_core.journal import JsonlJournal
 from io_core.limits import (
@@ -72,6 +72,7 @@ class Session:
         self._serial_base: dict[str, Any] = {}
         self._readers: dict[str, SerialReader] = {}
         self._transfers: set[str] = set()  # IH-37: serial_put/get in flight (reader gate)
+        self._monitors: set[str] = set()  # IH-83: serial_monitor read windows in flight
         self._closed = False
         self._lock = threading.RLock()
 
@@ -197,10 +198,12 @@ class Session:
             # view must be taken inside it too (set changed size mid-sort on
             # a concurrent serial_put is a latent crash)
             transfers = sorted(self._transfers)
+            monitors = sorted(self._monitors)
         return {
             "transports": transports,
             "readers": readers,
             "transfers": transfers,
+            "monitors": monitors,
             "sandbox": str(self.sandbox.root),
         }
 
@@ -326,6 +329,17 @@ class Session:
                     f"a serial transfer is in progress on {name!r} - serial_write "
                     "would corrupt the staged exchange"
                 )
+            if name in self._monitors:
+                # IH-83: a monitor owns the read window; interleaved writes are
+                # the same single-line corruption risk (CH340)
+                self.journal(
+                    "write_refused",
+                    {"conn": name, "reason": "serial monitor in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial monitor is in progress on {name!r} - serial_write "
+                    "would interleave with the captured stream"
+                )
         try:
             if reader is not None:
                 # CH340: serialize against the background read (racing them on a
@@ -369,6 +383,15 @@ class Session:
                     f"a serial transfer is in progress on {name!r} - serial_read "
                     "would steal the exchange's answer bytes"
                 )
+            if name in self._monitors:
+                self.journal(
+                    "read_refused",
+                    {"conn": name, "reason": "serial monitor in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial monitor is in progress on {name!r} - serial_read "
+                    "would steal the captured bytes"
+                )
             try:
                 t = self._get(name)
             except KeyError as e:
@@ -405,6 +428,15 @@ class Session:
                 raise RuntimeError(
                     f"a serial transfer is in progress on {name!r} - serial_read_line "
                     "would steal the exchange's answer bytes"
+                )
+            if name in self._monitors:
+                self.journal(
+                    "read_line_refused",
+                    {"conn": name, "reason": "serial monitor in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial monitor is in progress on {name!r} - serial_read_line "
+                    "would steal the captured bytes"
                 )
             try:
                 t = self._get(name)
@@ -479,6 +511,16 @@ class Session:
                     {"conn": name, "reason": "transfer in progress"},
                 )
                 raise RuntimeError(f"a serial transfer is already in progress on {name!r}")
+            if name in self._monitors:
+                # IH-83: the transfer's answers belong to the monitor's capture
+                self.journal(
+                    "put_refused",
+                    {"conn": name, "reason": "serial monitor in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial monitor is in progress on {name!r} - serial_put "
+                    "would race it for the board's answers"
+                )
             self._transfers.add(name)  # IH-37: the gate is symmetric now
         try:
             mprepl.put_file(t, data, target_path)
@@ -532,6 +574,15 @@ class Session:
                     {"conn": name, "reason": "transfer in progress"},
                 )
                 raise RuntimeError(f"a serial transfer is already in progress on {name!r}")
+            if name in self._monitors:
+                self.journal(
+                    "get_refused",
+                    {"conn": name, "reason": "serial monitor in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial monitor is in progress on {name!r} - serial_get "
+                    "would race it for the board's answers"
+                )
             self._transfers.add(name)  # IH-37: the gate is symmetric now
         try:
             try:
@@ -560,6 +611,212 @@ class Session:
         return written
 
     # --- serial background reader (IH-18) ---
+
+    def serial_monitor(
+        self,
+        name: str,
+        *,
+        max_bytes: int = 65536,
+        max_seconds: float = 10.0,
+        quiet_seconds: float | None = None,
+        stop_pattern: str | None = None,
+        dump_path: str | None = None,
+    ) -> dict[str, object]:
+        """IH-83: captures the port's output for a bounded window - the
+        "watch what the board actually says" tool (the esp-idf#18757 answer
+        to dumping a serial port). Reads until the FIRST stop condition:
+        max_bytes captured, max_seconds elapsed, quiet_seconds without new
+        data, or stop_pattern seen in the stream. The chunk reads are
+        journaled like any read (conn-attributed, data_hex included - the
+        journal keeps the full audit trail); the serial_monitor summary
+        event itself carries only the stats, and the optional sandbox dump
+        is the agent-facing copy of the capture.
+
+        The monitor owns the read side for its whole window: serial_write/
+        serial_read/serial_read_line/serial_put/serial_get/serial_reader_start
+        and a second monitor are refused on the same conn while it runs
+        (the gate network that guards an in-flight transfer), and a monitor
+        is refused under an attached reader or an in-flight transfer.
+        serial_reset stays deliberately ungated (the recovery hatch, the
+        IH-110 precedent) - boot output after a reset is just more capture.
+        A transport closed mid-window ends the monitor with the real error
+        (journaled as monitor_failed, the name released); a full session
+        close is the one race where the monitor_failed event itself can be
+        lost - the journal is closing under it.
+
+        A failed dump does not eat the capture: the summary still returns
+        with "dump_error" and the failure is journaled (monitor_dump_failed).
+        """
+        # IH-78: tool arguments are bounded and refusals are journaled.
+        # None means "option off" (quiet_seconds) and skips the bound check.
+        bounds = [
+            ("max_bytes", max_bytes, 1, 1_048_576),
+            ("max_seconds", max_seconds, 0, 3600),
+            ("quiet_seconds", quiet_seconds, 0, 3600),
+        ]
+        for arg, value, low, high in bounds:
+            if value is None:
+                continue
+            ok = low <= value <= high if arg == "max_bytes" else low < value <= high
+            if not ok:
+                self.journal(
+                    "monitor_refused",
+                    {"conn": name, "reason": f"{arg} {value} out of bounds"},
+                )
+                raise ValueError(
+                    f"serial_monitor {arg} must be in "
+                    f"({'[' if arg == 'max_bytes' else '('}{low}, {high}], got {value}"
+                )
+        if stop_pattern is not None and not stop_pattern:
+            self.journal(
+                "monitor_refused",
+                {"conn": name, "reason": "stop_pattern is empty"},
+            )
+            raise ValueError("serial_monitor stop_pattern must not be empty")
+        if dump_path is not None and not dump_path:
+            # IH-116 class: "" would silently mean "no dump" with no trace
+            self.journal(
+                "monitor_refused",
+                {"conn": name, "reason": "dump_path is empty"},
+            )
+            raise ValueError("serial_monitor dump_path must not be empty")
+        self._check_open()
+        self._check_kind("serial")
+        with self._lock:
+            if name in self._readers:
+                self.journal(
+                    "monitor_refused",
+                    {"conn": name, "reason": "background reader attached"},
+                )
+                raise RuntimeError(
+                    f"transport {name!r} has a background reader - stop it before "
+                    "serial_monitor (the two would race for the same bytes)"
+                )
+            if name in self._transfers:
+                self.journal(
+                    "monitor_refused",
+                    {"conn": name, "reason": "serial transfer in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial transfer is in progress on {name!r} - serial_monitor "
+                    "would steal the exchange's answer bytes"
+                )
+            if name in self._monitors:
+                self.journal(
+                    "monitor_refused",
+                    {"conn": name, "reason": "serial monitor already in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial monitor is already in progress on {name!r}"
+                )
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("monitor_failed", {"conn": name, "error": str(e)})
+                raise
+            self._monitors.add(name)
+        try:
+            result = self._monitor_window(
+                name, t, max_bytes, max_seconds, quiet_seconds, stop_pattern
+            )
+        finally:
+            with self._lock:
+                self._monitors.discard(name)
+        buf = bytes(result.pop("_buf"))
+        if dump_path:
+            try:
+                self.sandbox.write_file(dump_path, buf, overwrite=True)
+                result["dump"] = dump_path
+            except (OSError, QuotaExceeded, SandboxViolation) as e:
+                self.journal(
+                    "monitor_dump_failed",
+                    {"conn": name, "path": dump_path, "error": str(e)},
+                )
+                result["dump_error"] = str(e)
+        self.journal(
+            "serial_monitor",
+            {
+                "conn": name,
+                "bytes": result["bytes"],
+                "stop_reason": result["stop_reason"],
+                "duration_sec": result["duration_sec"],
+                "max_bytes": max_bytes,
+                "max_seconds": max_seconds,
+                "quiet_seconds": quiet_seconds,
+                "pattern": bool(stop_pattern),
+                "dump": result.get("dump"),
+            },
+        )
+        return result
+
+    def _monitor_window(
+        self,
+        name: str,
+        t: Any,
+        max_bytes: int,
+        max_seconds: float,
+        quiet_seconds: float | None,
+        stop_pattern: str | None,
+    ) -> dict[str, object]:
+        """The bounded read loop. Byte-capped, never line-oriented (a flood
+        or one giant newline-less blob must not hang the window)."""
+        chunk_size = 4096
+        poll_sec = 0.05
+        needle = stop_pattern.encode("utf-8") if stop_pattern else None
+        buf = bytearray()
+        start = time.monotonic()
+        deadline = start + max_seconds
+        last_data = start
+        stop_reason = "max_seconds"
+        try:
+            while True:
+                now = time.monotonic()
+                remaining = max_bytes - len(buf)
+                if remaining <= 0:
+                    stop_reason = "max_bytes"
+                    break
+                if now >= deadline:
+                    stop_reason = "max_seconds"
+                    break
+                if quiet_seconds is not None and now - last_data >= quiet_seconds:
+                    stop_reason = "quiet"
+                    break
+                try:
+                    in_waiting = getattr(t, "in_waiting", None)
+                except (OSError, ValueError, TransportClosedError):
+                    in_waiting = None  # dead port: let read() raise the real error
+                chunk = b""
+                if in_waiting:
+                    chunk = t.read(min(int(in_waiting), remaining, chunk_size))
+                elif in_waiting == 0:
+                    time.sleep(poll_sec)
+                    continue
+                else:
+                    chunk = t.read(min(chunk_size, remaining))
+                if chunk:
+                    prev_len = len(buf)
+                    buf += chunk
+                    last_data = time.monotonic()
+                    if needle is not None and buf.find(
+                        needle, max(0, prev_len - len(needle) + 1)
+                    ) >= 0:
+                        stop_reason = "pattern"
+                        break
+                else:
+                    time.sleep(poll_sec)
+        except Exception as e:
+            self.journal("monitor_failed", {"conn": name, "error": str(e)})
+            raise
+        data = bytes(buf)
+        return {
+            "_buf": buf,
+            "bytes": len(data),
+            "stop_reason": stop_reason,
+            "truncated": stop_reason == "max_bytes",
+            "duration_sec": round(time.monotonic() - start, 3),
+            "data_hex": data.hex(),
+            "text": data.decode("utf-8", "replace"),
+        }
 
     def serial_reader_start(self, name: str, *, max_bytes: int = 65536) -> dict[str, int]:
         """Starts a background reader on an open serial transport: the reader
@@ -595,6 +852,15 @@ class Session:
                 raise RuntimeError(
                     f"a serial transfer is in progress on {name!r} - serial_reader_start "
                     "would race it for the board's answers"
+                )
+            if name in self._monitors:
+                self.journal(
+                    "reader_start_refused",
+                    {"conn": name, "reason": "serial monitor in progress"},
+                )
+                raise RuntimeError(
+                    f"a serial monitor is in progress on {name!r} - serial_reader_start "
+                    "would race it for the captured bytes"
                 )
             reader = SerialReader(base, max_bytes=max_bytes)
             self._readers[name] = reader

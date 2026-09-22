@@ -19,7 +19,7 @@ An agent harness for I/O and firmware. Two modules:
   file sandbox), a Modbus simulator, ESP32 flashing tools (esptool: offline image
   inspection, flash/erase on a live board), a JSONL journal of every operation, a
   replayer, limits (rate limit, deadlines), effect verification (`expect_read`), and
-  an MCP server (32 tools).
+  an MCP server (33 tools).
 - **ironbench** — a benchmark for firmware agents: golden tasks in simulators
   (Wokwi ESP32/MicroPython, plus Renode), an agent loop over an OpenAI-compatible chat API, pass@k reports.
 
