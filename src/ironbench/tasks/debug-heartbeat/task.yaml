@@ -1,0 +1,67 @@
+# Debug class (IH-7 pattern) as the wokwi self-fix-loop golden (IH-84; the
+# real-board twin is debug-station, IH-97): the buggy firmware ships in
+# buggy.py, is embedded in the description byte-for-byte, and must fail its
+# own task - a wrong submission comes back as a genuine MicroPython
+# traceback through the serial log and the DIAGNOSIS parser (IH-64), so the
+# solve loop runs repair iterations against the simulated board. Planted
+# bug: the beat counter is only ever assigned inside the loop body, so the
+# first request dies with "NameError: name 'count' isn't defined"
+# (MicroPython wording; CPython says "is not defined"). Pinned offline on a
+# fake wokwi-cli in test_ironbench_debug.py; the live quota run picks the
+# task up through the IRONBENCH_REAL_WOKWI=1 integration suite.
+name: debug-heartbeat
+description: |-
+  A firmware job, not a from-scratch build: this heartbeat reporter is
+  deployed on a board. Spec (how it must behave): on startup print exactly
+  "hb ready", then in an infinite loop wait for lines on the serial console;
+  every received non-empty line triggers one beat and is answered with a
+  single line of the exact form "beat <n>" where <n> is the beat counter:
+  the first served request is answered "beat 1", the second "beat 2", and
+  so on, counted since boot. Nothing else in the answers. The program never
+  exits.
+
+  Field symptom: the reporter dies answering the first request with
+  "NameError: name 'count' isn't defined". Find the bug in the code below
+  and fix it (change as little as possible).
+
+  ```python
+  # Deployed heartbeat reporter. Field report: dies answering the first request.
+  print("hb ready")
+
+  while True:
+      line = input()
+      if not line.strip():
+          continue
+      count += 1
+      print(f"beat {count}")
+  ```
+
+  Send the complete fixed program (full main.py code, not a diff).
+entry: solution.py
+target: wokwi
+timeout_sec: 20
+tags: [debug]
+level: 2
+expect:
+  - 'hb ready'
+  - 'beat 1'
+  - 'beat 2'
+  - 'beat 3'
+boot_expect:
+  - 'hb ready'
+fail:
+  - 'Traceback'
+  - "name 'count' isn't defined"
+stimulus:
+  # Enter is \r only (wokwi-cli eats \n); input() echoes each line it reads
+  - delay: 1500ms
+  - write-serial: "go\r"
+  - wait-serial: 'beat 1'
+  - write-serial: "go\r"
+  - wait-serial: 'beat 2'
+  - write-serial: "go\r"
+  - wait-serial: 'beat 3'
+notes:
+  - 'MicroPython under wokwi-cli boots to a bare REPL: the runner pastes the submitted program in raw-paste mode (Ctrl+E to enter, Ctrl+D to run); the paste echo is cut from the log and only runtime output is scored.'
+  - 'Enter is \r only (wokwi-cli eats \n); input() echoes the line it reads into the serial log.'
+  - 'A name assigned inside a loop body does not exist before its first assignment: both CPython and MicroPython raise NameError on the read.'

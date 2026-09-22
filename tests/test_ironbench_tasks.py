@@ -181,6 +181,7 @@ def test_golden_tasks_all_load_and_include_expectations():
         "cross-sensor",
         "bus-diagnose",
         "debug-station",
+        "debug-heartbeat",
     } <= names
 
 
