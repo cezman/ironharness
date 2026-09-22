@@ -89,3 +89,24 @@ def test_speed_metrics_count_only_judged_solves(tmp_path):
     speed_section = text.split("## Speed")[1]
     assert "m1 / mcp" in speed_section and "150" in speed_section
     assert "m1 / bare" not in speed_section
+
+
+def test_judged_solves_survive_infra_error_kind(tmp_path):
+    # older rows marked judge-confirmed solves infra when a later restore
+    # failed; the summary must keep them judged (regression for the live
+    # gpt-oss batch, where 4 MCP solves carried error_kind=infra)
+    rows = [
+        {"model": "m1", "arm": "mcp", "solved": True, "silent_failure": False,
+         "claimed": "SUCCESS", "iterations": 10, "duration_sec": 170.0,
+         "tokens_in": 17000, "tokens_out": 700, "error_kind": "infra",
+         "accidents": [], "restore_failed": True},
+        {"model": "m1", "arm": "mcp", "solved": False, "silent_failure": False,
+         "claimed": None, "iterations": 4, "duration_sec": 60.0,
+         "tokens_in": 500, "tokens_out": 50, "error_kind": "infra",
+         "accidents": []},
+    ]
+    summary = summarize(load_rows(_write_rows(tmp_path, rows)))
+    g = summary["groups"]["m1 / mcp"]
+    assert g["attempts"] == 1  # the solved row stays judged, the other is infra
+    assert g["pass_rate"] == 1.0
+    assert summary["attempts_infra"] == 1
