@@ -363,9 +363,10 @@ def solve_attempt(
     """One attempt to solve the task: the "LLM answer -> main.py -> run -> feedback" loop.
 
     llm/runner are injection points for offline tests (a fake LLM and runner).
-    IH-82: transient LLM failures are retried (bounded); auth/config failures
-    abort the campaign via SystemExit - HTTP status codes as e.code (400/401/403/404),
-    wordy config markers ("unauthorized", "api key") on the non-HTTP path.
+    IH-82/IH-117: transient LLM failures are retried (bounded); the loud
+    campaign abort is reserved for authoritative signals - HTTP status codes
+    as e.code (400/401/403/404). The text of a non-HTTP exception is never
+    scanned for auth wording: string fortune must not abort a campaign.
     allow_real: the live-hardware opt-in, forwarded to the real runner only
     (audit B) - fake runners in tests keep their narrow signature.
     """
@@ -401,18 +402,12 @@ def solve_attempt(
                     ) from e
                 transient = e  # other codes are transient - retried below
             except (OSError, ValueError, LookupError, TypeError) as e:
+                # IH-117: non-HTTP failures are transients, whatever their text
+                # says - a wordy scan over str(exception) aborted healthy
+                # campaigns on strings that merely looked like auth wording
+                # (a path containing "api keys", a port like ":8401"). The
+                # loud abort is reserved for the authoritative e.code above.
                 transient = e
-            # IH-109: status codes are matched as e.code on HTTPError above; bare
-            # "401"/"403" digit tags over str(exception) misfire on any OSError that
-            # names a port (":8401") and abort a healthy campaign. Only wordy config
-            # markers justify the loud abort on the non-HTTP path.
-            lowered = str(transient).lower()
-            if any(tag in lowered for tag in ("unauthorized", "api key")):
-                # IH-82: auth/config errors cannot be retried - abort the
-                # campaign loudly instead of burning hollow attempts into pass@k
-                raise SystemExit(
-                    f"LLM auth/config error - aborting the campaign: {transient}"
-                ) from transient
             _llm_tries -= 1
             if _llm_tries <= 0:
                 # network/HTTP/broken LLM server response (incl. an empty "choices") -
