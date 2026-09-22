@@ -68,3 +68,9 @@ src = ["src", "tests"]
 # ops/ holds byte-exact device goldens (deployed as-is to the board); they are
 # artifacts, not package source, and must never be linted or reformatted
 extend-exclude = ["src/ironbench/ops"]
+
+[tool.ruff.lint.per-file-ignores]
+# debug-class goldens ship deliberately broken firmware (buggy.py is embedded
+# in the task description byte-for-byte and must fail its own task) - the
+# planted bug is often an F821-class error by design
+"src/ironbench/tasks/**/buggy.py" = ["F821"]
