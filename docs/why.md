@@ -91,7 +91,7 @@ on a live board, and [the board itself](board.jpg).
 
 ## I know what I'm doing — the map
 
-`io-core` (the PyPI package; the MCP server) is one layer of small modules:
+`io-core` (shipped as the PyPI package `ironharness`; the MCP server) is one layer of small modules:
 
 | Module | What it gives you |
 |---|---|
@@ -107,7 +107,7 @@ on a live board, and [the board itself](board.jpg).
 | `verify.py` | `expect_read`, `write_and_expect` — effect verification instead of return-code hope. |
 | `policy.py` | operator-controlled allowlists: `IRONHARNESS_ALLOWED_HOSTS`, `IRONHARNESS_ENABLED_KINDS`; every denial is journaled. |
 | `faults.py` | `FaultyTransport` — scripted disconnects, delays, bit corruption, byte loss over any transport. |
-| `errors.py` | domain errors delivered as readable text with the next step (`deadline_denied` → reopen, `serial_open_failed` → see the whitelist). |
+| `errors.py` | domain error types; the agent receives them as readable text with the next step — a timeout says to close and reopen the port, a refused open points at the port whitelist. |
 | `mcp_server.py` | the 32 tools over stdio. |
 
 The safety model in five lines:
