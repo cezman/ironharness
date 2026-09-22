@@ -333,7 +333,8 @@ def serial_monitor(
     stop_pattern seen. Returns {"bytes", "stop_reason", "truncated",
     "duration_sec", "data_hex", "text", "dump"?}. Byte-capped (a flood or a
     line without \\n cannot hang it); while it runs, other I/O on the
-    connection is refused. dump_path (sandbox-relative) saves the capture."""
+    connection is refused (serial_reset stays allowed - the recovery hatch).
+    dump_path (sandbox-relative) saves the capture."""
     return get_session().serial_monitor(
         name,
         max_bytes=max_bytes,
