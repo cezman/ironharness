@@ -5,6 +5,7 @@ metric must count a SUCCESS claim over a broken board as a miss."""
 from unittest import mock
 
 from ironbench.agent import ChatReply, SolveConfig
+from ironbench.cli import main as cli_main
 from ironbench.ops_faults import (
     DETECTED,
     FAULTS,
@@ -14,6 +15,7 @@ from ironbench.ops_faults import (
     detection_rate,
     run_fault_scenario,
 )
+from ironbench.ops_report import load_rows
 from ironbench.ops_tasks import OpsBudget, OpsCheck, OpsTask
 
 CFG = SolveConfig(base_url="http://localhost:1234/v1", api_key="x", model="test-model")
@@ -184,3 +186,35 @@ def test_fault_rows_carry_the_incident_reference():
     )
     assert "CH340" in row["incident"]
     assert row["claimed"] == "FAIL"
+
+
+def test_cli_ops_faults_crash_marker_keeps_the_rate_honest(tmp_path, monkeypatch, capsys):
+    # IH-122: a scenario that dies before its own verdict lands in rows.jsonl
+    # as an infra crash marker - not as detected=False (a dead scenario is
+    # infra, not a missed detection) - and the suite survives it; the marker
+    # row also replaces the old silent behavior where a crashed scenario
+    # killed the whole command and left the previous rows file in place.
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:1234/v1")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+
+    def boom(*a, **k):
+        raise RuntimeError("board wedged beyond the driver")
+
+    monkeypatch.setattr("ironbench.ops_faults.run_fault_scenario", boom)
+    rc = cli_main(
+        ["ops-faults", "--task", "ops-restore", "--arm", "bare",
+         "--fault", "mute_board", "--campaign", "c1",
+         "--out", str(tmp_path / "out")]
+    )
+    assert rc == 0
+    rows, dropped = load_rows(tmp_path / "out" / "ops" / "faults-c1" / "rows.jsonl")
+    assert dropped == 0
+    assert rows == [
+        {"crashed": True, "error_kind": "infra",
+         "error": "RuntimeError: board wedged beyond the driver",
+         "task": "ops-restore", "arm": "bare", "model": "test-model",
+         "scenario": "mute_board"},
+    ]
+    out = capsys.readouterr().out
+    assert "crashed: RuntimeError" in out
+    assert "detection rate: n/a" in out
