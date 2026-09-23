@@ -124,8 +124,8 @@ resilience/debug) and a level 1–5; `python -m ironbench.cli report` shows a mo
 classes, not a single number. LLM config — environment variables: `LLM_BASE_URL`
 (default: local LM Studio), `LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT`,
 `LLM_MAX_ITERATIONS`, `LLM_MAX_TOKENS`, and `LLM_ALLOW_LOCAL`
-(set `0` to refuse local/private LLM endpoints - an SSRF boundary; any other
-value allows them).
+(`0`, `false`, `no` refuse local/private LLM endpoints - an SSRF boundary;
+any other value allows them).
 
 Live numbers: the [leaderboard](https://cezman.github.io/ironharness/), archived
 generations with pinned criteria and raw per-attempt data

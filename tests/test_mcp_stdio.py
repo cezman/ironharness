@@ -46,7 +46,10 @@ def spawn_server(tmp_path: Path) -> subprocess.Popen:
         **os.environ,
         "PYTHONPATH": SRC,
         "IRONHARNESS_HOME": str(tmp_path / "home"),
-        "IRONHARNESS_SANDBOX": str(tmp_path / "home" / "sandbox"),
+        # deliberately NOT home/sandbox (which equals the default): a lost
+        # IRONHARNESS_SANDBOX must move files back under home/ and fail the
+        # sandbox-location pin (IH-124)
+        "IRONHARNESS_SANDBOX": str(tmp_path / "sandbox"),
     }
     return subprocess.Popen(
         [sys.executable, "-m", "io_core.mcp_server"],
@@ -176,7 +179,7 @@ def test_wire_file_write_lands_in_the_env_sandbox(server, tmp_path):
     )
     assert "error" not in call
     assert call["result"].get("isError") is not True, call
-    assert (tmp_path / "home" / "sandbox" / "wire.txt").read_text(encoding="utf-8") == "hi"
+    assert (tmp_path / "sandbox" / "wire.txt").read_text(encoding="utf-8") == "hi"
 
 
 def test_wire_every_tool_is_annotated(server):

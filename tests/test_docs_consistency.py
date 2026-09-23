@@ -76,9 +76,13 @@ def test_ops_description_promises_are_backed_by_the_prompt(task):
     from ironbench.ops_run import build_task_prompt
 
     build_task_prompt(task, port="COM9", assets={})  # must not need the assets
-    promised = ("sha256" in task.description.lower()) or ("url" in task.description.lower())
-    assert not promised, (
-        f"{task.name}: the description promises url/sha256 but build_task_prompt "
-        "renders description + dossier + notes only - the assets block never "
-        "reaches the agent"
+    # the audited lie shape is "url and sha256 below": the assets block never
+    # renders into the prompt, so a "below" promise about them can only dangle.
+    # A description that merely references url/sha256 delivered by the bench
+    # facts stays legal (review nit: no blanket ban on the words).
+    dangling = re.search(r"(url|sha256)[^\n]*\bbelow\b", task.description.lower())
+    assert not dangling, (
+        f"{task.name}: the description promises url/sha256 'below' but "
+        "build_task_prompt renders description + dossier + notes only - the "
+        "assets block never reaches the agent"
     )
