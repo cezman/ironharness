@@ -87,6 +87,11 @@ class Session:
 
     def _check_free(self, name: str) -> None:
         if name in self._transports:
+            # the duplicate-open refusal leaves a trace, like every gate
+            self.journal(
+                "open_refused",
+                {"conn": name, "reason": f"transport {name!r} is already open"},
+            )
             raise KeyError(f"transport {name!r} is already open")
 
     def _check_connection_limit(self) -> None:
@@ -997,10 +1002,19 @@ class Session:
             self._kinds[name] = "modbus"
 
     def modbus_read(self, name: str, address: int, count: int = 1) -> list[int]:
-        return self._get(name).read_holding(address, count)
+        try:
+            t = self._get(name)
+        except KeyError as e:
+            self.journal("modbus_read_failed", {"conn": name, "error": str(e)})
+            raise
+        return t.read_holding(address, count)
 
     def modbus_write(self, name: str, address: int, values: list[int]) -> None:
-        t = self._get(name)
+        try:
+            t = self._get(name)
+        except KeyError as e:
+            self.journal("modbus_write_failed", {"conn": name, "error": str(e)})
+            raise
         if len(values) == 1:
             t.write_register(address, values[0])
         else:
@@ -1046,10 +1060,20 @@ class Session:
             self._kinds[name] = "mqtt"
 
     def mqtt_publish(self, name: str, topic: str, payload: str, *, qos: int = 0, retain: bool = False) -> None:
-        self._get(name).publish(topic, payload, qos=qos, retain=retain)
+        try:
+            t = self._get(name)
+        except KeyError as e:
+            self.journal("mqtt_publish_failed", {"conn": name, "error": str(e)})
+            raise
+        t.publish(topic, payload, qos=qos, retain=retain)
 
     def mqtt_subscribe(self, name: str, topic: str, *, qos: int = 0) -> None:
-        self._get(name).subscribe(topic, qos=qos)
+        try:
+            t = self._get(name)
+        except KeyError as e:
+            self.journal("mqtt_subscribe_failed", {"conn": name, "error": str(e)})
+            raise
+        t.subscribe(topic, qos=qos)
 
     def mqtt_read(self, name: str, timeout: float = 1.0) -> dict[str, str] | None:
         if not 0 < timeout <= 3600:
@@ -1058,7 +1082,12 @@ class Session:
                 {"conn": name, "reason": f"timeout {timeout} out of (0, 3600]"},
             )
             raise ValueError(f"mqtt_read timeout must be in (0, 3600] seconds, got {timeout}")
-        return self._get(name).read_message(timeout)
+        try:
+            t = self._get(name)
+        except KeyError as e:
+            self.journal("mqtt_read_failed", {"conn": name, "error": str(e)})
+            raise
+        return t.read_message(timeout)
 
     # --- esp (flashing via esptool; needs the [flash] extra) ---
 
@@ -1150,9 +1179,15 @@ class Session:
         # registry (not isinstance): since IH-17 the registry holds limit
         # wrappers, not bare transports
         with self._lock:
-            t = self._get(name)
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("close_failed", {"conn": name, "error": str(e)})
+                raise
             if self._kinds.get(name) != kind:
-                raise KeyError(f"transport {name!r} is not a {kind} transport")
+                err = f"transport {name!r} is not a {kind} transport"
+                self.journal("close_failed", {"conn": name, "error": err})
+                raise KeyError(err)
             self._stop_reader(name, implicit=True)  # a reader must not outlive its transport
             del self._transports[name]
             del self._kinds[name]
@@ -1170,7 +1205,12 @@ class Session:
 
     def close_transport(self, name: str) -> None:
         with self._lock:
-            t = self._get(name)  # a friendly "not open" error, not a bare KeyError
+            try:
+                # a friendly "not open" error, not a bare KeyError
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("close_failed", {"conn": name, "error": str(e)})
+                raise
             self._stop_reader(name, implicit=True)  # a reader must not outlive its transport
             del self._transports[name]
             del self._kinds[name]  # keep the two registries in lockstep

@@ -768,3 +768,45 @@ def test_serial_open_by_serial_unknown_hints_serial_list(session, monkeypatch):
     monkeypatch.setattr(session_module.serial.tools.list_ports, "comports", list)
     with pytest.raises(ValueError, match="serial_list"):
         session.serial_open("board", "by-serial:NOPE", timeout=0.5)
+
+
+def test_unknown_conn_and_duplicate_denials_journal(session, tmp_path):
+    # IH-126: modbus/mqtt/close denials at the session level used to vanish -
+    # the transports journal their own successes, but an unknown-conn call
+    # never reaches one - against the module convention that every refusal
+    # leaves a trace (IH-37 precedent, the serial family, IH-124 readers).
+    for op in (
+        lambda: session.modbus_read("nope", 0),
+        lambda: session.modbus_write("nope", 0, [1]),
+        lambda: session.mqtt_publish("nope", "t", "p"),
+        lambda: session.mqtt_subscribe("nope", "t"),
+        lambda: session.mqtt_read("nope"),
+        lambda: session.modbus_close("nope"),
+        lambda: session.close_transport("nope"),
+    ):
+        with pytest.raises(KeyError):
+            op()
+
+    # a duplicate open is refused with a trace too
+    session.serial_open("x", "loop://", timeout=0.1)
+    with pytest.raises(KeyError):
+        session.serial_open("x", "loop://", timeout=0.1)
+
+    # a wrong-kind close is a refusal as well
+    with pytest.raises(KeyError):
+        session.modbus_close("x")
+
+    kinds = [e["kind"] for e in read_events(tmp_path / "journal.jsonl")]
+    assert kinds == [
+        "modbus_read_failed",
+        "modbus_write_failed",
+        "mqtt_publish_failed",
+        "mqtt_subscribe_failed",
+        "mqtt_read_failed",
+        "close_failed",
+        "close_failed",
+        "open",  # the one successful serial_open
+        "open_refused",  # the duplicate
+        "close_failed",  # the wrong-kind close
+        # the fixture teardown close event lands after this assert runs
+    ]
