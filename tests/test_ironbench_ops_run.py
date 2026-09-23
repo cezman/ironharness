@@ -396,6 +396,45 @@ def test_journal_ops_counts_dropped_lines_instead_of_hiding_them(tmp_path):
     assert coverage == 0.5 and dropped == 2
 
 
+def test_journal_dropped_travels_into_the_attempt_row(tmp_path, monkeypatch):
+    # IH-125 review blocker: the wire "dropped -> attempt row" must be
+    # pinned - removing journal_dropped from the final finish() call must
+    # turn this test red (the offline fake arms never produce torn lines,
+    # so the plain e2e tests cannot tell 0 from a real count)
+    monkeypatch.setattr("ironbench.ops_run.count_journal_ops", lambda paths: (1, 2))
+    task = make_task(tmp_path)
+    sandbox = tmp_path / "sb-dropped"
+    sandbox.mkdir()
+    calls = iter(
+        [
+            ChatReply(content='{"tool": "file_write", "arguments": {"path": "g.py", "content": "x"}}'),
+            ChatReply(content='{"claim": "FAIL"}'),
+        ]
+    )
+
+    def llm(cfg, messages, tools=None):
+        return next(calls)
+
+    board = FakeBoard()
+    result = run_ops_attempt(
+        task,
+        arm="mcp",
+        model="test-model",
+        attempt=1,
+        port="COM9",
+        out_dir=tmp_path / "out",
+        llm_cfg=CFG,
+        llm=llm,
+        transport_factory=lambda: board,
+        mcp_client_factory=lambda: FakeMcpClient(board, sandbox),
+        preflight=False,
+    )
+    # one tool turn declared, the stub reports 1 journaled op -> capped at 1.0
+    assert result.journal_coverage == 1.0
+    assert result.journal_dropped == 2
+    assert result.row()["journal_dropped"] == 2
+
+
 def test_cli_ops_ab_refuses_without_allow_real(tmp_path, capsys):
     rc = cli_main(
         ["ops-ab", "--task", "ops-mini", "--port", "COM9", "--out", str(tmp_path / "out")]
