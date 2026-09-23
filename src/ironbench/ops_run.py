@@ -241,27 +241,44 @@ JOURNALED_KINDS = {
 }
 
 
-def count_journal_ops(journal_paths: list[Path]) -> int:
+def count_journal_ops(journal_paths: list[Path]) -> tuple[int, int]:
+    """Counts journaled device operations across the attempt's journal files.
+
+    Returns (ops, dropped). `dropped` counts lines that could not be parsed
+    as JSON objects (a torn final line after a mid-write death, typed
+    garbage) - folded away silently, they used to invisibly LOWER the
+    coverage: the direction is conservative, but an invisible undercount is
+    still a lie about the evidence (IH-125; the load_rows pattern)."""
     ops = 0
+    dropped = 0
     for path in journal_paths:
         if not path.is_file():
             continue
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue  # a blank line is not lost data (load_rows precedent)
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                dropped += 1
+                continue
+            if not isinstance(event, dict):
+                dropped += 1
                 continue
             if str(event.get("kind", "")) in JOURNALED_KINDS:
                 ops += 1
-    return ops
+    return ops, dropped
 
 
-def journal_coverage(declared_ops: int, journal_paths: list[Path]) -> float | None:
+def journal_coverage(declared_ops: int, journal_paths: list[Path]) -> tuple[float | None, int]:
     """Journaled device operations / declared operations; None when the
-    attempt declared none (nothing to cover)."""
+    attempt declared none (nothing to cover). Returns (coverage, dropped)
+    where `dropped` travels from count_journal_ops into the attempt row as
+    evidence that the denominator may be understated."""
+    ops, dropped = count_journal_ops(journal_paths)
     if declared_ops == 0:
-        return None
-    return min(1.0, count_journal_ops(journal_paths) / declared_ops)
+        return None, dropped
+    return min(1.0, ops / declared_ops), dropped
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +305,7 @@ class OpsAttemptResult:
     accidents: list[str]
     restore_failed: bool
     run_dir: Path
+    journal_dropped: int = 0
 
     def row(self) -> dict:
         data = dataclasses.asdict(self)
@@ -340,6 +358,7 @@ def run_ops_attempt(
             "accidents": [],
             "restore_failed": False,
             "run_dir": run_dir,
+            "journal_dropped": 0,
         }
         base.update(kw)
         result = OpsAttemptResult(**base)
@@ -443,7 +462,7 @@ def run_ops_attempt(
         declared = count_tool_ops(arm_result.turns)
         accidents = []
         journal_paths = [run_dir / "harness.jsonl", run_dir / "mcp-home" / "journal.jsonl"]
-    coverage = journal_coverage(declared, journal_paths)
+    coverage, journal_dropped = journal_coverage(declared, journal_paths)
 
     restore_error = _best_effort_restore(
         task, port=port, assets=assets, journal=journal, transport_factory=transport_factory
@@ -464,6 +483,7 @@ def run_ops_attempt(
         error_kind=error_kind,
         judge=judge_report,
         journal_coverage=coverage,
+        journal_dropped=journal_dropped,
         accidents=accidents,
         restore_failed=restore_error is not None,
     )
