@@ -168,11 +168,17 @@ def test_domain_errors_wrapper_supports_async():
 
 
 def test_modbus_tools_roundtrip(mcp_env):
+    from mcp.server.mcpserver.exceptions import ToolError
+
     with ModbusSimServer(port=0, registers=[1, 2] + [0] * 62) as srv:
         modbus_open("m", "127.0.0.1", port=srv.port)
         modbus_write("m", 0, [1, 2])
         assert modbus_read("m", 0, 2) == [1, 2]
         assert "closed" in modbus_close("m")
+        # the close is real: the connection is gone from the session
+        with pytest.raises(ToolError) as exc_info:
+            modbus_read("m", 0, 2)
+        assert isinstance(exc_info.value.__cause__, KeyError)
 
 
 class _FakeMqttTransport:
@@ -198,6 +204,8 @@ class _FakeMqttTransport:
 
 
 def test_mqtt_tools_roundtrip(mcp_env, monkeypatch):
+    from mcp.server.mcpserver.exceptions import ToolError
+
     monkeypatch.setattr("io_core.session.MqttTransport", _FakeMqttTransport)
     assert "ok" in mqtt_open("bus", "broker.test")
     assert "ok" in mqtt_subscribe("bus", "cmd/#")
@@ -205,6 +213,10 @@ def test_mqtt_tools_roundtrip(mcp_env, monkeypatch):
     assert mqtt_read("bus") == {"topic": "cmd/led", "payload": "done"}
     assert mqtt_read("bus") is None  # буфер пуст → таймаут
     assert "ok" in mqtt_close("bus")
+    # the close is real: the connection is gone from the session
+    with pytest.raises(ToolError) as exc_info:
+        mqtt_publish("bus", "cmd/led", "on")
+    assert isinstance(exc_info.value.__cause__, KeyError)
 
 
 def test_journal_lands_in_home(mcp_env):
@@ -367,8 +379,14 @@ def test_serial_read_line_tool_roundtrip(mcp_env):
 def test_serial_reset_tool_runs_on_loop_port(mcp_env):
     # loop:// takes the line assignments as no-ops (documented): the tool
     # body, the validation and the journaling still run end to end
+    from mcp.server.mcpserver.exceptions import ToolError
+
     serial_open("s", "loop://", timeout=0.5)
     assert "reset" in serial_reset("s", pulse_sec=0, settle_sec=0)
+    # the tool forwards the session call: an unknown connection must fail
+    with pytest.raises(ToolError) as exc_info:
+        serial_reset("nope", pulse_sec=0, settle_sec=0)
+    assert isinstance(exc_info.value.__cause__, KeyError)
 
 
 def test_serial_get_tool_pulls_a_board_file_into_the_sandbox(mcp_env):
@@ -398,9 +416,9 @@ def test_serial_reader_tools_body_roundtrip(mcp_env):
 
 def test_esp_flash_and_erase_tools_body(mcp_env, monkeypatch):
     """Success-path body calls against the esptool fakes (no board)."""
+    pytest.importorskip("esptool", reason="esp tests need the [flash] extra (esptool)")
     from test_esp import FakeEsptool
 
-    pytest.importorskip("esptool", reason="esp tests need the [flash] extra (esptool)")
     fake = FakeEsptool()
     fake.install(monkeypatch)  # also sets IRONHARNESS_ALLOW_REAL_FLASH=1
     assert "ok" in esp_flash("loop://", str(FIRMWARE))
