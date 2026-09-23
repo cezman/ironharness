@@ -14,25 +14,40 @@ import pytest
 from io_core import ModbusSimServer, SandboxViolation
 from io_core.mcp_server import (
     echo,
+    esp_erase,
+    esp_flash,
     esp_image_info,
     file_delete,
     file_list,
     file_read,
     file_write,
+    get_session,
     mcp,
+    modbus_close,
     modbus_open,
     modbus_read,
     modbus_write,
+    mqtt_close,
     mqtt_open,
     mqtt_publish,
     mqtt_read,
     mqtt_subscribe,
     reset_session,
     serial_close,
+    serial_get,
+    serial_list,
     serial_open,
     serial_put,
     serial_read,
+    serial_read_line,
+    serial_read_until,
+    serial_reader_start,
+    serial_reader_stop,
+    serial_reset,
+    serial_tail,
+    serial_wait,
     serial_write,
+    session_status,
 )
 
 FIRMWARE = Path(__file__).parents[1] / "src/ironbench/tasks/_firmware/ESP32_GENERIC-20251209-v1.27.0.bin"
@@ -153,10 +168,17 @@ def test_domain_errors_wrapper_supports_async():
 
 
 def test_modbus_tools_roundtrip(mcp_env):
+    from mcp.server.mcpserver.exceptions import ToolError
+
     with ModbusSimServer(port=0, registers=[1, 2] + [0] * 62) as srv:
         modbus_open("m", "127.0.0.1", port=srv.port)
         modbus_write("m", 0, [1, 2])
         assert modbus_read("m", 0, 2) == [1, 2]
+        assert "closed" in modbus_close("m")
+        # the close is real: the connection is gone from the session
+        with pytest.raises(ToolError) as exc_info:
+            modbus_read("m", 0, 2)
+        assert isinstance(exc_info.value.__cause__, KeyError)
 
 
 class _FakeMqttTransport:
@@ -182,12 +204,19 @@ class _FakeMqttTransport:
 
 
 def test_mqtt_tools_roundtrip(mcp_env, monkeypatch):
+    from mcp.server.mcpserver.exceptions import ToolError
+
     monkeypatch.setattr("io_core.session.MqttTransport", _FakeMqttTransport)
     assert "ok" in mqtt_open("bus", "broker.test")
     assert "ok" in mqtt_subscribe("bus", "cmd/#")
     assert "ok" in mqtt_publish("bus", "cmd/led", "on")
     assert mqtt_read("bus") == {"topic": "cmd/led", "payload": "done"}
     assert mqtt_read("bus") is None  # буфер пуст → таймаут
+    assert "ok" in mqtt_close("bus")
+    # the close is real: the connection is gone from the session
+    with pytest.raises(ToolError) as exc_info:
+        mqtt_publish("bus", "cmd/led", "on")
+    assert isinstance(exc_info.value.__cause__, KeyError)
 
 
 def test_journal_lands_in_home(mcp_env):
@@ -299,3 +328,102 @@ def test_runtime_error_refusal_maps_to_tool_error(mcp_env, monkeypatch):
     with pytest.raises(ToolError) as exc_info:
         serial_put("s", "local.py", "main.py")
     assert "transfer in progress" in str(exc_info.value)
+
+
+# --- tool-body coverage for the older tools (IH-123): appearing in
+# tools/list is not coverage - every tool needs at least one executed body
+# call, success paths included where a fake can stand in for the device ---
+
+
+class _FakeComPort:
+    """A pyserial comports() entry with USB identity."""
+
+    def __init__(self, device, vid, pid):
+        self.device, self.vid, self.pid = device, vid, pid
+        self.serial_number, self.location, self.description = "SN1", "1-4", "USB-SERIAL"
+
+
+def test_serial_list_tool_enumerates_fake_ports(mcp_env, monkeypatch):
+    monkeypatch.setattr(
+        "serial.tools.list_ports.comports",
+        lambda: [_FakeComPort("COM6", 0x1A86, 0x7523)],
+    )
+    assert serial_list() == [
+        {"device": "COM6", "vid": "1a86", "pid": "7523",
+         "serial_number": "SN1", "location": "1-4", "description": "USB-SERIAL"}
+    ]
+
+
+def test_session_status_tool_reports_state(mcp_env):
+    serial_open("s", "loop://", timeout=0.5)
+    st = session_status()
+    assert st["transports"]["s"]["kind"] == "serial"
+    assert st["readers"] == {} and st["transfers"] == [] and st["monitors"] == []
+    assert st["sandbox"]
+
+
+def test_serial_wait_tool_finds_the_matching_port(mcp_env, monkeypatch):
+    monkeypatch.setattr(
+        "serial.tools.list_ports.comports",
+        lambda: [_FakeComPort("COM6", 0x1A86, 0x7523)],
+    )
+    assert serial_wait("1A86", "7523", timeout=2.0)["device"] == "COM6"
+
+
+def test_serial_read_line_tool_roundtrip(mcp_env):
+    serial_open("s", "loop://", timeout=0.5)
+    serial_write("s", "deadbeef0a")
+    assert serial_read_line("s") == "deadbeef0a"
+
+
+def test_serial_reset_tool_runs_on_loop_port(mcp_env):
+    # loop:// takes the line assignments as no-ops (documented): the tool
+    # body, the validation and the journaling still run end to end
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    serial_open("s", "loop://", timeout=0.5)
+    assert "reset" in serial_reset("s", pulse_sec=0, settle_sec=0)
+    # the tool forwards the session call: an unknown connection must fail
+    with pytest.raises(ToolError) as exc_info:
+        serial_reset("nope", pulse_sec=0, settle_sec=0)
+    assert isinstance(exc_info.value.__cause__, KeyError)
+
+
+def test_serial_get_tool_pulls_a_board_file_into_the_sandbox(mcp_env):
+    from test_mprepl import FakeRawBoard
+
+    board = FakeRawBoard()
+    board.files["/main.py"] = b"print('firmware')\n"
+    s = get_session()
+    s._transports["b"] = board
+    s._kinds["b"] = "serial"
+    assert "get 18 bytes" in serial_get("b", "/main.py", "pulled/main.py")
+    assert file_read("pulled/main.py") == "print('firmware')\n"
+
+
+def test_serial_reader_tools_body_roundtrip(mcp_env):
+    serial_open("s", "loop://", timeout=0.5)
+    started = serial_reader_start("s")
+    assert started == {"buffered": 0, "dropped": 0, "chunks": 0}
+    tail = serial_tail("s")
+    assert tail["data_hex"] == "" and tail["alive"] is True and tail["error"] is None
+    serial_write("s", "6f6b")  # loop:// echoes it back into the reader
+    hit = serial_read_until("s", "ok", timeout=5.0)
+    assert hit["found"] is True and hit["text"] == "ok"
+    stopped = serial_reader_stop("s")
+    assert stopped["stopped"] is True and stopped["buffered"] == 0
+
+
+def test_esp_flash_and_erase_tools_body(mcp_env, monkeypatch):
+    """Success-path body calls against the esptool fakes (no board)."""
+    pytest.importorskip("esptool", reason="esp tests need the [flash] extra (esptool)")
+    from test_esp import FakeEsptool
+
+    fake = FakeEsptool()
+    fake.install(monkeypatch)  # also sets IRONHARNESS_ALLOW_REAL_FLASH=1
+    assert "ok" in esp_flash("loop://", str(FIRMWARE))
+    assert "ok" in esp_erase("loop://")
+    assert fake.steps() == [
+        "connect", "run_stub", "attach_flash", "write_flash",
+        "connect", "run_stub", "attach_flash", "erase_flash",
+    ]
