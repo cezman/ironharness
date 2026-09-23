@@ -46,7 +46,10 @@ def spawn_server(tmp_path: Path) -> subprocess.Popen:
         **os.environ,
         "PYTHONPATH": SRC,
         "IRONHARNESS_HOME": str(tmp_path / "home"),
-        "IRONHARNESS_SANDBOX": str(tmp_path / "home" / "sandbox"),
+        # deliberately NOT home/sandbox (which equals the default): a lost
+        # IRONHARNESS_SANDBOX must move files back under home/ and fail the
+        # sandbox-location pin (IH-124)
+        "IRONHARNESS_SANDBOX": str(tmp_path / "sandbox"),
     }
     return subprocess.Popen(
         [sys.executable, "-m", "io_core.mcp_server"],
@@ -158,6 +161,25 @@ def test_wire_initialize_tools_call(server, tmp_path):
     # the tmp-home isolation is pinned, not just declared: the session the
     # server just created must have journaled into tmp, never ~/.ironharness
     assert (tmp_path / "home" / "journal.jsonl").is_file()
+
+
+def test_wire_file_write_lands_in_the_env_sandbox(server, tmp_path):
+    # IH-124: the spawn env sets IRONHARNESS_SANDBOX, but nothing pinned the
+    # sandbox LOCATION over the wire - a lost env var on retransmission would
+    # silently fall back to the default ~/.ironharness/sandbox
+    client = WireClient(server)
+    initialize(client)
+    call = client.request(
+        {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "file_write", "arguments": {"path": "wire.txt", "content": "hi"}},
+        }
+    )
+    assert "error" not in call
+    assert call["result"].get("isError") is not True, call
+    assert (tmp_path / "sandbox" / "wire.txt").read_text(encoding="utf-8") == "hi"
 
 
 def test_wire_every_tool_is_annotated(server):

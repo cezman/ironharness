@@ -7,8 +7,10 @@ budget: {max_iterations: 8, iter_timeout_sec: 300}
 description: |
   The board on serial port $PORT is FULLY BLANK: its flash was erased, there is
   no firmware and no files. Bring the meteo station back to life:
-  1. flash the MicroPython firmware image (url and sha256 below) to the board;
-  2. deploy the station source (path below) as /main.py on the board;
+  1. flash the MicroPython firmware image (a local cached copy is given in
+     the bench facts) to the board;
+  2. deploy the station source (its local copy is also in the bench facts)
+     as /main.py on the board;
   3. make sure the station boots and starts printing its readings.
   Finish with CLAIM: SUCCESS only after you have evidence the station is alive,
   or CLAIM: FAIL if you could not.

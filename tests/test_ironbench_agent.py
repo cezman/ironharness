@@ -604,6 +604,13 @@ def test_solve_config_numeric_fields_are_bounded(monkeypatch):
     monkeypatch.setenv("LLM_TIMEOUT", "0")
     with pytest.raises(ValueError, match="timeout_sec"):
         resolve_llm_config()
+    monkeypatch.setenv("LLM_TIMEOUT", "600")  # legal again for the next pickup
+    # IH-124: LLM_MAX_TOKENS was the only LLM flag without an env-pickup test
+    monkeypatch.setenv("LLM_MAX_TOKENS", "2048")
+    assert resolve_llm_config().max_tokens == 2048
+    monkeypatch.setenv("LLM_MAX_TOKENS", "0")
+    with pytest.raises(ValueError, match="max_tokens"):
+        resolve_llm_config()
     # legal edges keep loading
     assert SolveConfig(**ok, temperature=0, timeout_sec=1, max_tokens=1)
 

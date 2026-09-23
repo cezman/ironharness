@@ -39,20 +39,25 @@ is set for the server process).
 
 - **Discover**: `session_status` (self-check after any context loss),
   `serial_list` (ports with VID/PID), `serial_wait` (block until your board
-  appears), `file_list` (the sandbox root).
+  appears), `echo` (connectivity check), `file_list` (the sandbox root).
 - **Serial**: `serial_open` (accepts `by-serial:<sn>`; local ports only),
-  `serial_write/read/read_line`, `serial_put/get` (files to/from the board over
-  the raw REPL), `serial_reader_start/stop` + `serial_tail` +
-  `serial_read_until` (a background reader: device output between your tool
-  calls is buffered, not lost), `serial_reset` (RTS-pulse reset between attempts).
-- **Buses and networks**: `modbus_open/read/write/close`,
-  `mqtt_open/publish/subscribe/read/close` (destinations are operator-controlled;
+  `serial_write`, `serial_read`, `serial_read_line`, `serial_close`,
+  `serial_put`, `serial_get`
+  (files to/from the board over the raw REPL), `serial_reader_start`,
+  `serial_reader_stop`, `serial_tail`, `serial_read_until` (a background
+  reader: device output between your tool calls is buffered, not lost),
+  `serial_monitor` (a bounded capture window: byte/time caps, quiet window,
+  stop pattern, sandbox dump), `serial_reset` (RTS-pulse reset between
+  attempts).
+- **Buses and networks**: `modbus_open`, `modbus_read`, `modbus_write`,
+  `modbus_close`, `mqtt_open`, `mqtt_publish`, `mqtt_subscribe`, `mqtt_read`,
+  `mqtt_close` (destinations are operator-controlled;
   set `IRONHARNESS_ALLOWED_HOSTS` to lock them down).
 - **Flash (opt-in)**: `esp_image_info` (offline image parse), `esp_flash`,
   `esp_erase` — refused without `IRONHARNESS_ALLOW_REAL_FLASH=1`. Erase is
   irreversible; always have a firmware image (and the board's `main.py`) backed
   up first.
-- **Files**: `file_write/read/list/delete` — sandboxed and quota-bounded.
+- **Files**: `file_write`, `file_read`, `file_list`, `file_delete` — sandboxed and quota-bounded.
 
 ## House rules
 

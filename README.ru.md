@@ -57,8 +57,8 @@ uv run ironharness-mcp               # MCP-сервер (stdio; или: python -
 
 ## Инструменты агента (MCP)
 
-`echo` · `serial_list` (порты с VID/PID) · `serial_wait` (блокируется до появления VID:PID) · `session_status` · `serial_open/write/read/read_line/close` (`serial_open` принимает `by-serial:<sn>`) · `serial_put/get` (перекачка файлов на плату и обратно через raw REPL) · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (фоновый ридер: вывод устройства между вызовами инструментов буферизуется, а не теряется) · `serial_reset` (сброс платы импульсом RTS между попытками solve) · `modbus_open/read/write/close` ·
-`mqtt_open/publish/subscribe/read/close` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
+`echo` · `serial_list` (порты с VID/PID) · `serial_wait` (блокируется до появления VID:PID) · `session_status` · `serial_open` (принимает `by-serial:<sn>`), `serial_write`, `serial_read`, `serial_read_line`, `serial_close` · `serial_put`, `serial_get` (перекачка файлов на плату и обратно через raw REPL) · `serial_reader_start`, `serial_reader_stop`, `serial_tail`, `serial_read_until` (фоновый ридер: вывод устройства между вызовами инструментов буферизуется, а не теряется) · `serial_monitor` (ограниченное окно захвата: капы по байтам/времени, quiet-окно, stop-паттерн, дамп в песочницу) · `serial_reset` (сброс платы импульсом RTS между попытками solve) · `modbus_open`, `modbus_read`, `modbus_write`, `modbus_close` ·
+`mqtt_open`, `mqtt_publish`, `mqtt_subscribe`, `mqtt_read`, `mqtt_close` · `esp_image_info`, `esp_flash`, `esp_erase` · `file_write`, `file_read`, `file_list`, `file_delete`
 
 Все операции автоматически пишутся в JSONL-журнал (`$IRONHARNESS_HOME/journal.jsonl`,
 по умолчанию `~/.ironharness/`); файловые операции изолированы песочницей
@@ -117,7 +117,9 @@ solve-агента, а факт «с notes / без» фиксируется в 
 (io/data/protocol/fsm/control/resilience/debug) и уровень 1–5; `python -m ironbench.cli report`
 показывает профиль модели по классам, а не одно число. LLM-конфиг — переменные окружения:
 `LLM_BASE_URL` (по умолчанию локальный LM Studio), `LLM_MODEL`, `LLM_API_KEY`,
-`LLM_TIMEOUT`.
+`LLM_TIMEOUT`, `LLM_MAX_ITERATIONS`, `LLM_MAX_TOKENS` и `LLM_ALLOW_LOCAL`
+(`0`, `false`, `no` запрещают локальные/приватные LLM-эндпоинты — граница
+SSRF; любое другое значение разрешает).
 
 Живые цифры: [лидерборд](https://cezman.github.io/ironharness/), архивные поколения
 с зафиксированными критериями и сырыми данными по попыткам

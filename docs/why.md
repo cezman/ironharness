@@ -144,7 +144,7 @@ optionally expert notes.
 | Check whether an I2C sensor responds | reference pattern: the `bus-diagnose` golden task (scan the bus, report what's missing, degrade without crashing) | `src/ironbench/tasks/` |
 | Read a sensor with no libraries on the board | `bme-read` (BME280 straight from the datasheet), `cross-sensor` (BME280 + DS18B20, cross-checked) | `src/ironbench/tasks/` |
 | Debug deployed firmware that misbehaves | the `debug-*` task class: the bug ships inside the task, PASS = the fix satisfies the spec | `src/ironbench/tasks/` |
-| Measure what a model can actually do on firmware | `ironbench solve` → `ironbench report` (pass@k, per-class profiles) | README → ironbench |
+| Measure what a model can actually do on firmware | `python -m ironbench.cli solve` → `python -m ironbench.cli report` (pass@k, per-class profiles) | README → ironbench |
 
 ## Benchmark (ironbench)
 

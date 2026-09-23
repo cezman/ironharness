@@ -458,7 +458,11 @@ class Session:
         chatty boot can overflow a small driver buffer - keep settle_sec
         realistic)."""
         with self._lock:
-            t = self._get(name)
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("reset_failed", {"conn": name, "error": str(e)})
+                raise
             reader = self._readers.get(name)
         if reader is not None:
             with reader.io_lock:
@@ -835,6 +839,9 @@ class Session:
         with self._lock:
             base = self._serial_base.get(name)
             if base is None:
+                self.journal(
+                    "reader_start_failed", {"conn": name, "error": f"serial transport {name!r} is not open"}
+                )
                 raise KeyError(f"serial transport {name!r} is not open")
             if name in self._readers:
                 self.journal(
@@ -884,6 +891,10 @@ class Session:
         with self._lock:
             reader = self._readers.get(name)
             if reader is None:
+                self.journal(
+                    "reader_stop_failed",
+                    {"conn": name, "error": f"transport {name!r} has no background reader"},
+                )
                 raise KeyError(f"transport {name!r} has no background reader")
             stopped = reader.stop()
             if stopped:
@@ -903,7 +914,7 @@ class Session:
                 {"conn": name, "reason": f"size {size} out of [1, 1048576]"},
             )
             raise ValueError(f"serial_tail size must be in [1, 1048576] bytes, got {size}")
-        return self._reader(name).tail(size)
+        return self._reader(name, "tail").tail(size)
 
     def serial_read_until(self, name: str, pattern: str, timeout: float = 10.0) -> dict[str, object]:
         """Waits for the utf-8 pattern in fresh reader data; consumes the
@@ -916,13 +927,19 @@ class Session:
             raise ValueError(
                 f"serial_read_until timeout must be in (0, 3600] seconds, got {timeout}"
             )
-        return self._reader(name).read_until(pattern, timeout)
+        return self._reader(name, "read_until").read_until(pattern, timeout)
 
-    def _reader(self, name: str) -> SerialReader:
+    def _reader(self, name: str, op: str) -> SerialReader:
         with self._lock:
             try:
                 return self._readers[name]
             except KeyError:
+                # the unknown-conn denial journals, like every serial op
+                # (IH-37 precedent; the reader family had the gap - IH-124)
+                self.journal(
+                    f"{op}_failed",
+                    {"conn": name, "error": f"transport {name!r} has no background reader"},
+                )
                 raise KeyError(f"transport {name!r} has no background reader") from None
 
     def _stop_reader(self, name: str, *, implicit: bool = False) -> None:

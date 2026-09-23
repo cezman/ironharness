@@ -148,6 +148,27 @@ def test_missing_cli_reports_error(tmp_path):
     assert res.error_kind == "infra"
 
 
+def test_default_cli_resolves_per_platform(monkeypatch, tmp_path):
+    # IH-124: the default_cli() branch (no explicit cli_path) ran in production
+    # but in no test - both OS fallbacks and the PATH hit stay pinned here
+    from ironbench import runner_wokwi
+
+    monkeypatch.setattr(runner_wokwi.shutil, "which", lambda name: "C:/tools/wokwi-cli.exe")
+    assert runner_wokwi.default_cli() == "C:/tools/wokwi-cli.exe"
+
+    monkeypatch.setattr(runner_wokwi.shutil, "which", lambda name: None)
+    monkeypatch.setattr(runner_wokwi.sys, "platform", "win32")
+    monkeypatch.setattr(runner_wokwi.Path, "home", classmethod(lambda cls: tmp_path))
+    assert runner_wokwi.default_cli() == "wokwi-cli"
+    exe = tmp_path / ".wokwi" / "bin" / "wokwi-cli.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    assert runner_wokwi.default_cli() == str(exe)
+
+    monkeypatch.setattr(runner_wokwi.sys, "platform", "linux")
+    assert runner_wokwi.default_cli() == "wokwi-cli"
+
+
 def test_missing_entry_file_is_clean_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_common, "WALL_GRACE_SEC", 1)
     task = make_task(tmp_path, write_entry=False)

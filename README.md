@@ -60,8 +60,8 @@ uv run ironharness-mcp               # MCP server (stdio; or: python -m io_core.
 
 ## Agent tools (MCP)
 
-`echo` · `serial_list` (ports with VID/PID) · `serial_wait` (blocks until a VID:PID appears) · `session_status` · `serial_open/write/read/read_line/close` (`serial_open` accepts `by-serial:<sn>`) · `serial_put/get` (file transfer to/from the board over the raw REPL) · `serial_reader_start/stop`, `serial_tail`, `serial_read_until` (background reader: device output between tool calls is buffered, not lost) · `serial_reset` (RTS-pulse board reset between solve attempts) · `modbus_open/read/write/close` ·
-`mqtt_open/publish/subscribe/read/close` · `esp_image_info/flash/erase` · `file_write/read/list/delete`
+`echo` · `serial_list` (ports with VID/PID) · `serial_wait` (blocks until a VID:PID appears) · `session_status` · `serial_open` (accepts `by-serial:<sn>`), `serial_write`, `serial_read`, `serial_read_line`, `serial_close` · `serial_put`, `serial_get` (file transfer to/from the board over the raw REPL) · `serial_reader_start`, `serial_reader_stop`, `serial_tail`, `serial_read_until` (background reader: device output between tool calls is buffered, not lost) · `serial_monitor` (a bounded capture window: byte/time caps, quiet window, stop pattern, sandbox dump) · `serial_reset` (RTS-pulse board reset between solve attempts) · `modbus_open`, `modbus_read`, `modbus_write`, `modbus_close` ·
+`mqtt_open`, `mqtt_publish`, `mqtt_subscribe`, `mqtt_read`, `mqtt_close` · `esp_image_info`, `esp_flash`, `esp_erase` · `file_write`, `file_read`, `file_list`, `file_delete`
 
 Every operation is journaled to JSONL (`$IRONHARNESS_HOME/journal.jsonl`,
 default `~/.ironharness/`); file operations are confined by the sandbox
@@ -122,7 +122,10 @@ prompt, and the has-notes fact is recorded in results.jsonl.
 Every task has a class (io/data/protocol/fsm/control/
 resilience/debug) and a level 1–5; `python -m ironbench.cli report` shows a model's profile across
 classes, not a single number. LLM config — environment variables: `LLM_BASE_URL`
-(default: local LM Studio), `LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT`.
+(default: local LM Studio), `LLM_MODEL`, `LLM_API_KEY`, `LLM_TIMEOUT`,
+`LLM_MAX_ITERATIONS`, `LLM_MAX_TOKENS`, and `LLM_ALLOW_LOCAL`
+(`0`, `false`, `no` refuse local/private LLM endpoints - an SSRF boundary;
+any other value allows them).
 
 Live numbers: the [leaderboard](https://cezman.github.io/ironharness/), archived
 generations with pinned criteria and raw per-attempt data

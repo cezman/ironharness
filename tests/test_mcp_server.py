@@ -287,6 +287,10 @@ def test_get_session_race_creates_one_session(monkeypatch, tmp_path):
         for t in threads:
             t.join()
         assert len(results) == 2 and results[0] is results[1]
+        # IH-124: the env-picked sandbox LOCATION is pinned, not just set -
+        # a lost IRONHARNESS_SANDBOX on retransmission would silently fall
+        # back to the ~/.ironharness default
+        assert results[0].sandbox.root == (tmp_path / "sandbox").resolve()
     finally:
         mcp_module.reset_session()
 
