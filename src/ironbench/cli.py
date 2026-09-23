@@ -25,6 +25,49 @@ DEFAULT_TASKS_DIR = Path(__file__).resolve().parent / "tasks"
 SOLVE_DIR_NAME = "solve"
 
 
+def _start_rows_campaign(rows_path: Path, header: dict) -> None:
+    """Replaces any previous campaign's rows.jsonl with a one-line tombstone
+    (same pattern as solve results.jsonl, audit D). Ops campaigns APPEND rows
+    as attempts finish, so a repeated run into the same --campaign used to
+    silently MIX the previous campaign's rows into the new one, and a run
+    killed mid-way left the stale file indistinguishable from a complete
+    campaign with fewer attempts (IH-122). After this call a torn campaign
+    is visible as "tombstone + crash markers", never as someone else's old
+    numbers.
+
+    Two live campaigns writing the same rows.jsonl still collide (last
+    writer wins per append) - one campaign per name at a time, like the
+    solve path. A hard kill cannot run the crash handler, so that campaign
+    is visible as the tombstone plus its completed rows only (no marker)."""
+    for stale in sorted(rows_path.parent.glob(f"{rows_path.name}.*.tmp")):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    payload = json.dumps({"tombstone": True, **header}, ensure_ascii=False) + "\n"
+    tmp = rows_path.with_name(f"{rows_path.name}.{os.getpid()}.tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    _replace_results_atomically(tmp, rows_path)
+
+
+def _append_row(rows_path: Path, row: dict) -> None:
+    with rows_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+
+
+def _crash_row(**ident) -> dict:
+    """rows.jsonl record for an attempt/scenario the driver could not run to
+    its own verdict (IH-122). error_kind=infra keeps it out of the judged
+    pass rates; "crashed" is what makes a torn campaign tell itself apart
+    from a complete one that simply made fewer attempts."""
+    return {
+        "crashed": True,
+        "error_kind": "infra",
+        "error": ident.pop("error"),
+        **ident,
+    }
+
+
 def _cmd_ops_ab(args) -> int:
     from ironbench.ops_run import run_ops_attempt
     from ironbench.ops_tasks import load_ops_tasks
@@ -53,6 +96,11 @@ def _cmd_ops_ab(args) -> int:
     campaign_dir = args.out / "ops" / f"{campaign}-{cfg.base_url.split('//')[-1].split(':')[0]}"
     campaign_dir.mkdir(parents=True, exist_ok=True)
     rows_path = campaign_dir / "rows.jsonl"
+    _start_rows_campaign(
+        rows_path,
+        {"campaign": campaign, "kind": "ops-ab", "models": models,
+         "tasks": [t.name for t in selected], "attempts": args.attempts},
+    )
     journal = JsonlJournal(campaign_dir / "journal.jsonl", actor="ops-ab")
     exit_code = 0
     for model in models:
@@ -75,11 +123,14 @@ def _cmd_ops_ab(args) -> int:
                     except Exception as exc:  # noqa: BLE001 - one dead attempt must not kill the campaign
                         print(f"  crashed: {type(exc).__name__}: {exc}")
                         journal("attempt_crashed", {"error": str(exc)})
+                        _append_row(rows_path, _crash_row(
+                            task=task.name, arm=arm, model=model, attempt=attempt,
+                            error=f"{type(exc).__name__}: {exc}",
+                        ))
                         exit_code = 1
                         continue
                     journal("ops_attempt_result", result.row())
-                    with rows_path.open("a", encoding="utf-8") as f:
-                        f.write(json.dumps(result.row(), default=str) + "\n")
+                    _append_row(rows_path, result.row())
                     verdict = "PASS" if result.solved else "FAIL"
                     print(
                         f"  {verdict} iter={result.iterations} claim={result.claimed} "
@@ -116,27 +167,45 @@ def _cmd_ops_faults(args) -> int:
     campaign_dir = args.out / "ops" / f"faults-{campaign}"
     campaign_dir.mkdir(parents=True, exist_ok=True)
     rows_path = campaign_dir / "rows.jsonl"
+    _start_rows_campaign(
+        rows_path,
+        {"campaign": campaign, "kind": "ops-faults", "models": models,
+         "task": task.name, "arms": arms, "faults": [f.id for f in faults]},
+    )
     rows: list[dict] = []
+    exit_code = 0
     for model in models:
         model_cfg = dataclasses.replace(cfg, model=model)
         for arm in arms:
             for fault in faults:
                 print(f"[ops-faults] {task.name} {arm}/{model} x {fault.id}...", flush=True)
-                row = run_fault_scenario(
-                    fault,
-                    task,
-                    arm=arm,
-                    llm_cfg=model_cfg,
-                )
+                try:
+                    row = run_fault_scenario(
+                        fault,
+                        task,
+                        arm=arm,
+                        llm_cfg=model_cfg,
+                    )
+                except Exception as exc:  # noqa: BLE001 - one dead scenario must not kill the suite
+                    print(f"  crashed: {type(exc).__name__}: {exc}")
+                    marker = _crash_row(
+                        task=task.name, arm=arm, model=model, scenario=fault.id,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    rows.append(marker)
+                    _append_row(rows_path, marker)
+                    exit_code = 1
+                    continue
                 row["model"] = model
                 rows.append(row)
-                with rows_path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(row, default=str) + "\n")
+                _append_row(rows_path, row)
                 print(f"  {row['outcome']} iter={row['iterations']} claim={row['claimed']}")
-    rate = detection_rate(rows)
+    # crashed scenarios carry no "detected" verdict - they are infra, not
+    # missed detections, so they stay out of the rate
+    rate = detection_rate([r for r in rows if not r.get("crashed")])
     print(f"detection rate: {rate:.0%}" if rate is not None else "detection rate: n/a")
     print(f"rows: {rows_path}")
-    return 0
+    return exit_code
 
 
 def _fmt_result(res) -> str:

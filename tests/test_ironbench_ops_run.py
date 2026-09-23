@@ -13,6 +13,7 @@ import pytest
 
 from ironbench.agent import ChatReply, SolveConfig
 from ironbench.cli import main as cli_main
+from ironbench.ops_report import load_rows, summarize
 from ironbench.ops_run import (
     OpsSetupError,
     count_journal_ops,
@@ -380,6 +381,45 @@ def test_cli_ops_ab_refuses_without_allow_real(tmp_path, capsys):
     )
     assert rc == 2
     assert "allow-real" in capsys.readouterr().out
+
+
+def test_cli_ops_ab_tombstones_rows_and_marks_crashes(tmp_path, monkeypatch, capsys):
+    # IH-122: a rerun into the same --campaign must not mix the previous
+    # campaign's rows into the new one (rows.jsonl is replaced by a tombstone
+    # at campaign start), and an attempt that dies before its own verdict
+    # must appear in rows.jsonl as an infra crash marker - a torn campaign is
+    # visible as markers, not as a complete one with fewer attempts.
+    campaign_dir = tmp_path / "out" / "ops" / "c1-localhost"
+    campaign_dir.mkdir(parents=True)
+    (campaign_dir / "rows.jsonl").write_text(
+        json.dumps({"model": "old", "arm": "mcp", "solved": True}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:1234/v1")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+
+    def boom(*a, **k):
+        raise RuntimeError("port held by antivirus")
+
+    monkeypatch.setattr("ironbench.ops_run.run_ops_attempt", boom)
+    rc = cli_main(
+        ["ops-ab", "--task", "ops-restore", "--port", "COM9", "--out", str(tmp_path / "out"),
+         "--campaign", "c1", "--arm", "mcp", "--attempts", "2", "--allow-real"]
+    )
+    assert rc == 1
+    rows, dropped = load_rows(campaign_dir / "rows.jsonl")
+    assert dropped == 0
+    assert rows == [
+        {"crashed": True, "error_kind": "infra",
+         "error": "RuntimeError: port held by antivirus",
+         "task": "ops-restore", "arm": "mcp", "model": "test-model", "attempt": 1},
+        {"crashed": True, "error_kind": "infra",
+         "error": "RuntimeError: port held by antivirus",
+         "task": "ops-restore", "arm": "mcp", "model": "test-model", "attempt": 2},
+    ]
+    summary = summarize(rows, dropped=dropped)
+    assert summary["attempts_judged"] == 0
+    assert summary["attempts_infra"] == 2
 
 
 def test_restore_failure_does_not_hide_a_judged_solve(tmp_path):

@@ -18,17 +18,32 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def load_rows(rows_path: Path) -> list[dict]:
-    rows = []
+def load_rows(rows_path: Path) -> tuple[list[dict], int]:
+    """Loads campaign rows; returns (rows, dropped).
+
+    dropped counts lines that could not be parsed as JSON objects (a torn
+    final line after a mid-write death, typed garbage) - counted, never
+    silently dropped (IH-122; the journal_view precedent). Tombstone records
+    (written by _start_rows_campaign at campaign start) are skipped: they
+    mark the campaign boundary, not an attempt."""
+    rows: list[dict] = []
+    dropped = 0
     for line in Path(rows_path).read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            rows.append(json.loads(line))
+            rec = json.loads(line)
         except json.JSONDecodeError:
+            dropped += 1
             continue
-    return rows
+        if not isinstance(rec, dict):
+            dropped += 1
+            continue
+        if rec.get("tombstone"):
+            continue
+        rows.append(rec)
+    return rows, dropped
 
 
 def _bucket(rows: list[dict], key_fields: tuple[str, ...]) -> dict[tuple, list[dict]]:
@@ -38,8 +53,10 @@ def _bucket(rows: list[dict], key_fields: tuple[str, ...]) -> dict[tuple, list[d
     return dict(out)
 
 
-def summarize(rows: list[dict]) -> dict:
-    """Aggregate attempt rows into per-arm/model metrics."""
+def summarize(rows: list[dict], *, dropped: int = 0) -> dict:
+    """Aggregate attempt rows into per-arm/model metrics. `dropped` is the
+    unparseable-line count from load_rows; it travels into the summary so the
+    report can state it instead of silently shrinking the dataset."""
     # a judge-confirmed solve is never infra, even when a later restore step
     # failed (older rows encoded that as error_kind=infra)
     judged = [r for r in rows if r.get("error_kind") != "infra" or r.get("solved")]
@@ -106,6 +123,7 @@ def summarize(rows: list[dict]) -> dict:
         "attempts_total": len(rows),
         "attempts_judged": len(judged),
         "attempts_infra": len(infra),
+        "rows_dropped": dropped,
         "groups": dict(sorted(groups.items())),
         "fault_suite": fault_groups,
     }
@@ -121,6 +139,9 @@ def render_markdown(summary: dict, title: str = "ops A/B") -> str:
     lines = [f"# {title}", ""]
     lines.append(f"Attempts: {summary['attempts_total']} total, "
                  f"{summary['attempts_judged']} judged, {summary['attempts_infra']} infra.")
+    if summary.get("rows_dropped"):
+        lines.append(f"WARNING: {summary['rows_dropped']} unparseable row line(s) dropped "
+                     "- the dataset is incomplete.")
     lines.append("")
     lines.append("| model / arm | attempts | solved | pass rate | silent failures | silent rate | honest fail | no claim | accidents | tokens in/out | avg iters |")
     lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
