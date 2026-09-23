@@ -1002,19 +1002,21 @@ class Session:
             self._kinds[name] = "modbus"
 
     def modbus_read(self, name: str, address: int, count: int = 1) -> list[int]:
-        try:
-            t = self._get(name)
-        except KeyError as e:
-            self.journal("modbus_read_failed", {"conn": name, "error": str(e)})
-            raise
+        with self._lock:
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("modbus_read_failed", {"conn": name, "error": str(e)})
+                raise
         return t.read_holding(address, count)
 
     def modbus_write(self, name: str, address: int, values: list[int]) -> None:
-        try:
-            t = self._get(name)
-        except KeyError as e:
-            self.journal("modbus_write_failed", {"conn": name, "error": str(e)})
-            raise
+        with self._lock:
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("modbus_write_failed", {"conn": name, "error": str(e)})
+                raise
         if len(values) == 1:
             t.write_register(address, values[0])
         else:
@@ -1060,19 +1062,21 @@ class Session:
             self._kinds[name] = "mqtt"
 
     def mqtt_publish(self, name: str, topic: str, payload: str, *, qos: int = 0, retain: bool = False) -> None:
-        try:
-            t = self._get(name)
-        except KeyError as e:
-            self.journal("mqtt_publish_failed", {"conn": name, "error": str(e)})
-            raise
+        with self._lock:
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("mqtt_publish_failed", {"conn": name, "error": str(e)})
+                raise
         t.publish(topic, payload, qos=qos, retain=retain)
 
     def mqtt_subscribe(self, name: str, topic: str, *, qos: int = 0) -> None:
-        try:
-            t = self._get(name)
-        except KeyError as e:
-            self.journal("mqtt_subscribe_failed", {"conn": name, "error": str(e)})
-            raise
+        with self._lock:
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("mqtt_subscribe_failed", {"conn": name, "error": str(e)})
+                raise
         t.subscribe(topic, qos=qos)
 
     def mqtt_read(self, name: str, timeout: float = 1.0) -> dict[str, str] | None:
@@ -1082,11 +1086,12 @@ class Session:
                 {"conn": name, "reason": f"timeout {timeout} out of (0, 3600]"},
             )
             raise ValueError(f"mqtt_read timeout must be in (0, 3600] seconds, got {timeout}")
-        try:
-            t = self._get(name)
-        except KeyError as e:
-            self.journal("mqtt_read_failed", {"conn": name, "error": str(e)})
-            raise
+        with self._lock:
+            try:
+                t = self._get(name)
+            except KeyError as e:
+                self.journal("mqtt_read_failed", {"conn": name, "error": str(e)})
+                raise
         return t.read_message(timeout)
 
     # --- esp (flashing via esptool; needs the [flash] extra) ---
