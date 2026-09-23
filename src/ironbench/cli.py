@@ -33,7 +33,17 @@ def _start_rows_campaign(rows_path: Path, header: dict) -> None:
     killed mid-way left the stale file indistinguishable from a complete
     campaign with fewer attempts (IH-122). After this call a torn campaign
     is visible as "tombstone + crash markers", never as someone else's old
-    numbers."""
+    numbers.
+
+    Two live campaigns writing the same rows.jsonl still collide (last
+    writer wins per append) - one campaign per name at a time, like the
+    solve path. A hard kill cannot run the crash handler, so that campaign
+    is visible as the tombstone plus its completed rows only (no marker)."""
+    for stale in sorted(rows_path.parent.glob(f"{rows_path.name}.*.tmp")):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     payload = json.dumps({"tombstone": True, **header}, ensure_ascii=False) + "\n"
     tmp = rows_path.with_name(f"{rows_path.name}.{os.getpid()}.tmp")
     tmp.write_text(payload, encoding="utf-8")
@@ -163,6 +173,7 @@ def _cmd_ops_faults(args) -> int:
          "task": task.name, "arms": arms, "faults": [f.id for f in faults]},
     )
     rows: list[dict] = []
+    exit_code = 0
     for model in models:
         model_cfg = dataclasses.replace(cfg, model=model)
         for arm in arms:
@@ -183,6 +194,7 @@ def _cmd_ops_faults(args) -> int:
                     )
                     rows.append(marker)
                     _append_row(rows_path, marker)
+                    exit_code = 1
                     continue
                 row["model"] = model
                 rows.append(row)
@@ -193,7 +205,7 @@ def _cmd_ops_faults(args) -> int:
     rate = detection_rate([r for r in rows if not r.get("crashed")])
     print(f"detection rate: {rate:.0%}" if rate is not None else "detection rate: n/a")
     print(f"rows: {rows_path}")
-    return 0
+    return exit_code
 
 
 def _fmt_result(res) -> str:

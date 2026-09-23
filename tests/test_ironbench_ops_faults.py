@@ -206,7 +206,7 @@ def test_cli_ops_faults_crash_marker_keeps_the_rate_honest(tmp_path, monkeypatch
          "--fault", "mute_board", "--campaign", "c1",
          "--out", str(tmp_path / "out")]
     )
-    assert rc == 0
+    assert rc == 1
     rows, dropped = load_rows(tmp_path / "out" / "ops" / "faults-c1" / "rows.jsonl")
     assert dropped == 0
     assert rows == [
