@@ -91,6 +91,32 @@ def test_stops_on_pattern(tmp_path):
         s.close()
 
 
+def test_stops_on_pattern_split_across_chunks(tmp_path):
+    # IH-124: the stop pattern arriving in two separate reads (BO | OT OK)
+    # must still stop the monitor - the search runs across the chunk
+    # boundary with an overlap; a regression to per-chunk find() would leave
+    # the monitor running to its byte/seconds cap with the pattern in the
+    # buffer, silently unpinned
+    s = _open_session(tmp_path)
+    try:
+        def feed():
+            _port(s).write(b"BO")
+            time.sleep(0.5)  # the monitor drains the first half before the rest
+            _port(s).write(b"OT OK\n")
+
+        th = threading.Thread(target=feed, daemon=True)
+        th.start()
+        t0 = time.monotonic()
+        r = s.serial_monitor("c", max_seconds=15, stop_pattern="BOOT OK")
+        elapsed = time.monotonic() - t0
+        assert r["stop_reason"] == "pattern"
+        assert "BOOT OK" in r["text"]
+        assert elapsed < 10
+        th.join(timeout=5)
+    finally:
+        s.close()
+
+
 def test_stops_on_quiet_window(tmp_path):
     s = _open_session(tmp_path)
     try:

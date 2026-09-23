@@ -6,8 +6,9 @@ allowed_tools: [serial, esp]
 budget: {max_iterations: 8, iter_timeout_sec: 300}
 description: |
   The board on serial port $PORT is fully blank (flash erased). Perform a
-  firmware recovery: flash the MicroPython firmware image (url and sha256
-  below) and verify the board boots into a working interactive REPL.
+  firmware recovery: flash the MicroPython firmware image (a local cached
+  copy is given in the bench facts) and verify the board boots into a
+  working interactive REPL.
   Finish with CLAIM: SUCCESS only after you have evidence the REPL is alive
   (the board answers commands), or CLAIM: FAIL if you could not.
 assets:

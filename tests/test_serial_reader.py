@@ -444,6 +444,30 @@ def test_reader_requires_serial_transport(session, tmp_path):
         session.serial_reader_start("nope")
 
 
+def test_unknown_conn_denials_journal_the_failure(session, tmp_path):
+    # IH-124: the reader family + serial_reset refused an unknown connection
+    # silently - contrary to the module's own convention (serial_write /
+    # serial_read / serial_read_line / serial_put journal theirs, IH-37).
+    # Every denial must leave its event before the raise.
+    for op in (
+        lambda: session.serial_reader_start("nope"),
+        lambda: session.serial_reader_stop("nope"),
+        lambda: session.serial_tail("nope"),
+        lambda: session.serial_read_until("nope", "x", timeout=1.0),
+        lambda: session.serial_reset("nope"),
+    ):
+        with pytest.raises(KeyError):
+            op()
+    kinds = [e["kind"] for e in read_events(tmp_path / "journal.jsonl")]
+    assert kinds == [
+        "reader_start_failed",
+        "reader_stop_failed",
+        "tail_failed",
+        "read_until_failed",
+        "reset_failed",
+    ]
+
+
 def test_close_stops_reader_and_releases_name(session):
     name = loop_session(session)
     session.serial_reader_start(name)

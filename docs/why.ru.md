@@ -143,7 +143,7 @@ pyserial, второй — через MCP-инструменты ironharness; ж
 | Проверить, отвечает ли сенсор на шине I2C | эталонный паттерн: золотая задача `bus-diagnose` (скан шины, отчёт о пропавших, деградация без падения) | `src/ironbench/tasks/` |
 | Прочитать сенсор без библиотек на плате | `bme-read` (BME280 прямо по даташиту), `cross-sensor` (BME280 + DS18B20 с перекрёстной проверкой) | `src/ironbench/tasks/` |
 | Отладить развёрнутую прошивку, которая ведёт себя плохо | класс задач `debug-*`: баг лежит внутри задачи, PASS = фикс удовлетворяет спецификации | `src/ironbench/tasks/` |
-| Измерить, что модель реально умеет на прошивках | `ironbench solve` → `ironbench report` (pass@k, профили по классам) | README → ironbench |
+| Измерить, что модель реально умеет на прошивках | `python -m ironbench.cli solve` → `python -m ironbench.cli report` (pass@k, профили по классам) | README → ironbench |
 
 ## Бенчмарк (ironbench)
 

@@ -160,6 +160,25 @@ def test_wire_initialize_tools_call(server, tmp_path):
     assert (tmp_path / "home" / "journal.jsonl").is_file()
 
 
+def test_wire_file_write_lands_in_the_env_sandbox(server, tmp_path):
+    # IH-124: the spawn env sets IRONHARNESS_SANDBOX, but nothing pinned the
+    # sandbox LOCATION over the wire - a lost env var on retransmission would
+    # silently fall back to the default ~/.ironharness/sandbox
+    client = WireClient(server)
+    initialize(client)
+    call = client.request(
+        {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "file_write", "arguments": {"path": "wire.txt", "content": "hi"}},
+        }
+    )
+    assert "error" not in call
+    assert call["result"].get("isError") is not True, call
+    assert (tmp_path / "home" / "sandbox" / "wire.txt").read_text(encoding="utf-8") == "hi"
+
+
 def test_wire_every_tool_is_annotated(server):
     """IH-50 lesson sweep: MCP clients surface readOnly/destructive hints to
     the user BEFORE the call - every tool must carry them, and hardware- or
