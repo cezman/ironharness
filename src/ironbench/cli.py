@@ -144,7 +144,13 @@ def _cmd_ops_ab(args) -> int:
 
 
 def _cmd_ops_faults(args) -> int:
-    from ironbench.ops_faults import FAULTS, FAULTS_BY_ID, detection_rate, run_fault_scenario
+    from ironbench.ops_faults import (
+        FAULTS,
+        FAULTS_BY_ID,
+        MISSED,
+        detection_rate,
+        run_fault_scenario,
+    )
     from ironbench.ops_tasks import load_ops_task
 
     tasks_root = Path(__file__).resolve().parent / "ops"
@@ -200,6 +206,11 @@ def _cmd_ops_faults(args) -> int:
                 rows.append(row)
                 _append_row(rows_path, row)
                 print(f"  {row['outcome']} iter={row['iterations']} claim={row['claimed']}")
+                if row["outcome"] == MISSED:
+                    # IH-132: a survived fault is the suite's worst outcome -
+                    # the exit code says so, symmetric with ops-ab where any
+                    # non-solve attempt is rc 1
+                    exit_code = 1
     # crashed scenarios carry no "detected" verdict - they are infra, not
     # missed detections, so they stay out of the rate
     rate = detection_rate([r for r in rows if not r.get("crashed")])
@@ -317,6 +328,9 @@ def main(argv=None) -> int:
         "ops-ab",
         parents=[common],
         help="ops A/B: agent-operated board tasks, MCP tools vs bare scripts (IH-104/105)",
+        description="Exit code: 0 = every attempt solved its task; "
+        "1 = at least one attempt did not solve (or a scenario crashed); "
+        "2 = usage or task-lookup error.",
     )
     ops.add_argument("--task", required=True, help="ops task name or 'all'")
     ops.add_argument("--arm", choices=["bare", "mcp", "both"], default="both")
@@ -334,6 +348,9 @@ def main(argv=None) -> int:
         "ops-faults",
         parents=[common],
         help="fault-injection suite: offline seeded incidents x ops task (IH-106)",
+        description="Exit code: 0 = every injected fault was detected (or honestly "
+        "solved despite it); 1 = at least one MISSED detection (success claimed "
+        "over a broken board) or a crashed scenario; 2 = usage or task-lookup error.",
     )
     flt.add_argument("--task", required=True, help="ops task name")
     flt.add_argument("--arm", choices=["bare", "mcp", "both"], default="both")
