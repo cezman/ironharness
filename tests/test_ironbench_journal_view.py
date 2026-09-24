@@ -96,10 +96,20 @@ def test_viewer_js_has_no_html_sinks(tmp_path):
     # that interprets a string as HTML. The journal data is
     # firmware/agent-controlled - a single innerHTML would make this file a
     # live XSS surface instead of an inert timeline.
-    journal = write_journal(tmp_path, [{"ts": 1.0, "seq": 1, "actor": "a", "kind": "read"}])
+    journal = write_journal(
+        tmp_path,
+        [
+            # a literal "<script>" in a payload survives the data-block escape
+            # (only "</" and "<!--" are rewritten) - the JS extraction must
+            # anchor past it, not match it
+            {"ts": 1.0, "seq": 1, "actor": "a", "kind": "read", "p": "<script>var x=1"},
+            {"ts": 2.0, "seq": 2, "actor": "a", "kind": "read"},
+        ],
+    )
     out_file, _ = write_view(journal, tmp_path / "view.html")
     page = out_file.read_text(encoding="utf-8")
-    script = re.search(r"<script>(.*?)</script>", page[page.index("</style>"):], re.DOTALL).group(1)
+    script_start = page.rindex("<script>")
+    script = re.search(r"<script>(.*?)</script>", page[script_start:], re.DOTALL).group(1)
     for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "document.writeln"):
         assert sink not in script, f"viewer JS uses {sink} - values would render as HTML"
     # and the text-only sink is actually there
