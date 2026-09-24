@@ -483,6 +483,26 @@ def test_cli_ops_ab_tombstones_rows_and_marks_crashes(tmp_path, monkeypatch, cap
     assert summary["attempts_infra"] == 2
 
 
+def test_start_rows_campaign_sweeps_stale_tmp_files(tmp_path):
+    # audit 4: the stale-*.tmp sweep in the campaign start had no test (data
+    # risk is zero - load_rows never reads .tmp - but the sweep itself was
+    # uncovered, so it could rot silently)
+    from ironbench.cli import _start_rows_campaign
+
+    rows = tmp_path / "ops" / "faults-c1" / "rows.jsonl"
+    rows.parent.mkdir(parents=True)
+    stale_a = rows.with_name(f"{rows.name}.123.tmp")
+    stale_b = rows.with_name(f"{rows.name}.456.tmp")
+    stale_a.write_text("garbage", encoding="utf-8")
+    stale_b.write_text("garbage", encoding="utf-8")
+
+    _start_rows_campaign(rows, {"campaign": "c1", "kind": "ops-faults"})
+
+    assert not stale_a.exists() and not stale_b.exists()
+    assert not list(rows.parent.glob("*.tmp"))  # the live tmp was rotated in
+    assert rows.read_text(encoding="utf-8").startswith('{"tombstone": true')
+
+
 def test_restore_failure_does_not_hide_a_judged_solve(tmp_path):
     # a solve confirmed by the judge must survive a failing restore step:
     # the row keeps solved=True (restore_failed evidence) and stays judged

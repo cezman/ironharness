@@ -92,11 +92,6 @@ class _Stream:
     def until_prompt(self, deadline: float) -> bytes:
         return self.until(PROMPT, deadline)
 
-    def quiet_read(self) -> bytes:
-        """Whatever is left in the buffer (no waiting)."""
-        chunk, self._buf = self._buf, b""
-        return chunk
-
 
 class MpRepl:
     """One raw-REPL session over a transport: enter, exec, put/get, exit."""

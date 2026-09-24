@@ -197,20 +197,6 @@ def parse_tool_arguments(raw: Any) -> dict:
     return {}
 
 
-def tool_catalog(catalog: list[dict], allowed_families: tuple[str, ...]) -> str:
-    """Human-readable tool list (text-protocol fallback rendering)."""
-    prefixes = tuple(f + "_" for f in allowed_families)
-    lines = []
-    for tool in catalog:
-        name = tool.get("name", "")
-        if not name.startswith(prefixes):
-            continue
-        desc = " ".join(str(tool.get("description", "")).split())
-        schema = tool.get("inputSchema") or {}
-        lines.append(f"- {name}: {desc}\n  args: {json.dumps(schema.get('properties', {}))}")
-    return "\n".join(lines)
-
-
 def scan_bare_accidents(scripts: list[str], assigned_port: str) -> list[str]:
     """Rule-based incident scan over the model's scripts (wrong port,
     reads that can block forever). Conservative: counts candidate matches,
