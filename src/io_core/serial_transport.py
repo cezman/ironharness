@@ -101,7 +101,13 @@ class SerialTransport:
 
     def close(self) -> None:
         if self._serial is not None:
-            self._serial.close()
+            try:
+                self._serial.close()
+            except OSError as e:
+                # IH-128: every failed operation journals - open/write/read/
+                # reset already do, close was the one silent failure
+                self._emit("close_failed", {"error": str(e)})
+                raise
             self._serial = None
             self._emit("close", {})
 

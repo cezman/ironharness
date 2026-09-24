@@ -42,6 +42,29 @@ def test_events_hook_sequence():
     assert kinds == ["open", "write", "read", "close"]
 
 
+def test_close_failure_emits_close_failed():
+    # IH-128: open/write/read/reset already journal their failures - close
+    # was the one silent one against the module docstring's promise
+    events: list[tuple[str, dict]] = []
+    t = SerialTransport(LOOP, timeout=0.5, on_event=lambda kind, data: events.append((kind, data)))
+    t.open()
+
+    def boom():
+        raise OSError("driver gone")
+
+    real_close = t._serial.close
+    t._serial.close = boom
+    try:
+        with pytest.raises(OSError, match="driver gone"):
+            t.close()
+    finally:
+        t._serial.close = real_close
+        t.close()
+    kinds = [kind for kind, _ in events]
+    assert kinds == ["open", "close_failed", "close"]
+    assert events[-2] == ("close_failed", {"error": "driver gone"})
+
+
 def test_version_export():
     assert io_core.__version__
 

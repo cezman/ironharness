@@ -211,6 +211,9 @@ class MqttTransport:
             while not self._inbox:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    # IH-128: the module promises every operation lands in the
+                    # event stream - a silent None was the one exception
+                    self._emit("mqtt_read_timeout", {"timeout": timeout})
                     return None
                 self._inbox_cond.wait(remaining)
             return self._inbox.popleft()
