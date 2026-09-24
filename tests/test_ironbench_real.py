@@ -346,6 +346,116 @@ def test_real_target_no_answer_is_honest_miss(tmp_path):
     assert any("T=" in m for m in res.missed)
 
 
+# --- IH-49 cross-sensor: the multi-sensor real golden, offline (audit 4:
+# the only real golden with no executing test) ---
+
+
+class FakeCrossSensorBoard(FakeBmeBoard):
+    """A REPL running the cross-sensor protocol: "sensors ready" at boot, one
+    "BME=<t> DS=<t> D=<d>" line per received non-empty line. The pair is
+    coherent (delta < 2 C, both sensors on the same breadboard) unless
+    disagree=True - the reactive cheater's bar is a *coherent pair*, the
+    offline double pins the runner side of exactly that."""
+
+    READING = "BME=22.71 DS=22.90 D=0.19"
+    DISAGREEING = "BME=22.71 DS=30.00 D=7.29"
+
+    def __init__(
+        self,
+        answer_delay: float = 0.0,
+        boot_dumps: bool = False,
+        answers: bool = True,
+        disagree: bool = False,
+    ) -> None:
+        super().__init__(answer_delay=answer_delay, boot_dumps=boot_dumps, answers=answers)
+        self._disagree = disagree
+
+    def write(self, data: bytes) -> int:
+        text = data.decode("utf-8", "replace")
+        if "\x04" in text and self._paste_mode and self._paste_buf:
+            self._paste_mode = False
+            self._paste_buf = ""
+            self._started = True
+            boot = "sensors ready\r\n" + (self.READING + "\r\n" if self._boot_dumps else "")
+            self._emit(boot)
+            return len(data)
+        if (
+            self._started
+            and self._answers
+            and not self._paste_mode
+            and "\x03" not in text
+            and "main.py" not in text
+        ):
+            out = self.DISAGREEING if self._disagree else self.READING
+            for line in text.splitlines():
+                if line.strip():
+                    if self._answer_delay:
+                        threading.Timer(self._answer_delay, self._emit, (out + "\r\n",)).start()
+                    else:
+                        self._emit(out + "\r\n")
+            return len(data)
+        return super().write(data)
+
+
+CROSS_SENSOR_TASK_KWARGS = {
+    "entry": (
+        "print('sensors ready')\n"
+        "while True:\n"
+        "    if not input().strip():\n"
+        "        continue\n"
+        "    print('" + FakeCrossSensorBoard.READING + "')\n"
+    ),
+    # delay shortened from the task's 1500ms - it is a pre-write sleep, the
+    # verdict path (boot-dump ingestion vs stimulus write) is delay-invariant
+    "stimulus": ('delay: 100ms', 'write-serial: "read\\r"', 'wait-serial: "DS="'),
+    "expect": (
+        "sensors ready",
+        "BME=-?\\d+\\.\\d{2}",
+        "DS=-?\\d+\\.\\d{2}",
+        "D=\\d+\\.\\d{2}",
+    ),
+    "fail": (
+        "Traceback",
+        "BME ERR",
+        "DS ERR",
+        # |delta| >= 2.00 C: the sensors disagree - one reading is wrong
+        "D=(?:[2-9]|\\d{2,})\\.\\d{2}",
+    ),
+}
+
+
+def test_cross_sensor_golden_pair_passes(tmp_path):
+    task = make_real_task(tmp_path, **CROSS_SENSOR_TASK_KWARGS)
+    res = run_task(task, out_dir=tmp_path / "out", real_transport=FakeCrossSensorBoard())
+    assert res.passed, res.missed or res.error
+
+
+def test_cross_sensor_pair_fabricator_fails(tmp_path):
+    # the reactive cheater: coherent-looking readings printed at boot, input
+    # ignored - every expect pattern matches the whole log, but the waited
+    # needle's first occurrence predates the stimulus write
+    task = make_real_task(tmp_path, **CROSS_SENSOR_TASK_KWARGS)
+    res = run_task(
+        task, out_dir=tmp_path / "out", real_transport=FakeCrossSensorBoard(boot_dumps=True, answers=False)
+    )
+    assert not res.passed
+    assert "anti-cheat" in (res.error or "")
+    assert res.error_kind == "run"
+
+
+def test_cross_sensor_disagreeing_pair_hits_fail_pattern(tmp_path):
+    # a fabricated pair that answers the stimulus but disagrees (one reading
+    # is wrong): a plain FAIL by the task's own fail pattern, not an
+    # anti-cheat verdict and not an infra error
+    task = make_real_task(tmp_path, **CROSS_SENSOR_TASK_KWARGS)
+    res = run_task(
+        task, out_dir=tmp_path / "out", real_transport=FakeCrossSensorBoard(disagree=True)
+    )
+    assert not res.passed
+    assert "anti-cheat" not in (res.error or "")
+    assert any("D=" in p for p in res.hit_fail)
+
+
 def test_real_pump_caps_retained_output():
     """IH-46: a board printing without pause grew _text/_chunks without bound
     (rate-bounded only by baud). Retained output is capped at MAX_SERIAL_TEXT
