@@ -653,8 +653,29 @@ def test_wire_silent_server_times_out():
     from ironbench.mcp_wire import McpWireClient
 
     client = McpWireClient(_FakeProc(hanging=True))
-    with pytest.raises(TimeoutError, match="no JSON-RPC response"):
-        client.request({"jsonrpc": "2.0", "id": 1, "method": "x"}, timeout=0.2)
+    try:
+        with pytest.raises(TimeoutError, match="no JSON-RPC response"):
+            client.request({"jsonrpc": "2.0", "id": 1, "method": "x"}, timeout=0.2)
+    finally:
+        client.close()  # releases the reader thread (hanging stdout)
+
+
+def test_wire_passes_by_server_initiated_messages():
+    # a notification (no id) and a response with a foreign id pass by; the
+    # matching response still answers the request
+    from ironbench.mcp_wire import McpWireClient
+
+    proc = _FakeProc(
+        stdout_lines=[
+            json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+            + "\n",
+            _rpc_response(99, {"result": {"other": 1}}),
+            _rpc_response(1, {"result": {"ok": True}}),
+        ]
+    )
+    client = McpWireClient(proc)
+    resp = client.request({"jsonrpc": "2.0", "id": 1, "method": "x"}, timeout=5.0)
+    assert resp["result"] == {"ok": True}
 
 
 def test_wire_initialize_error_raises():
