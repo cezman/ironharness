@@ -393,6 +393,18 @@ def test_serial_reset_tool_runs_on_loop_port(mcp_env):
     assert isinstance(exc_info.value.__cause__, KeyError)
 
 
+def test_serial_put_tool_stages_a_sandbox_file_onto_the_board(mcp_env):
+    from test_mprepl import FakeRawBoard
+
+    file_write("staged/main.py", "print('firmware')\n")
+    board = FakeRawBoard()
+    s = get_session()
+    s._transports["b"] = board
+    s._kinds["b"] = "serial"
+    assert "put 18 bytes" in serial_put("b", "staged/main.py", "/main.py")
+    assert bytes(board.files["/main.py"]) == b"print('firmware')\n"
+
+
 def test_serial_get_tool_pulls_a_board_file_into_the_sandbox(mcp_env):
     from test_mprepl import FakeRawBoard
 
