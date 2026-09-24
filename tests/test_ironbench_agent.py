@@ -80,6 +80,9 @@ def test_resolve_llm_config_defaults_and_env(tmp_path, monkeypatch):
         ("0", False),
         ("false", False),
         ("no", False),
+        # exercises the strip/lower normalisation: a case/space variant of a
+        # refuse-value must still refuse
+        (" FALSE ", False),
         ("1", True),
         ("yes", True),
         ("", True),
