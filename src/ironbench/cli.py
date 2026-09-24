@@ -159,7 +159,20 @@ def _cmd_ops_faults(args) -> int:
         print(f"ops task not found: {args.task} (under {tasks_root})")
         return 2
     task = load_ops_task(task_yaml)
-    faults = list(FAULTS) if not args.fault else [FAULTS_BY_ID[f] for f in args.fault]
+    if args.fault:
+        # IH-132 review: an unknown fault id used to die as a bare KeyError
+        # traceback with rc 1 - the documented contract for a lookup miss is
+        # a quiet rc 2 with the available ids named
+        unknown = [f for f in args.fault if f not in FAULTS_BY_ID]
+        if unknown:
+            print(
+                f"unknown fault id(s): {', '.join(unknown)} "
+                f"(available: {', '.join(sorted(FAULTS_BY_ID))})"
+            )
+            return 2
+        faults = [FAULTS_BY_ID[f] for f in args.fault]
+    else:
+        faults = list(FAULTS)
     arms = ["bare", "mcp"] if args.arm == "both" else [args.arm]
     matrix = [(f, a) for a in arms for f in faults]
     if args.dry_run:
@@ -329,8 +342,8 @@ def main(argv=None) -> int:
         parents=[common],
         help="ops A/B: agent-operated board tasks, MCP tools vs bare scripts (IH-104/105)",
         description="Exit code: 0 = every attempt solved its task; "
-        "1 = at least one attempt did not solve (or a scenario crashed); "
-        "2 = usage or task-lookup error.",
+        "1 = at least one attempt did not solve (or an attempt crashed); "
+        "2 = usage or lookup error.",
     )
     ops.add_argument("--task", required=True, help="ops task name or 'all'")
     ops.add_argument("--arm", choices=["bare", "mcp", "both"], default="both")

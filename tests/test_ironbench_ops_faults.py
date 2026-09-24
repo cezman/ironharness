@@ -263,6 +263,19 @@ def test_cli_ops_faults_missed_is_rc_1_detected_is_rc_0(tmp_path, monkeypatch):
     assert rc == 0
 
 
+def test_cli_ops_faults_unknown_fault_id_is_rc_2(capsys):
+    # IH-132 review: an unknown --fault id used to escape as a bare KeyError
+    # traceback with rc 1 - the documented contract for a lookup miss is a
+    # quiet rc 2 with the available ids named
+    rc = cli_main(
+        ["ops-faults", "--task", "ops-restore", "--fault", "nosuchfault", "--dry-run"]
+    )
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "unknown fault id(s): nosuchfault" in out
+    assert "mute_board" in out  # the available ids are named
+
+
 def test_ops_rc_contracts_documented_in_help(capsys):
     # IH-132: the exit-code contract is a promise - it must be stated where
     # the operator looks first, not only in the test suite
