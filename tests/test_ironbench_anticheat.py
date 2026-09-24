@@ -270,22 +270,27 @@ def test_dump_and_stay_alive_cheater_fails_with_anchor(tmp_path):
 # --- golden unix solutions must survive the anti-cheat (offline via WSL) ---
 
 
-GOLDEN_UNIX = [
-    "coop-scheduler",
-    "debug-hysteresis",
-    "debug-pinlock",
-    "debug-ringbuf",
-    "frame-corrupt",
-    "noisy-frames",
-    "uart-menu",
-    "watchdog",
-]
+def _golden_unix_names() -> list[str]:
+    # IH-130: derived from the actual unix-task registry - a hardcoded list
+    # went stale (8 of 10) and mqtt-device, the only network golden, was not
+    # executed by any test. A new unix task joins this sweep automatically;
+    # a task that must stay out needs an entry below with a pointer to the
+    # test that compensates for it.
+    compensated = {
+        # the golden pass is pinned by test_golden_blink_unix_passes
+        # (test_ironbench_shim.py) - a pure-output task with no anchors
+        "blink-unix",
+    }
+    return [t.name for t in UNIX_TASKS if t.name not in compensated]
 
 
-@pytest.mark.parametrize("name", GOLDEN_UNIX)
+@pytest.mark.parametrize("name", _golden_unix_names(), ids=str)
 def test_golden_unix_survives_anticheat(name, tmp_path, wsl_unix_ready):
     # Regression guard for the anti-cheat: the real golden solutions answer the
-    # stimulus and must keep passing with the anchor active.
+    # stimulus and must keep passing with the anchor active. mqtt-device runs
+    # the production path end to end: the harness starts the mqtt_sim broker
+    # in WSL next to the firmware (no injection - the golden's raw-socket
+    # client talks to it exactly like it would on a real run).
     if not wsl_unix_ready:
         pytest.skip("needs a WSL distro with micropython")
     task = load_task(TASKS_DIR / name)

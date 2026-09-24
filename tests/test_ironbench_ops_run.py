@@ -6,6 +6,7 @@ an agent CLAIMS SUCCESS the judge refutes (silent failure)."""
 import ast
 import json
 import re
+import threading
 import urllib.error
 from pathlib import Path
 
@@ -549,3 +550,149 @@ def test_mcp_server_gate_matches_the_task_tool_families(tmp_path):
         assert "disabled" in call["text"]
     finally:
         client.close()
+
+
+# --- IH-131: the client-side error branches of the wire (fake procs) - the
+# positive path runs against a real server above, but a broken tripwire would
+# stay green without these ---
+
+
+class _FakeStdin:
+    def __init__(self):
+        self.lines: list[str] = []
+
+    def write(self, text):
+        self.lines.append(text)
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _FakeStdout:
+    """Yields the scripted lines, then EOF (like a dead server's pipe)."""
+
+    def __init__(self, lines):
+        self._it = iter(lines)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._it)
+
+    def close(self):
+        pass
+
+
+class _HangingStdout:
+    """Blocks forever without EOF - models a silent server process."""
+
+    def __init__(self):
+        self._release = threading.Event()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self._release.wait(60)
+        raise StopIteration
+
+    def close(self):
+        self._release.set()
+
+
+class _FakeProc:
+    def __init__(self, stdout_lines=None, poll=None, hanging=False):
+        self.stdin = _FakeStdin()
+        self.stdout = _HangingStdout() if hanging else _FakeStdout(stdout_lines or [])
+        self._poll = poll
+
+    def poll(self):
+        return self._poll
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _rpc_response(id_value, body):
+    return json.dumps({"jsonrpc": "2.0", "id": id_value, **body}) + "\n"
+
+
+def test_wire_request_on_dead_server_raises():
+    from ironbench.mcp_wire import McpWireClient, McpWireError
+
+    client = McpWireClient(_FakeProc(poll=1))
+    with pytest.raises(McpWireError, match="exited before the request"):
+        client.request({"jsonrpc": "2.0", "id": 1, "method": "x"})
+
+
+def test_wire_non_json_stdout_trips_garbage():
+    from ironbench.mcp_wire import McpWireClient, McpWireError
+
+    proc = _FakeProc(stdout_lines=["Traceback (most recent call last):\n"])
+    client = McpWireClient(proc)
+    with pytest.raises(McpWireError, match="non-JSON on the server stdout"):
+        client.request({"jsonrpc": "2.0", "id": 1, "method": "x"})
+
+
+def test_wire_closed_stdout_raises_before_timeout():
+    from ironbench.mcp_wire import McpWireClient, McpWireError
+
+    client = McpWireClient(_FakeProc(stdout_lines=[]))
+    with pytest.raises(McpWireError, match="closed stdout"):
+        client.request({"jsonrpc": "2.0", "id": 1, "method": "x"}, timeout=5.0)
+
+
+def test_wire_silent_server_times_out():
+    from ironbench.mcp_wire import McpWireClient
+
+    client = McpWireClient(_FakeProc(hanging=True))
+    try:
+        with pytest.raises(TimeoutError, match="no JSON-RPC response"):
+            client.request({"jsonrpc": "2.0", "id": 1, "method": "x"}, timeout=0.2)
+    finally:
+        client.close()  # releases the reader thread (hanging stdout)
+
+
+def test_wire_passes_by_server_initiated_messages():
+    # a notification (no id) and a response with a foreign id pass by; the
+    # matching response still answers the request
+    from ironbench.mcp_wire import McpWireClient
+
+    proc = _FakeProc(
+        stdout_lines=[
+            json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+            + "\n",
+            _rpc_response(99, {"result": {"other": 1}}),
+            _rpc_response(1, {"result": {"ok": True}}),
+        ]
+    )
+    client = McpWireClient(proc)
+    resp = client.request({"jsonrpc": "2.0", "id": 1, "method": "x"}, timeout=5.0)
+    assert resp["result"] == {"ok": True}
+
+
+def test_wire_initialize_error_raises():
+    from ironbench.mcp_wire import McpWireClient, McpWireError
+
+    proc = _FakeProc(
+        stdout_lines=[_rpc_response(1, {"error": {"code": -32600, "message": "refused"}})]
+    )
+    client = McpWireClient(proc)
+    with pytest.raises(McpWireError, match="initialize failed"):
+        client.initialize()
+
+
+def test_wire_list_tools_error_raises():
+    from ironbench.mcp_wire import McpWireClient, McpWireError
+
+    proc = _FakeProc(stdout_lines=[_rpc_response(2, {"error": {"code": -1, "message": "boom"}})])
+    client = McpWireClient(proc)
+    with pytest.raises(McpWireError, match="tools/list failed"):
+        client.list_tools()
