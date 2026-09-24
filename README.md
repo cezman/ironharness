@@ -50,9 +50,10 @@ the layer that step skips: the constrained I/O between the agent and the device
 what agents actually do with that I/O. It deliberately stays out of adjacent
 territory:
 
-- **Firmware builds**: the ESP-IDF/PlatformIO compile chains are the job of the
-  official Espressif MCP server; ironharness's serial tools complement it (that
-  server has no serial monitor) instead of duplicating the build.
+- **Firmware builds**: compile chains are the job of the build tooling - the
+  official Espressif MCP server for ESP-IDF and PlatformIO's own stack.
+  ironharness's serial tools complement that side (the Espressif server ships
+  no serial monitor) instead of duplicating the build.
 - **On-chip debugging**: JTAG/SWD probes, breakpoints and RTT are a different
   stack (the probe-rs/OpenOCD-based servers); ironharness speaks the board's
   serial console only.
