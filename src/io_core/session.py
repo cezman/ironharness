@@ -284,7 +284,20 @@ class Session:
         # USB serial_number, а не к плавающему номеру COM-порта
         if port.startswith("by-serial:"):
             wanted = port[len("by-serial:"):].strip()
-            port = self._resolve_by_serial(wanted)
+            try:
+                port = self._resolve_by_serial(wanted)
+            except ValueError:
+                # IH-128: the last silent open refusal - "no log = didn't
+                # happen" holds here too, the hint travels in the exception
+                self.journal(
+                    "serial_open_refused",
+                    {
+                        "conn": name,
+                        "port": port,
+                        "reason": f"no serial_number matching {wanted!r}",
+                    },
+                )
+                raise
         # check + open + insert under one lock: two parallel opens of one name
         # used to both pass the free-check, open two real ports and lose one of
         # them (it stayed open past session.close() - a leaked COM port)
@@ -317,6 +330,10 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "serial":
+                    # IH-128: a foreign-kind conn used to die with a bare
+                    # AttributeError past this point, with no journal event
+                    raise KeyError(f"transport {name!r} is not a serial transport")
                 reader = self._readers.get(name)
             except Exception as e:
                 # IH-37: a write to an unknown/closed transport journals too
@@ -399,6 +416,8 @@ class Session:
                 )
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "serial":
+                    raise KeyError(f"transport {name!r} is not a serial transport")
             except KeyError as e:
                 # IH-37 precedent (serial_write): an unknown conn journals too
                 self.journal("read_failed", {"conn": name, "error": str(e)})
@@ -445,6 +464,8 @@ class Session:
                 )
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "serial":
+                    raise KeyError(f"transport {name!r} is not a serial transport")
             except KeyError as e:
                 self.journal("read_line_failed", {"conn": name, "error": str(e)})
                 raise
@@ -465,6 +486,8 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "serial":
+                    raise KeyError(f"transport {name!r} is not a serial transport")
             except KeyError as e:
                 self.journal("reset_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1005,6 +1028,10 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "modbus":
+                    # IH-128: a foreign-kind conn used to die with a bare
+                    # AttributeError past this point, with no journal event
+                    raise KeyError(f"transport {name!r} is not a modbus transport")
             except KeyError as e:
                 self.journal("modbus_read_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1014,6 +1041,8 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "modbus":
+                    raise KeyError(f"transport {name!r} is not a modbus transport")
             except KeyError as e:
                 self.journal("modbus_write_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1065,6 +1094,9 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "mqtt":
+                    # IH-128: same silent-wrong-kind gap as the serial family
+                    raise KeyError(f"transport {name!r} is not an mqtt transport")
             except KeyError as e:
                 self.journal("mqtt_publish_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1074,6 +1106,8 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "mqtt":
+                    raise KeyError(f"transport {name!r} is not an mqtt transport")
             except KeyError as e:
                 self.journal("mqtt_subscribe_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1089,6 +1123,8 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "mqtt":
+                    raise KeyError(f"transport {name!r} is not an mqtt transport")
             except KeyError as e:
                 self.journal("mqtt_read_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1197,7 +1233,14 @@ class Session:
             del self._transports[name]
             del self._kinds[name]
             self._serial_base.pop(name, None)
-            t.close()
+            try:
+                t.close()
+            except OSError as e:
+                # IH-128: the name is already freed, so a failing close used
+                # to vanish - the module promises every failed operation
+                # leaves a trace
+                self.journal("close_failed", {"conn": name, "error": str(e)})
+                raise
 
     def serial_close(self, name: str) -> None:
         self._close_typed(name, SerialTransport, "serial")
@@ -1220,7 +1263,13 @@ class Session:
             del self._transports[name]
             del self._kinds[name]  # keep the two registries in lockstep
             self._serial_base.pop(name, None)
-        t.close()
+        try:
+            t.close()
+        except OSError as e:
+            # IH-128: same trace rule as _close_typed - the freed name must
+            # not take the failure with it
+            self.journal("close_failed", {"conn": name, "error": str(e)})
+            raise
 
     def close(self) -> None:
         """Closes all transports and the journal. A failing transport close is
@@ -1230,7 +1279,7 @@ class Session:
         self._closed = True
         first_error: BaseException | None = None
         with self._lock:
-            transports = list(self._transports.values())
+            transports = list(self._transports.items())
             self._transports.clear()
             self._kinds.clear()
             self._serial_base.clear()
@@ -1247,10 +1296,14 @@ class Session:
             except Exception as e:  # noqa: BLE001 - one bad reader must not leak the rest
                 if first_error is None:
                     first_error = e
-        for t in transports:
+        for name, t in transports:
             try:
                 t.close()
             except Exception as e:  # noqa: BLE001 - one bad port must not leak the rest
+                # IH-128: the collect-and-reraise must not swallow the trace -
+                # the journal is still open at this point, so the failing
+                # close lands as close_failed before the raise at the end
+                self.journal("close_failed", {"conn": name, "error": str(e)})
                 if first_error is None:
                     first_error = e
         try:
