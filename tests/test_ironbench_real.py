@@ -405,6 +405,8 @@ CROSS_SENSOR_TASK_KWARGS = {
         "        continue\n"
         "    print('" + FakeCrossSensorBoard.READING + "')\n"
     ),
+    # delay shortened from the task's 1500ms - it is a pre-write sleep, the
+    # verdict path (boot-dump ingestion vs stimulus write) is delay-invariant
     "stimulus": ('delay: 100ms', 'write-serial: "read\\r"', 'wait-serial: "DS="'),
     "expect": (
         "sensors ready",
