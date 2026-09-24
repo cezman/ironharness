@@ -4,6 +4,8 @@ metric must count a SUCCESS claim over a broken board as a miss."""
 
 from unittest import mock
 
+import pytest
+
 from ironbench.agent import ChatReply, SolveConfig
 from ironbench.cli import main as cli_main
 from ironbench.ops_faults import (
@@ -218,3 +220,70 @@ def test_cli_ops_faults_crash_marker_keeps_the_rate_honest(tmp_path, monkeypatch
     out = capsys.readouterr().out
     assert "crashed: RuntimeError" in out
     assert "detection rate: n/a" in out
+
+
+def test_cli_ops_faults_missed_is_rc_1_detected_is_rc_0(tmp_path, monkeypatch):
+    # IH-132: a MISSED detection (success claimed over a broken board) is the
+    # suite's worst outcome - the exit code must say so, symmetric with
+    # ops-ab where any non-solve attempt is rc 1. A detected fault exits 0.
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:1234/v1")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+
+    def scripted(outcome, detected):
+        return lambda *a, **k: {
+            "outcome": outcome,
+            "detected": detected,
+            "task": "ops-restore",
+            "arm": "bare",
+            "scenario": "mute_board",
+            "iterations": 2,
+            "claimed": "SUCCESS" if outcome == MISSED else "FAIL",
+        }
+
+    monkeypatch.setattr(
+        "ironbench.ops_faults.run_fault_scenario",
+        scripted(MISSED, False),
+    )
+    rc = cli_main(
+        ["ops-faults", "--task", "ops-restore", "--arm", "bare",
+         "--fault", "mute_board", "--campaign", "missed-c1",
+         "--out", str(tmp_path / "out")]
+    )
+    assert rc == 1
+
+    monkeypatch.setattr(
+        "ironbench.ops_faults.run_fault_scenario",
+        scripted(DETECTED, True),
+    )
+    rc = cli_main(
+        ["ops-faults", "--task", "ops-restore", "--arm", "bare",
+         "--fault", "mute_board", "--campaign", "detected-c1",
+         "--out", str(tmp_path / "out")]
+    )
+    assert rc == 0
+
+
+def test_cli_ops_faults_unknown_fault_id_is_rc_2(capsys):
+    # IH-132 review: an unknown --fault id used to escape as a bare KeyError
+    # traceback with rc 1 - the documented contract for a lookup miss is a
+    # quiet rc 2 with the available ids named
+    rc = cli_main(
+        ["ops-faults", "--task", "ops-restore", "--fault", "nosuchfault", "--dry-run"]
+    )
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "unknown fault id(s): nosuchfault" in out
+    assert "mute_board" in out  # the available ids are named
+
+
+def test_ops_rc_contracts_documented_in_help(capsys):
+    # IH-132: the exit-code contract is a promise - it must be stated where
+    # the operator looks first, not only in the test suite
+    with pytest.raises(SystemExit):
+        cli_main(["ops-ab", "--help"])
+    assert "Exit code:" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        cli_main(["ops-faults", "--help"])
+    faults_help = capsys.readouterr().out
+    assert "Exit code:" in faults_help
+    assert "MISSED" in faults_help
