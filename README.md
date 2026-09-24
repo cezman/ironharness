@@ -42,6 +42,26 @@ leaderboard generation so the numbers can be re-checked.
 The PyPI package ships the **io-core** layer only (the MCP server). The benchmark
 runs from a source clone: `git clone` → `uv sync` → `uv run python -m ironbench.cli ...`.
 
+## Positioning
+
+Agent-plus-hardware projects mostly start at build-and-flash. ironharness covers
+the layer that step skips: the constrained I/O between the agent and the device
+(caps, journaling, verification, replay, policy gates) and the measurement of
+what agents actually do with that I/O. It deliberately stays out of adjacent
+territory:
+
+- **Firmware builds**: compile chains are the job of the build tooling - the
+  official Espressif MCP server for ESP-IDF and PlatformIO's own stack.
+  ironharness's serial tools complement that side (the Espressif server ships
+  no serial monitor) instead of duplicating the build.
+- **On-chip debugging**: JTAG/SWD probes, breakpoints and RTT are a different
+  stack (the probe-rs/OpenOCD-based servers); ironharness speaks the board's
+  serial console only.
+- **OTA and fleet diagnostics**: managed deployment to many devices is a hosted
+  product, not a local bench.
+- **Production use**: dev hardware and local simulators; the MQTT transport is
+  plaintext TCP, and the Safety section below is the contract.
+
 ## Quick start
 
 ```bash
