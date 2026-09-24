@@ -906,3 +906,48 @@ def test_mqtt_read_timeout_journals(session, tmp_path):
     finally:
         session.mqtt_close("q")
         broker.stop()
+
+
+def test_bus_ops_on_wrong_kind_conn_journal(session, tmp_path):
+    # IH-128 review round 1: the serial family got its kind check, the bus
+    # family had the same silent AttributeError on a foreign-kind conn
+    session.serial_open("s", "loop://", timeout=0.5)
+    for op in (
+        lambda: session.modbus_read("s", 0),
+        lambda: session.modbus_write("s", 0, [1]),
+        lambda: session.mqtt_publish("s", "t", "p"),
+        lambda: session.mqtt_subscribe("s", "t"),
+        lambda: session.mqtt_read("s"),
+    ):
+        with pytest.raises(KeyError, match="not a"):
+            op()
+    failed = [
+        e["kind"]
+        for e in read_events(tmp_path / "journal.jsonl")
+        if e["kind"].endswith("_failed")
+    ]
+    assert failed == [
+        "modbus_read_failed",
+        "modbus_write_failed",
+        "mqtt_publish_failed",
+        "mqtt_subscribe_failed",
+        "mqtt_read_failed",
+    ]
+
+
+def test_session_close_journals_failing_transport(tmp_path, monkeypatch):
+    # IH-128 review round 1: the collect-and-reraise in Session.close() kept
+    # the exception but never wrote the trace - the journal is still open at
+    # that point, so the close_failed event must land before it closes
+    s = Session(tmp_path / "journal.jsonl", tmp_path / "sandbox", actor="test")
+    s.serial_open("s", "loop://", timeout=0.5)
+    monkeypatch.setattr(
+        s._transports["s"], "close", lambda: (_ for _ in ()).throw(OSError("vanish"))
+    )
+    with pytest.raises(OSError, match="vanish"):
+        s.close()
+    failed = [
+        e for e in read_events(tmp_path / "journal.jsonl") if e["kind"] == "close_failed"
+    ]
+    assert len(failed) == 1
+    assert failed[0]["conn"] == "s" and failed[0]["error"] == "vanish"

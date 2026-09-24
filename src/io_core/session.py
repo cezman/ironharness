@@ -1028,6 +1028,10 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "modbus":
+                    # IH-128: a foreign-kind conn used to die with a bare
+                    # AttributeError past this point, with no journal event
+                    raise KeyError(f"transport {name!r} is not a modbus transport")
             except KeyError as e:
                 self.journal("modbus_read_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1037,6 +1041,8 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "modbus":
+                    raise KeyError(f"transport {name!r} is not a modbus transport")
             except KeyError as e:
                 self.journal("modbus_write_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1088,6 +1094,9 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "mqtt":
+                    # IH-128: same silent-wrong-kind gap as the serial family
+                    raise KeyError(f"transport {name!r} is not an mqtt transport")
             except KeyError as e:
                 self.journal("mqtt_publish_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1097,6 +1106,8 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "mqtt":
+                    raise KeyError(f"transport {name!r} is not an mqtt transport")
             except KeyError as e:
                 self.journal("mqtt_subscribe_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1112,6 +1123,8 @@ class Session:
         with self._lock:
             try:
                 t = self._get(name)
+                if self._kinds.get(name) != "mqtt":
+                    raise KeyError(f"transport {name!r} is not an mqtt transport")
             except KeyError as e:
                 self.journal("mqtt_read_failed", {"conn": name, "error": str(e)})
                 raise
@@ -1266,7 +1279,7 @@ class Session:
         self._closed = True
         first_error: BaseException | None = None
         with self._lock:
-            transports = list(self._transports.values())
+            transports = list(self._transports.items())
             self._transports.clear()
             self._kinds.clear()
             self._serial_base.clear()
@@ -1283,10 +1296,14 @@ class Session:
             except Exception as e:  # noqa: BLE001 - one bad reader must not leak the rest
                 if first_error is None:
                     first_error = e
-        for t in transports:
+        for name, t in transports:
             try:
                 t.close()
             except Exception as e:  # noqa: BLE001 - one bad port must not leak the rest
+                # IH-128: the collect-and-reraise must not swallow the trace -
+                # the journal is still open at this point, so the failing
+                # close lands as close_failed before the raise at the end
+                self.journal("close_failed", {"conn": name, "error": str(e)})
                 if first_error is None:
                     first_error = e
         try:
