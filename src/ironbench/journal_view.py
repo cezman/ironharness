@@ -11,8 +11,10 @@ are rewritten in a JSON-compatible, round-tripping way; the table renders
 client-side through textContent only; template tokens are substituted
 section-by-section so a value containing a token string can never be expanded
 by a later pass. The client JS is dependency-free and is not executed by
-pytest - its correctness is pinned by structure tests plus manual browser
-review rounds.
+pytest: the full browser round is an accepted manual check (owner decision
+2026-09-24), and its render-as-text promise is pinned structurally - a test
+rejects any HTML sink (innerHTML/outerHTML/insertAdjacentHTML/
+document.write[nln]) in the generated page.
 
 Unparseable lines are counted and stated in the header, never silently dropped
 ("no log = didn't happen"). Past MAX_EVENTS the middle of the journal is

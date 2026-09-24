@@ -88,6 +88,34 @@ def test_hostile_payload_stays_inert(tmp_path):
     assert view["rows"][0]["p"]["data_hex"] == hostile
 
 
+def test_viewer_js_has_no_html_sinks(tmp_path):
+    # IH-127: the client JS is not executed by pytest (accepted manual status
+    # for the full browser round - owner decision 2026-09-24), but the
+    # docstring promise "rendered through textContent only" is still
+    # enforced structurally: the generated page must contain no DOM sink
+    # that interprets a string as HTML. The journal data is
+    # firmware/agent-controlled - a single innerHTML would make this file a
+    # live XSS surface instead of an inert timeline.
+    journal = write_journal(
+        tmp_path,
+        [
+            # a literal "<script>" in a payload survives the data-block escape
+            # (only "</" and "<!--" are rewritten) - the JS extraction must
+            # anchor past it, not match it
+            {"ts": 1.0, "seq": 1, "actor": "a", "kind": "read", "p": "<script>var x=1"},
+            {"ts": 2.0, "seq": 2, "actor": "a", "kind": "read"},
+        ],
+    )
+    out_file, _ = write_view(journal, tmp_path / "view.html")
+    page = out_file.read_text(encoding="utf-8")
+    script_start = page.rindex("<script>")
+    script = re.search(r"<script>(.*?)</script>", page[script_start:], re.DOTALL).group(1)
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "document.writeln"):
+        assert sink not in script, f"viewer JS uses {sink} - values would render as HTML"
+    # and the text-only sink is actually there
+    assert "textContent" in script
+
+
 def test_token_in_source_name_is_never_expanded(tmp_path):
     # F1 regression: a journal NAME containing a template token must not get
     # expanded into the page (token expansion = HTML injection into title/h1)
