@@ -51,6 +51,24 @@ def test_skill_tool_map_covers_the_registry():
     assert missing == [], "skills/ironharness/SKILL.md: tools missing from the tool map"
 
 
+_TOOL_COUNT_RE = re.compile(r"\b(\d+) (?:tools|инструмента|инструментов)\b")
+
+
+@pytest.mark.parametrize(
+    "doc", ["README.md", "README.ru.md", "docs/why.md", "docs/why.ru.md"]
+)
+def test_tool_count_literal_matches_the_registry(doc):
+    # audit 4: the tool count was a bare literal in four docs with no pin -
+    # the 34th tool would have silently rotted every one of them (the names
+    # are pinned separately; this pins the number)
+    text = (REPO / doc).read_text(encoding="utf-8")
+    literals = {int(m.group(1)) for m in _TOOL_COUNT_RE.finditer(text)}
+    assert literals == {len(_registry_names())}, (
+        f"{doc}: tool count literals {sorted(literals)} != registry "
+        f"({len(_registry_names())} tools)"
+    )
+
+
 @pytest.mark.parametrize("doc", ["docs/why.md", "docs/why.ru.md"])
 def test_why_docs_do_not_advertise_a_missing_console_script(doc):
     # `ironbench solve` reads like a console script; there is none by design

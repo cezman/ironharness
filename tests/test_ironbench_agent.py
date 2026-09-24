@@ -74,6 +74,32 @@ def test_resolve_llm_config_defaults_and_env(tmp_path, monkeypatch):
     assert resolve_llm_config(model="explicit").model == "explicit"
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("0", False),
+        ("false", False),
+        ("no", False),
+        # exercises the strip/lower normalisation: a case/space variant of a
+        # refuse-value must still refuse
+        (" FALSE ", False),
+        ("1", True),
+        ("yes", True),
+        ("", True),
+        ("whatever", True),
+    ],
+)
+def test_llm_allow_local_value_grid(tmp_path, monkeypatch, value, expected):
+    # audit 4: only "0" was pinned; the documented contract (README) is that
+    # "0", "false" and "no" refuse local endpoints and anything else (including
+    # empty and garbage) keeps the allow-default. An empty value falls through
+    # _pick to the "1" default - so it allows, by design.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(agent_module, "find_env_file", lambda: None)
+    monkeypatch.setenv("LLM_ALLOW_LOCAL", value)
+    assert resolve_llm_config().allow_local is expected
+
+
 def test_resolve_llm_config_priority_env_over_dotenv_over_default(tmp_path, monkeypatch):
     # IH-30: the full priority chain - explicit > env > .env > default - for
     # LLM_BASE_URL/LLM_API_KEY/LLM_TIMEOUT, not only for the model
